@@ -1,0 +1,10 @@
+{
+  "githubHost": "github.com",
+  "org": "drakejin",
+  "workspaces": [
+    {
+      "name": "books-guitar",
+      "mainBranch": "main"
+    }
+  ]
+}

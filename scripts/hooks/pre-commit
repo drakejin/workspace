@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+
+staged=$(git diff --cached --name-only | grep -E '^main/' || true)
+
+if [[ -n "$staged" ]]; then
+    echo "error: main/ 디렉토리는 커밋할 수 없습니다."
+    echo ""
+    echo "  git reset HEAD main/"
+    echo ""
+    echo "위 명령어로 staging에서 제거해주세요."
+    exit 1
+fi
+
+# 매 커밋마다 VERSION 자동 갱신 (merge commit 제외).
+# 워크스페이스 메타가 바뀌었음을 알리는 용도. 동료가 pull 받으면
+# workspace.json.version 과 어긋나 make-init skill 이 자동 트리거된다.
+ROOT_DIR=$(git rev-parse --show-toplevel)
+if [[ ! -f "${ROOT_DIR}/.git/MERGE_HEAD" ]]; then
+    new_version=$(date -u +%Y%m%d%H%M%S)
+    echo "$new_version" > "${ROOT_DIR}/VERSION"
+    git add "${ROOT_DIR}/VERSION"
+    echo "[pre-commit] VERSION -> ${new_version}"
+fi
