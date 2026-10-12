@@ -1,27 +1,32 @@
-# meta-repository 사용법
+# drakejin/workspace — 에이전트 규칙
 
-이 repository는 여러 repository의 메타 정보(spec, ADR, PRD, AI plan)를 한곳에 모은 meta-repository다.
-문서는 `docs/`에 쌓고, 검색은 OpenSearch 기반 memory-mcp가 맡는다. 에이전트는 파일 트리를 뒤지지 말고 먼저 묻는다.
+이 레포는 drakejin 개인 repository 들을 한곳에서 다루는 meta-repository 다. 관리 대상 repository 는 `main/{repo}` 에 clone 되고,
+그 repository 들의 메타 정보(spec, ADR, PRD, AI plan)는 `docs/` 에 쌓는다. 검색은 OpenSearch 기반 memory-mcp 가 맡는다.
+레포 운영 규칙(명령어, 스크립트 컨벤션)은 [README.md](./README.md), 메모리 층 설치·사용법은 [GUIDE.md](./GUIDE.md) 를 따른다.
 
 ## 작업 규칙
 
-1. **작업을 시작하면 `search_memory`를 먼저 부른다.** 질의는 작업 대상 repository 이름, 서비스명, 함수명, 에러 코드 같은 식별자를 그대로 넣는다. 결과가 부족하면 단어를 바꿔 두세 번 다시 부른다.
-2. 돌아온 청크의 `source_path`와 `header_path`를 근거로 일한다. 근거가 없는 history는 지어내지 않는다. 모르면 모른다고 적는다.
-3. 검색 결과가 없을 때만 디렉토리를 훑는다. 이때도 전체를 읽지 말고 그 디렉토리의 `INDEX.md`부터 읽는다.
+1. **작업을 시작하면 `search_memory` 를 먼저 부른다.** 파일 트리를 뒤지기 전에. 질의에는 repository 이름, 서비스명, 함수명, 에러 코드 같은 식별자를 그대로 넣는다. 결과가 부족하면 단어를 바꿔 두세 번 다시 부른다.
+2. 결과의 `source_path` 를 Read 해서 원문을 근거로 일한다. 스니펫을 답으로 쓰지 않는다. 근거 없는 history 는 지어내지 않는다 — 모르면 모른다고 적는다.
+3. 검색 결과가 없을 때만 디렉토리를 훑는다. 이때도 전체를 읽지 말고 그 디렉토리의 `INDEX.md` 부터 읽는다.
 4. 문서로 정보를 만들 때는 **추론 없이** 쓴다. 출처(커밋, PR, 대화, 파일 경로)가 확인되는 것만 적는다.
-5. 관리 대상 repository 작업은 항상 새 worktree에서 한다: `git -C repos/{repo} worktree add ../{repo}.wt/{branch} -b {branch}`.
-6. cold 범위(60일 이전) 질의가 필요하면 `list_cold`로 확인하고, `restore_cold` 전에 반드시 사용자에게 "cold 인덱스 X가 있는데 복원할까요"를 묻는다.
+5. `main/{repo}` 작업은 항상 새 worktree 에서 한다: `make run-issues ARGS="<issue> <repo>"` → `main/{repo}/.worktrees/<issue>`. 끝나면 `make done-issue ARGS="<issue> <repo>"`.
+6. 60일보다 오래된 맥락이 필요하면 `list_cold` 로 확인하고, `restore_cold` 전에 반드시 사용자에게 "cold 인덱스 X가 있는데 복원할까요"를 묻는다.
+7. `main/` 아래 파일은 이 레포에 커밋하지 않는다 (pre-commit hook 이 막는다).
 
 ## 결과 문서 저장 위치
 
-| 디렉토리 | 담는 것 |
-| --- | --- |
-| `docs/repository/{repo}/` | 그 repository에만 해당하는 주제. ADR, 배경, 용어 매핑 |
-| `docs/feature/{topic}/` | 여러 repository에 걸친 특정 주제 |
-| `docs/specs/{tech_spec}/` | 사람이 쓴 스펙과 AI가 만든 스펙, 작업 plan |
-| `docs/knowledge/` | episodic에서 걸러져 살아남은 사실. 추후 graph DB 적재용 |
+| 디렉토리 | 담는 것 | 성질 |
+| --- | --- | --- |
+| `docs/repository/{repo}/` | 그 repository 에만 해당하는 주제. ADR, 배경, 용어 매핑 | episodic |
+| `docs/feature/{topic}/` | 여러 repository 에 걸친 특정 주제 | episodic |
+| `docs/specs/{tech_spec}/` | 사람이 쓴 스펙과 AI 가 만든 스펙, 작업 plan | episodic |
+| `docs/issues/{issue}/` | 이슈 조사 기록 | episodic |
+| `docs/knowledge/` | episodic 에서 걸러져 살아남은 사실. 용어 정의, 시스템 불변식 | knowledge |
+| `main/{repo}/docs/` | 관리 대상 repository 자신의 문서 (그 repo 에 커밋) | knowledge |
 
-문서를 추가하면 같은 디렉토리의 `INDEX.md`에 한 줄 요약을 추가한다.
+episodic 은 60일이 지나면 cold 로 간다. knowledge 는 노화하지 않고, 개정판의 `supersedes:` 선언으로만 밀린다.
+문서를 추가하면 같은 디렉토리의 `INDEX.md` 에 한 줄 요약을 추가한다.
 
 ## frontmatter
 
@@ -29,12 +34,15 @@
 
 ```yaml
 ---
-team: ads-data-platform     # 팀/실. 인덱스 mem-{team}-{yyyy.MM}이 갈린다
-repo: attribution-collector # 관리 대상 repository. 여러 repo에 걸치면 생략
-doc_type: adr               # spec | adr | prd | plan | knowledge | note
-date: 2026-10-12            # event_time. 이 날짜로 hot/cold가 갈린다
+team: default                # 팀/실. 인덱스 mem-{team}-... 가 갈린다
+repo: books-guitar           # 관리 대상 repository. 여러 repo 에 걸치면 생략
+doc_type: adr                # spec | adr | prd | plan | knowledge | guide | note
+date: 2026-10-13             # 유효 시각. 이 날짜로 hot/cold 와 판정 순서가 갈린다
+supersedes: docs/knowledge/old.md   # (개정판만) 밀어내는 구판 경로
 ---
 ```
+
+작성자·작성일을 본문에 쓰지 않는다 — git 이 정본이다.
 
 ## 에피소드 기록 (머지 전 세 줄)
 
@@ -51,7 +59,7 @@ date: 2026-10-12            # event_time. 이 날짜로 hot/cold가 갈린다
 
 ## 주간 compaction
 
-주 1회 `/compaction`(.claude/commands/compaction.md)을 실행한다. 지우지 않고 다시 쓴다.
+주 1회 `/compaction` (.claude/commands/compaction.md). 지우지 않고 다시 쓴다.
 
 ## 이 규칙의 변경 내역
 
@@ -59,4 +67,5 @@ date: 2026-10-12            # event_time. 이 날짜로 hot/cold가 갈린다
 
 | 날짜 | 변경 |
 | --- | --- |
-| 2026-10-12 | 최초 작성. search_memory 선행, 추론 없이, frontmatter, 에피소드 다섯 줄, 주간 compaction |
+| 2026-05-19 | 최초. "README.md 를 따른다" 한 줄 |
+| 2026-10-13 | 메모리 층 도입. search_memory 선행, 추론 없이, 저장 위치·frontmatter, 에피소드 다섯 줄, 주간 compaction, worktree 는 `main/{repo}/.worktrees/` |

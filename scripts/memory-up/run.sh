@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 인프라 올리기 — 도구 확인 → 의존성 → 스택 기동 → OpenSearch 대기 → 최초 색인까지 한 번에.
+# 인프라 올리기 — 도구 확인 → 빌드 → 스택 기동 → OpenSearch 대기 → 최초 색인까지 한 번에.
 # 멱등이다. 이미 떠 있으면 대기와 색인만 다시 돈다. 데몬이 돌고 있으면 색인은 데몬에 맡긴다.
 set -euo pipefail
 
@@ -16,25 +16,17 @@ if ! docker info >/dev/null 2>&1; then
 fi
 echo "[memory-up] docker: ok"
 
-# 1) 도구 — node 22+, pnpm
-if ! command -v node >/dev/null 2>&1; then
-    echo "[memory-up] node: not found — Node.js 22 이상을 설치하세요"
-    exit 1
+# 1) 도구 — Go 1.25 (mise.toml). mise 가 있으면 설치까지 한다
+if command -v mise >/dev/null 2>&1; then
+    mise trust "${ROOT_DIR}/mise.toml" >/dev/null 2>&1 || true
+    mise install >/dev/null 2>&1 || true
 fi
-node_major="$(node -p 'process.versions.node.split(".")[0]')"
-if [[ "$node_major" -lt 22 ]]; then
-    echo "[memory-up] node: $(node -v) — 22 이상이 필요합니다"
-    exit 1
-fi
-if ! command -v pnpm >/dev/null 2>&1; then
-    echo "[memory-up] pnpm: not found — 'corepack enable' 로 켜세요"
-    exit 1
-fi
-echo "[memory-up] tools: node $(node -v), pnpm $(pnpm -v)"
+memory_find_go
+echo "[memory-up] tools: $(go version | awk '{print $3}')"
 
-# 2) 의존성
-pnpm install --silent
-echo "[memory-up] pnpm install: done"
+# 2) 빌드
+memory_build "$ROOT_DIR"
+echo "[memory-up] build: bin/memory-mcp, bin/memory-daemon"
 
 # 3) 스택 기동
 mkdir -p .data/snapshots
@@ -58,7 +50,7 @@ fi
 echo "[memory-up] opensearch: ready"
 
 # 5) 최초 색인 — 템플릿·ISM·스냅샷 repository 를 맞추고 사이클 1회. 이후엔 데몬이 이어서 한다
-pnpm -s reconcile
+bin/memory-daemon -once
 echo "[memory-up] reconcile: done"
 echo ""
 echo "[memory-up] 다음: 'make daemon' 으로 데몬을 켜고, 'make daemon-status' 로 확인하세요"

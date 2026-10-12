@@ -1,7 +1,13 @@
 # sample-workspace
 
 memory-mcp 를 체험하기 위한 가상의 meta-repository 다. 등장하는 서비스(order-api, catalog-api)와 결정은 모두 예시다.
-사용법은 루트의 [GUIDE.md](../../GUIDE.md).
+사용법은 루트의 [GUIDE.md §4](../../GUIDE.md#4-샘플-문서로-체험하기). `make tier` 가 cold 로 보낸 원본을 지우므로 **복사해서** 쓴다:
+
+```bash
+cp -R examples/sample-workspace ~/memory-demo
+export META_REPO_ROOT=$HOME/memory-demo MEMORY_DEFAULT_TEAM=demo
+make reconcile
+```
 
 | 문서 | 체험하는 기능 |
 | --- | --- |

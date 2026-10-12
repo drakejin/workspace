@@ -8,6 +8,7 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "$ROOT_DIR"
 source "${SCRIPT_DIR}/../memory-common.sh"
 memory_load_env "$ROOT_DIR"
+memory_build "$ROOT_DIR"
 
 claude_bin="${MEMORY_CLAUDE_BIN:-claude}"
 if command -v "$claude_bin" >/dev/null 2>&1; then
@@ -16,4 +17,4 @@ else
     echo "[daemon] claude CLI 없음 — 판정은 질문으로, 증류는 다음 사이클로 폴백"
 fi
 
-exec pnpm -s daemon
+exec bin/memory-daemon

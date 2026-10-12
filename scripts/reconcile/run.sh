@@ -7,5 +7,6 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "$ROOT_DIR"
 source "${SCRIPT_DIR}/../memory-common.sh"
 memory_load_env "$ROOT_DIR"
+memory_build "$ROOT_DIR"
 
-exec pnpm -s reconcile
+exec bin/memory-daemon -once

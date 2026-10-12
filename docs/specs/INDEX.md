@@ -4,4 +4,4 @@
 
 | spec | 상태 | 한 줄 요약 |
 | --- | --- | --- |
-| [memory-mcp](memory-mcp/INDEX.md) | 구현 중 | 이 workspace의 memory-mcp·file-watcher 설계와 발표 대비 정렬 |
+| [memory-mcp](memory-mcp/INDEX.md) | 구현됨 | 이 워크스페이스의 메모리 층(Go) 설계와 발표·vms 대비 정렬 |
