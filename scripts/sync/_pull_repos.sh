@@ -15,21 +15,20 @@ for repo in "${REPOS_DIR}"/*/; do
 
     if [[ "$branch" != "main" && "$branch" != "master" ]]; then
         echo "[skip] ${name}: on branch '${branch}'"
-        ((skipped++))
+        skipped=$((skipped + 1))
         continue
     fi
 
-    if git -C "$repo" pull origin "$branch" --quiet 2>/dev/null; then
+    if git -C "$repo" pull --ff-only origin "$branch" --quiet 2>/dev/null; then
         echo "[sync] ${name}: pulled '${branch}'"
-        ((synced++))
+        synced=$((synced + 1))
     else
-        echo "[fail] ${name}: pull failed on '${branch}'"
-        ((failed++))
+        echo "[fail] ${name}: pull failed on '${branch}'" >&2
+        failed=$((failed + 1))
     fi
 done
 
 total=$((synced + skipped + failed))
-echo ""
-echo "done: ${total} repos / ${synced} synced / ${skipped} skipped / ${failed} failed"
+echo "[sync] summary: ${total} repos / ${synced} synced / ${skipped} skipped / ${failed} failed"
 
 [[ $failed -eq 0 ]]

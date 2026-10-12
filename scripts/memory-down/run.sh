@@ -6,5 +6,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "$ROOT_DIR"
 
-docker compose down
+# 선택 프로필(dashboards)로 띄운 컨테이너까지 내린다
+docker compose --profile dashboards down
 echo "[memory-down] stack: stopped"

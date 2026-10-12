@@ -1,12 +1,6 @@
-workspace.json
-.DS_Store
-.claude/workspace
+# 관리 대상 리포 clone (커밋 금지 — pre-commit 이 막는다)
 /main/
-node_modules/
-dist/
-bin/
-coverage/
-coverage.out
-.data/
+# 생성물 전부: 빌드 결과, 데몬 상태, cold store·스냅샷, 판정·증류·감사 원장, 측정 결과
+/.cache/
 .env
-*.log
+.DS_Store

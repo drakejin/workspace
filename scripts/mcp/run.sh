@@ -9,4 +9,4 @@ source "${SCRIPT_DIR}/../memory-common.sh"
 memory_load_env "$ROOT_DIR"
 memory_build "$ROOT_DIR" >&2
 
-exec bin/memory-mcp serve
+exec .cache/bin/memory-mcp serve

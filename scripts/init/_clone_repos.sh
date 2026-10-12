@@ -5,23 +5,21 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GITHUB_HOST="$1"
 ORG="$2"
 REPOS_DIR="$3"
-WORKSPACE_JSON="$4"
+SEED_JSON="$4"
 
 mkdir -p "$REPOS_DIR"
-
-repos=$(jq -r '.workspaces[].name' "$WORKSPACE_JSON")
 
 cloned=0
 skipped=0
 failed=0
 
-echo "git remote: https://${GITHUB_HOST}/${ORG}"
-echo ""
+echo "[init] remote: https://${GITHUB_HOST}/${ORG}"
 
-while IFS= read -r repo_name; do
+# 한 줄에 한 리포: 이름<TAB>docsOnly
+while IFS=$'\t' read -r repo_name docs_only; do
     [[ -z "$repo_name" ]] && continue
 
-    output=$("${SCRIPT_DIR}/clone-repo.sh" "$GITHUB_HOST" "$ORG" "$repo_name" "$REPOS_DIR" 2>&1) && rc=0 || rc=$?
+    output=$("${SCRIPT_DIR}/clone-repo.sh" "$GITHUB_HOST" "$ORG" "$repo_name" "$REPOS_DIR" "$docs_only" 2>&1) && rc=0 || rc=$?
     echo "$output"
 
     if [[ $rc -ne 0 ]]; then
@@ -31,10 +29,9 @@ while IFS= read -r repo_name; do
     else
         cloned=$((cloned + 1))
     fi
-done <<< "$repos"
+done < <(jq -r '.workspaces[] | [.name, (.docsOnly // false | tostring)] | @tsv' "$SEED_JSON")
 
 total=$((cloned + skipped + failed))
-echo ""
-echo "done: ${total} repos / ${cloned} cloned / ${skipped} skipped / ${failed} failed"
+echo "[init] summary: ${total} repos / ${cloned} cloned / ${skipped} skipped / ${failed} failed"
 
 [[ $failed -eq 0 ]]

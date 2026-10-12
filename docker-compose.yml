@@ -1,7 +1,14 @@
-# 메모리 층 — 로컬 단일 노드 OpenSearch (standalone). 팀 공용 클러스터는 나중 문제.
-# 다른 메모리 스택(ax-workspace 9200, vms workspace 9201)과 같은 머신에서 병존하므로
-# compose 프로젝트명·컨테이너명·호스트 포트를 따로 둔다 (OpenSearch 9202, 컨테이너 dj-workspace-*).
-# hot 데이터는 named volume, cold 스냅샷은 ./.data/snapshots (fs 스냅샷 repository).
+# 메모리 층 스택 — OpenSearch(색인·검색, standalone 단일 노드) + Neo4j(knowledge graph).
+# 다른 메모리 스택(ax-workspace 9200/7687, vms workspace 9201/7688)과 같은 머신에서 병존하므로
+# compose 프로젝트명·컨테이너명·호스트 포트를 따로 둔다.
+#
+#   OpenSearch   http://localhost:9202          컨테이너 dj-workspace-opensearch
+#   Neo4j        bolt://localhost:7689           컨테이너 dj-workspace-neo4j
+#                http://localhost:7476 (브라우저)
+#   Dashboards   http://localhost:5603           선택: docker compose --profile dashboards up -d
+#
+# hot 인덱스·그래프는 named volume 이고 파생물이다 — 지워도 make reconcile / make graph-rebuild 가 다시 만든다.
+# cold 스냅샷은 ./.cache/snapshots (fs 스냅샷 repository) — cold 층의 정본이라 지우면 안 된다 (tier 가 git 에서 지운 원본이 여기와 cold store 에만 있다).
 name: drakejin-workspace-memory
 services:
   opensearch:
@@ -21,12 +28,44 @@ services:
       - "127.0.0.1:${OS_PORT:-9202}:9200"
     volumes:
       - opensearch-hot:/usr/share/opensearch/data
-      - ./.data/snapshots:/usr/share/opensearch/snapshots
+      - ./.cache/snapshots:/usr/share/opensearch/snapshots
     healthcheck:
       test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 30
 
+  neo4j:
+    image: neo4j:5.26-community
+    container_name: dj-workspace-neo4j
+    environment:
+      - NEO4J_AUTH=none
+      - NEO4J_server_memory_heap_max__size=512m
+      - NEO4J_server_memory_pagecache_size=256m
+    ports:
+      - "127.0.0.1:${NEO4J_BOLT_PORT:-7689}:7687"
+      - "127.0.0.1:${NEO4J_HTTP_PORT:-7476}:7474"
+    volumes:
+      - neo4j-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 15s
+
+  dashboards:
+    profiles: ["dashboards"]
+    image: opensearchproject/opensearch-dashboards:2.19.2
+    container_name: dj-workspace-dashboards
+    environment:
+      - OPENSEARCH_HOSTS=["http://opensearch:9200"]
+      - DISABLE_SECURITY_DASHBOARDS_PLUGIN=true
+    ports:
+      - "127.0.0.1:${OS_DASH_PORT:-5603}:5601"
+    depends_on:
+      - opensearch
+
 volumes:
   opensearch-hot:
+  neo4j-data:

@@ -17,4 +17,4 @@ else
     echo "[daemon] claude CLI 없음 — 판정은 질문으로, 증류는 다음 사이클로 폴백"
 fi
 
-exec bin/memory-daemon
+exec .cache/bin/memory-daemon

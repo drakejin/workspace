@@ -14,8 +14,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/drakejin/workspace/internal/config"
-	"github.com/drakejin/workspace/internal/daemon"
+	"github.com/drakejin/workspace/app/internal/config"
+	"github.com/drakejin/workspace/app/internal/daemon"
+	"github.com/drakejin/workspace/app/internal/state"
 )
 
 func main() {
@@ -42,7 +43,7 @@ func run() error {
 		return err
 	}
 	if err := d.Boot(ctx, *once); err != nil {
-		var running *daemon.AlreadyRunningError
+		var running *state.AlreadyRunningError
 		if errors.As(err, &running) && *once {
 			// 상주 데몬이 이미 수렴시키고 있다 — 1회 색인은 할 일이 없다
 			logger.Printf("[reconcile] 데몬(pid %d)이 돌고 있어 1회 색인을 건너뜁니다", running.PID)
@@ -55,8 +56,8 @@ func run() error {
 		return d.Shutdown()
 	}
 
-	logger.Printf("[daemon] watching %s (루트 문서, docs/, main/*/docs/), interval=%s, debounce=%s, judge=%s, distill=%s",
-		cfg.MetaRepoRoot, cfg.Reconcile.Interval, cfg.Reconcile.Debounce, onOff(cfg.Judge.Enabled), onOff(cfg.Distill.Enabled))
+	logger.Printf("[daemon] watching %s (루트 문서, docs/, main/*/docs/), interval=%s, debounce=%s, judge=%s, distill=%s, graph=%s",
+		cfg.MetaRepoRoot, cfg.Reconcile.Interval, cfg.Reconcile.Debounce, onOff(cfg.Judge.Enabled), onOff(cfg.Distill.Enabled), onOff(cfg.Graph.URI != ""))
 	if err := d.Run(ctx); err != nil {
 		return err
 	}

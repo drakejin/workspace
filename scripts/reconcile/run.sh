@@ -9,4 +9,4 @@ source "${SCRIPT_DIR}/../memory-common.sh"
 memory_load_env "$ROOT_DIR"
 memory_build "$ROOT_DIR"
 
-exec bin/memory-daemon -once
+exec .cache/bin/memory-daemon -once

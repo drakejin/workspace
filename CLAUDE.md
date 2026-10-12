@@ -11,8 +11,9 @@
 3. 검색 결과가 없을 때만 디렉토리를 훑는다. 이때도 전체를 읽지 말고 그 디렉토리의 `INDEX.md` 부터 읽는다.
 4. 문서로 정보를 만들 때는 **추론 없이** 쓴다. 출처(커밋, PR, 대화, 파일 경로)가 확인되는 것만 적는다.
 5. `main/{repo}` 작업은 항상 새 worktree 에서 한다: `make run-issues ARGS="<issue> <repo>"` → `main/{repo}/.worktrees/<issue>`. 끝나면 `make done-issue ARGS="<issue> <repo>"`.
-6. 60일보다 오래된 맥락이 필요하면 `list_cold` 로 확인하고, `restore_cold` 전에 반드시 사용자에게 "cold 인덱스 X가 있는데 복원할까요"를 묻는다.
-7. `main/` 아래 파일은 이 레포에 커밋하지 않는다 (pre-commit hook 이 막는다).
+6. 근거를 따라가야 하면 `related_docs(path)` 로 그 문서와 이어진 문서(개정 이력, 근거, 링크, 같은 entity)를 본다.
+7. 60일보다 오래된 맥락이 필요하면 `list_cold` 로 확인하고, `restore_cold` 전에 반드시 사용자에게 "cold 인덱스 X가 있는데 복원할까요"를 묻는다.
+8. `main/` 아래 파일은 이 레포에 커밋하지 않는다 (pre-commit hook 이 막는다).
 
 ## 결과 문서 저장 위치
 
@@ -39,8 +40,17 @@ repo: books-guitar           # 관리 대상 repository. 여러 repo 에 걸치�
 doc_type: adr                # spec | adr | prd | plan | knowledge | guide | note
 date: 2026-10-13             # 유효 시각. 이 날짜로 hot/cold 와 판정 순서가 갈린다
 supersedes: docs/knowledge/old.md   # (개정판만) 밀어내는 구판 경로
+derived_from:                # (선택) 근거 문서 — why 없는 항목은 버려진다
+  - path: docs/specs/x/plan.md
+    why: 이 plan 의 비교표에서 결론을 가져왔다
+relates:                     # (선택) 관련 문서
+  - path: docs/repository/books-guitar/adr/0002-export.md
+    why: 같은 결정을 내보내기에도 쓴다
 ---
 ```
+
+`supersedes`·`derived_from`·`relates` 와 본문의 마크다운 링크는 knowledge graph 의 관계가 된다 — `related_docs` 로 근거와 주변 문서를 따라간다.
+knowledge 문서는 근거(`derived_from` 또는 `## 출처` 절)를 반드시 남긴다. 없으면 주간 감사가 `unsourced-fact` 로 알린다.
 
 작성자·작성일을 본문에 쓰지 않는다 — git 이 정본이다.
 
@@ -69,3 +79,4 @@ supersedes: docs/knowledge/old.md   # (개정판만) 밀어내는 구판 경로
 | --- | --- |
 | 2026-05-19 | 최초. "README.md 를 따른다" 한 줄 |
 | 2026-10-13 | 메모리 층 도입. search_memory 선행, 추론 없이, 저장 위치·frontmatter, 에피소드 다섯 줄, 주간 compaction, worktree 는 `main/{repo}/.worktrees/` |
+| 2026-10-13 | knowledge graph. `related_docs` 로 근거 따라가기, frontmatter `derived_from`·`relates`, knowledge 는 근거 필수 |

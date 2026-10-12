@@ -1,9 +1,10 @@
 # sample-workspace
 
 memory-mcp 를 체험하기 위한 가상의 meta-repository 다. 등장하는 서비스(order-api, catalog-api)와 결정은 모두 예시다.
-사용법은 루트의 [GUIDE.md §4](../../GUIDE.md#4-샘플-문서로-체험하기). `make tier` 가 cold 로 보낸 원본을 지우므로 **복사해서** 쓴다:
+사용법은 루트의 [GUIDE.md §4](../../GUIDE.md#4-샘플로-따라-하기). `make tier` 가 cold 로 보낸 원본을 지우므로 **복사해서** 쓴다:
 
 ```bash
+cd ~/Workspace/drakejin/workspace                 # make 는 워크스페이스 루트에서
 cp -R examples/sample-workspace ~/memory-demo
 export META_REPO_ROOT=$HOME/memory-demo MEMORY_DEFAULT_TEAM=demo
 make reconcile
@@ -17,3 +18,6 @@ make reconcile
 | `docs/specs/refund-window/plan.md` | AI plan 문서, `time_range` 필터 |
 | `docs/knowledge/order-status.md` · `order-status-v2.md` | knowledge 개정은 `supersedes:` 선언으로만 밀린다 |
 | `main/catalog-api/docs/architecture.md` | 관리 대상 repository 의 docs 도 색인된다 (`repo` 필터) |
+| `CLAUDE.md` | 에이전트 규칙 — search_memory 선행. `make bench` 가 두 조건 모두에 같은 규칙으로 넘긴다 |
+
+`make bench` 질문은 이 디렉토리 밖의 `examples/sample-bench.yaml` 에 있다 (안에 두면 에이전트가 정답을 Grep 할 수 있다).

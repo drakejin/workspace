@@ -1,35 +1,27 @@
 #!/usr/bin/env bash
+# 이슈 작업 공간 정리 — main/{repo}/.worktrees/{issue} worktree 를 지운다 (브랜치는 남긴다).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 REPOS_DIR="${ROOT_DIR}/main"
-WORKSPACE_JSON="${ROOT_DIR}/workspace.json"
 
 usage() {
-    echo "usage: run.sh <issue> <repo1> [repo2] ..."
-    echo ""
-    echo "example: run.sh ADSDATA-184 ads-genisys ads-serving"
+    echo "usage: run.sh <issue> <repo1> [repo2] ..." >&2
+    echo "example: run.sh ISSUE-1 books-guitar" >&2
     exit 1
 }
 
-if [[ $# -lt 2 ]]; then
-    usage
-fi
+[[ $# -lt 2 ]] && usage
 
 ISSUE="$1"
 shift
-REPOS=("$@")
 
-for repo in "${REPOS[@]}"; do
+for repo in "$@"; do
     REPO_DIR="${REPOS_DIR}/${repo}"
     if [[ ! -d "${REPO_DIR}/.git" ]]; then
         echo "[done-issue] ${repo}: not a git repository, skipping"
         continue
     fi
-
     "${SCRIPT_DIR}/_remove_worktree.sh" "$REPO_DIR" "$ISSUE"
 done
-
-UPDATE_SCRIPT="${ROOT_DIR}/scripts/run-issues/_update_workspace.sh"
-"${UPDATE_SCRIPT}" "$REPOS_DIR" "$WORKSPACE_JSON"
