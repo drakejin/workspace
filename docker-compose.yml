@@ -1,0 +1,32 @@
+# 메모리 층 — 로컬 단일 노드 OpenSearch (standalone). 팀 공용 클러스터는 나중 문제.
+# 다른 메모리 스택(ax-workspace 9200, vms workspace 9201)과 같은 머신에서 병존하므로
+# compose 프로젝트명·컨테이너명·호스트 포트를 따로 둔다 (OpenSearch 9202, 컨테이너 dj-workspace-*).
+# hot 데이터는 named volume, cold 스냅샷은 ./.data/snapshots (fs 스냅샷 repository).
+name: drakejin-workspace-memory
+services:
+  opensearch:
+    image: opensearchproject/opensearch:2.19.2
+    container_name: dj-workspace-opensearch
+    environment:
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - path.repo=/usr/share/opensearch/snapshots
+      - DISABLE_SECURITY_PLUGIN=true
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      - OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile: { soft: 65536, hard: 65536 }
+    ports:
+      - "127.0.0.1:${OS_PORT:-9202}:9200"
+    volumes:
+      - opensearch-hot:/usr/share/opensearch/data
+      - ./.data/snapshots:/usr/share/opensearch/snapshots
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  opensearch-hot:

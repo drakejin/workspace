@@ -1,3 +1,12 @@
 workspace.json
 .DS_Store
 .claude/workspace
+/main/
+node_modules/
+dist/
+bin/
+coverage/
+coverage.out
+.data/
+.env
+*.log

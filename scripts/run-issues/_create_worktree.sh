@@ -6,14 +6,14 @@ ISSUE="$2"
 REPO_NAME=$(basename "$REPO_DIR")
 
 WORKTREE_NAME="$ISSUE"
-WORKTREE_PATH="${REPO_DIR}/.git/worktrees/${WORKTREE_NAME}"
+WORKTREE_PATH="${REPO_DIR}/.worktrees/${WORKTREE_NAME}"
 BRANCH_NAME="$ISSUE"
 
 suffix=0
 while [[ -d "$WORKTREE_PATH" ]]; do
     suffix=$((suffix + 1))
     WORKTREE_NAME="${ISSUE}-${suffix}"
-    WORKTREE_PATH="${REPO_DIR}/.git/worktrees/${WORKTREE_NAME}"
+    WORKTREE_PATH="${REPO_DIR}/.worktrees/${WORKTREE_NAME}"
     BRANCH_NAME="${ISSUE}-${suffix}"
 done
 

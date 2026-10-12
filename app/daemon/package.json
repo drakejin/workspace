@@ -1,0 +1,16 @@
+{
+  "name": "@meta/daemon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "once": "tsx src/main.ts --once",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@meta/memory-core": "workspace:*",
+    "chokidar": "^4.0.3"
+  }
+}

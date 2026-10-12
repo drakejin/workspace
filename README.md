@@ -1,174 +1,82 @@
-# drakejin/workspace
+# meta-workspace
 
-drakejin 개인 리포지토리들을 한 곳에서 관리하는 워크스페이스입니다.
-
-여러 리포에 걸친 코드 탐색, 이슈 추적, 스펙 문서화를 컨텍스트 전환 없이 수행할 수 있도록 설계되었습니다.
-
----
-
-## Quick Start
-
-```bash
-cd /Users/jin/Workspace/drakejin/workspace
-make init
-```
-
-`make init`은 `workspace.seed.json`에 등록된 모든 리포지토리를 `main/` 디렉토리에 clone하고 git pre-commit hook을 설치합니다.
-
-> 비공개 리포 인증은 `~/.gitconfig`의 PAT 설정 또는 `gh auth login` fallback으로 처리됩니다.
-
----
-
-## 일상 워크플로
-
-### 1. 최신 코드를 받고 싶을 때
-
-```bash
-make sync
-```
-
-main/master 브랜치인 리포만 git pull하고 `workspace.json`의 branch/commit 정보를 갱신합니다.
-
-### 2. 워크스페이스 메타가 변경됐을 때
-
-`VERSION` 파일과 `workspace.json.version`이 어긋나면 워크스페이스 메타(scripts, seed, docs 등)가 변경됐다는 신호입니다. `make init`을 다시 실행하면 동기화됩니다.
-
----
-
-## 명령어
-
-| 명령어 | 설명 |
-|---|---|
-| `make init` | 최초 세팅. 리포지토리 clone + git pre-commit hook 설치 + `workspace.json` 생성 |
-| `make sync` | main/master 브랜치인 리포만 git pull + `workspace.json` 갱신 |
-| `make workspace` | git pull 없이 `workspace.json`만 현재 상태로 갱신 |
-| `make docs-cleaner` | `docs/issues`, `docs/specs` 내 문서 전체 삭제 (파괴적) |
-| `make run-issues ARGS=...` | 이슈 worktree 생성 + `workspace.json` 갱신 |
-| `make done-issue ARGS=...` | 이슈 worktree 제거 + `workspace.json` 갱신 |
-
-`make init`이 수행하는 일:
-
-- `workspace.json`이 없으면 `workspace.seed.json`에서 생성
-- 등록된 모든 리포지토리를 `main/` 디렉토리에 clone (이미 있으면 skip)
-- git pre-commit hook 설치 — `main/` 디렉토리 실수 커밋 방지, 매 commit 시 `VERSION` 자동 갱신
-- `make sync`를 호출해 branch/commit 정보 갱신
-- `VERSION` 파일 내용을 `workspace.json.version`에 기록
-
----
-
-## 디렉토리 구조
+여러 repository의 개발문서(spec, ADR, PRD, AI plan)를 한곳에 모으는 meta-repository와, 그 문서를 OpenSearch BM25로 코딩 에이전트에게 먹이는 memory-mcp.
+에이전트는 파일 트리를 뒤지는 대신 OpenSearch에 묻습니다.
 
 ```
-.
-├── workspace.seed.json    # 리포 목록 seed (Git 트래킹)
-├── workspace.json         # 로컬 상태 (gitignore, init 시 seed에서 생성)
-├── VERSION                # 워크스페이스 메타 변경 감지용 timestamp
-├── INDEX.md               # 리포지토리 인덱스
-├── Makefile               # 명령어 진입점
-├── main/                  # 모든 리포지토리가 clone되는 디렉토리
-│   └── books-guitar/
+meta-workspace/
+├── CLAUDE.md              # 에이전트 작업 규칙과 변경 내역
+├── .mcp.json              # memory MCP 서버 등록
+├── .claude/commands/      # /compaction (주간 compaction 절차)
+├── docker-compose.yml     # OpenSearch 단일 노드 (standalone)
+├── repos/                 # 관리 대상 repository (서브모듈 또는 worktree)
 ├── docs/
-│   ├── issues/            # 이슈 기반 문서
-│   ├── specs/             # User Story 스펙 문서
-│   └── main/              # 리포별 도메인 문서
-│       └── {repo}/
-│           ├── app/
-│           ├── business/
-│           ├── monitor/
-│           └── knowledge/
-│               ├── INDEX.md
-│               └── {YYYYMMDD}_{name}/
-│                   └── README.md
-└── scripts/
-    ├── hooks/             # 공유 git hooks
-    │   └── pre-commit
-    ├── init/              # make init
-    ├── sync/              # make sync, make workspace
-    ├── docs-cleaner/      # make docs-cleaner
-    ├── run-issues/        # 이슈 worktree 생성 + workspace.json 갱신
-    └── done-issue/        # 이슈 worktree 제거 + workspace.json 갱신
+│   ├── repository/{repo}/ # 그 리포에만 해당하는 주제. INDEX.md
+│   ├── feature/{topic}/   # 리포를 넘나드는 주제. INDEX.md
+│   ├── specs/{spec}/      # 사람/AI 스펙, 작업 plan. INDEX.md
+│   └── knowledge/         # compaction에서 살아남은 사실. INDEX.md
+├── app/
+│   ├── memory-mcp/        # MCP 서버(stdio) + 운영 CLI
+│   └── file-watcher/      # docs 변경 감지 → 재색인
+└── packages/memory-core/  # 청킹·메타 추출·색인·검색·hot/cold 공용 로직
 ```
 
----
+## 시작
 
-## 설정 파일
-
-### workspace.seed.json (정적, Git 트래킹)
-
-리포 목록의 seed.
-
-```json
-{
-  "githubHost": "github.com",
-  "org": "drakejin",
-  "workspaces": [
-    { "name": "books-guitar", "mainBranch": "main" }
-  ]
-}
+```bash
+pnpm install
+cp .env.example .env        # 필요하면 MEMORY_DEFAULT_TEAM 등 수정
+pnpm up                     # OpenSearch 기동 (localhost:9202)
+pnpm memory bootstrap       # 인덱스 템플릿, ISM 정책, 스냅샷 repository
+pnpm watch                  # 파일 워처: 시작 시 전체 적재 후 변경 감시
 ```
 
-- `githubHost`: GitHub 호스트 (기본 `github.com`)
-- `org`: GitHub organization 또는 user
-- `workspaces[]`: clone 대상 리포 목록
-  - `name`: 리포 이름
-  - `mainBranch`: 리포의 기본 브랜치
+Claude Code는 `.mcp.json`으로 memory 서버를 바로 씁니다. 다른 클라이언트는 `pnpm -s mcp`를 stdio 서버로 등록하면 됩니다.
 
-### workspace.json (동적, gitignore됨)
+## 동작
 
-각 사용자의 로컬 상태를 추적합니다. `make init` 시 seed에서 생성된 후 `make sync` / `make workspace` / `scripts/run-issues/_update_workspace.sh`로 자동 갱신됩니다.
+| 구성 | 내용 |
+| --- | --- |
+| 색인 대상 | `docs/**`, `repos/{repo}/docs/**`, `repos/{repo}.wt/{branch}/docs/**`의 마크다운 |
+| 청킹 | 마크다운 헤더 계층 단위(`header_path = A > B > C`). 코드 블록 안에서는 자르지 않음 |
+| 메타 | frontmatter(`team`, `repo`, `doc_type`, `date`)가 우선. 없으면 경로에서 추론하고, 시간은 git 커밋 시각 → mtime 순 |
+| 인덱스 | `mem-{team}-{yyyy.MM}` 월별 인덱스 + 읽기 alias `mem-{team}-hot` |
+| 검색 | BM25만 사용(임베딩 없음). 식별자 분할 analyzer라서 `ClickDeduplicator.window`를 `ClickDeduplicator`나 `window`로도 찾음 |
+| hot/cold | ISM: 인덱스 생성 후 60일 → 스냅샷(`mem-cold` repository) → 삭제. 오래된 문서를 늦게 적재한 인덱스는 `pnpm memory tier`가 최신 event_time 기준으로 처리 |
+| cold 층 | 스냅샷(기본 `./.data/snapshots`, s3 가능) + raw 원본과 청크 JSONL(기본 `./.data/cold-store`, `COLD_STORE_S3_BUCKET`이면 S3) |
 
-```json
-{
-  "githubHost": "github.com",
-  "org": "drakejin",
-  "workspaces": [
-    {
-      "name": "books-guitar",
-      "mainBranch": "main",
-      "workingBranch": "main",
-      "lastCommitHash": "...",
-      "working": [
-        { "targetWorktrees": "main", "targetBranch": "main", "issue": "" }
-      ]
-    }
-  ]
-}
+### MCP 도구
+
+| 도구 | 역할 |
+| --- | --- |
+| `search_memory(team?, query, time_range?, repo?, doc_type?, size?)` | hot alias에 BM25 검색. `source_path`, `header_path`가 붙은 청크를 돌려줌 |
+| `ingest_path(path, team?)` | 워처가 놓친 파일/디렉토리 수동 적재. meta-repo 밖 경로는 거부 |
+| `list_cold(team?)` | 스냅샷에 있는 cold 인덱스 목록 |
+| `restore_cold(index, confirmed?)` | 스냅샷 restore. `confirmed=true`가 없으면 복원하지 않고 "사용자에게 먼저 물으라"고 돌려줌 |
+
+### 운영 CLI
+
+```bash
+pnpm memory search "ClickDeduplicator window" --team ads
+pnpm memory ingest docs/specs
+pnpm memory compaction-report --team ads   # 주간 compaction 1·2단계 (수명 확인, 충돌 후보)
+pnpm memory tier --dry-run                 # 5단계 티어 이동
+pnpm memory list-cold --team ads
+pnpm memory restore mem-ads-2026.07
+pnpm memory reload --team ads              # 청크 JSONL → _bulk 재적재 (매핑 변경·임베딩 추가 시)
 ```
 
----
+주간 compaction은 Claude Code에서 `/compaction [team]`으로 실행합니다.
 
-## 새 리포지토리 추가
+### S3 cold
 
-1. `workspace.seed.json`의 `workspaces` 배열에 항목을 추가
-   ```json
-   { "name": "new-repo", "mainBranch": "main" }
-   ```
-2. `make init` 실행
+- raw/JSONL: `COLD_STORE_S3_BUCKET`, `COLD_STORE_S3_PREFIX`, `AWS_REGION`을 설정하면 로컬 디렉토리 대신 S3에 씁니다. 자격 증명은 AWS SDK 기본 체인을 따릅니다.
+- 스냅샷: `COLD_SNAPSHOT_TYPE=s3`, `COLD_SNAPSHOT_S3_BUCKET`을 설정합니다. OpenSearch 컨테이너에 `repository-s3` 플러그인과 keystore 자격 증명이 있어야 합니다. 기본 compose는 fs repository만 씁니다.
 
----
+## 테스트
 
-## 컨벤션
-
-### Makefile 규칙
-
-- 모든 명령어는 `.PHONY`로 선언한다
-- 각 타겟은 `scripts/{기능명}/run.sh`를 호출한다
-- 타겟 이름은 kebab-case를 사용한다 (예: `docs-cleaner`)
-
-### Bash 스크립트 규칙
-
-- 모든 스크립트는 `#!/usr/bin/env bash`와 `set -euo pipefail`로 시작한다
-- `run.sh`: 각 기능의 진입점. Makefile에서 직접 호출되는 스크립트
-- `_*.sh`: run.sh에서 호출되는 내부 스크립트. 기능 단위로 분리한다
-- 외부에서 직접 호출 가능한 유틸리티는 underscore 없이 명명한다
-- 출력 형식은 `[action] target: message` 패턴을 따른다
-- 컬러 코드를 사용하지 않는다
-
----
-
-## 주의사항
-
-- `main/` 디렉토리의 파일을 이 워크스페이스 리포에 커밋하면 안 됩니다 (pre-commit hook으로 방지됨)
-- `workspace.json`은 gitignore되어 있으며 각자 로컬 상태를 가집니다
-- clone/pull은 HTTPS를 사용합니다. 비공개 리포 인증을 위해 PAT 기반 `~/.gitconfig` 설정이 필요합니다
-- HTTPS 인증이 실패하면 `make init`은 자동으로 `gh repo clone` fallback을 시도합니다 (`gh auth login` 필요)
+```bash
+pnpm test            # 단위 + 통합 (OpenSearch 불필요)
+pnpm up && pnpm test:e2e   # 실제 OpenSearch에 대한 블랙박스 e2e
+pnpm test:coverage
+```

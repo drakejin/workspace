@@ -1,0 +1,4 @@
+# 샘플을 돌리면 생기는 파생물·원장 — 체험용이라 커밋하지 않는다
+.data/
+judge-state/
+knowledge-cache/
