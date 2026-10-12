@@ -14,7 +14,7 @@ for entry in "${ISSUES_DIR}"/*/; do
     [[ -d "$entry" ]] || continue
     rm -rf "$entry"
     echo "[clean] docs/issues/$(basename "$entry")"
-    ((count++))
+    count=$((count + 1))
 done
 
 echo ""

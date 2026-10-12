@@ -1,0 +1,171 @@
+// Package document 는 파일 하나를 메타데이터와 청크로 바꾼다.
+package document
+
+import (
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/drakejin/workspace/app/internal/markdown"
+	"github.com/drakejin/workspace/app/internal/model"
+	"github.com/drakejin/workspace/app/internal/naming"
+)
+
+// RootGuideFiles 는 meta-repository 루트에서 색인하는 안내 문서다 (guide = knowledge, 노화하지 않는다).
+// ingest 의 색인 대상 판단도 이 목록을 쓴다 — 두 목록이 어긋나지 않게 한 곳에 둔다.
+var RootGuideFiles = map[string]bool{"README.md": true, "INDEX.md": true, "CLAUDE.md": true, "GUIDE.md": true}
+
+var (
+	// docs/repository/{repo}/... — 그 repository 에만 해당하는 메타 문서
+	repoDocs = regexp.MustCompile(`^docs/repository/([^/]+)/`)
+	// ManagedRepoDocs 는 main/{repo}/docs/... — 관리 대상 repository 자신의 문서다
+	ManagedRepoDocs = regexp.MustCompile(`^main/([^/]+)/docs/`)
+)
+
+type typeHint struct {
+	pattern *regexp.Regexp
+	docType model.DocType
+}
+
+// 위에서부터 첫 매치. 어디에도 안 걸리면 note.
+var typeHints = []typeHint{
+	// 안내·목차 문서 — 시간이 지나도 낡지 않는 정본
+	{regexp.MustCompile(`(^|/)INDEX\.md$|^docs/guides/`), model.DocGuide},
+	{regexp.MustCompile(`(?i)(^|/)(adr|adrs|decisions?)(/|$)|(^|/)adr[-_]`), model.DocADR},
+	{regexp.MustCompile(`(?i)(^|/)prds?(/|$)|(^|/)prd[-_]`), model.DocPRD},
+	{regexp.MustCompile(`(?i)(^|/)plans?(/|$)|(^|/)plan[-_]|[-_]plan\.md$|(^|/)plan\.md$`), model.DocPlan},
+	{regexp.MustCompile(`(^|/)knowledge/`), model.DocKnowledge},
+	{regexp.MustCompile(`(?i)(^|/)specs?(/|$)|(^|/)spec[-_]|[-_]spec\.md$`), model.DocSpec},
+}
+
+// PathFacts 는 경로에서 추론한 값이다.
+type PathFacts struct {
+	Repo    string
+	DocType model.DocType
+}
+
+// FactsFromPath 는 meta-repository 기준 상대 경로에서 repo 와 문서 종류를 추론한다.
+func FactsFromPath(rel string) PathFacts {
+	rel = strings.ReplaceAll(rel, "\\", "/")
+	facts := PathFacts{DocType: model.DocNote}
+	if m := repoDocs.FindStringSubmatch(rel); m != nil {
+		facts.Repo = m[1]
+	} else if m := ManagedRepoDocs.FindStringSubmatch(rel); m != nil {
+		facts.Repo = m[1]
+	}
+	if RootGuideFiles[rel] {
+		facts.DocType = model.DocGuide
+		return facts
+	}
+	for _, h := range typeHints {
+		if h.pattern.MatchString(rel) {
+			facts.DocType = h.docType
+			break
+		}
+	}
+	return facts
+}
+
+// KindOf 는 기억의 성질이다. knowledge·guide 문서, 그리고 관리 대상 repository(main/{repo}/docs)의 문서는
+// 누가 바꾸기 전까지 유효한 사실이라 knowledge — 유사도로 판정하지 않고 노화하지 않는다.
+// 나머지(meta-repo 의 spec·adr·prd·plan·note)는 시간순으로 쌓이는 기록이라 episodic.
+func KindOf(docType model.DocType, rel string) model.Kind {
+	if docType == model.DocKnowledge || docType == model.DocGuide || strings.HasPrefix(rel, "main/") {
+		return model.KindKnowledge
+	}
+	return model.KindEpisodic
+}
+
+// Metadata 는 frontmatter 와 경로에서 정한 문서 메타다. frontmatter 가 경로 추론보다 우선한다.
+type Metadata struct {
+	Team         string
+	Repo         string
+	DocType      model.DocType
+	Kind         model.Kind
+	DeclaredTime time.Time // frontmatter 날짜. 없으면 zero (호출자가 git/mtime 으로 채운다)
+	Supersedes   string    // 개정판이 밀어내는 구판 경로 (선언은 항상 새 문서 쪽에 쓴다)
+	Links        []model.Link
+}
+
+// ResolveMetadata 는 frontmatter 와 경로로 메타를 정한다.
+func ResolveMetadata(fm markdown.Frontmatter, rel, defaultTeam string) (Metadata, error) {
+	facts := FactsFromPath(rel)
+	team := strings.ToLower(firstString(fm, "team"))
+	if team == "" {
+		team = defaultTeam
+	}
+	if err := naming.ValidateTeam(team); err != nil {
+		return Metadata{}, err
+	}
+	docType := facts.DocType
+	if t, ok := model.ParseDocType(strings.ToLower(firstString(fm, "doc_type", "type"))); ok {
+		docType = t
+	}
+	repo := firstString(fm, "repo")
+	if repo == "" {
+		repo = facts.Repo
+	}
+	return Metadata{
+		Team:         team,
+		Repo:         repo,
+		DocType:      docType,
+		Kind:         KindOf(docType, rel),
+		DeclaredTime: firstTime(fm, "event_time", "date"),
+		Supersedes:   firstString(fm, "supersedes"),
+		Links:        frontmatterLinks(fm),
+	}, nil
+}
+
+func firstString(fm markdown.Frontmatter, keys ...string) string {
+	for _, k := range keys {
+		if s, ok := fm[k].(string); ok && strings.TrimSpace(s) != "" {
+			return strings.TrimSpace(s)
+		}
+	}
+	return ""
+}
+
+func firstTime(fm markdown.Frontmatter, keys ...string) time.Time {
+	for _, k := range keys {
+		switch v := fm[k].(type) {
+		case time.Time:
+			return v.UTC()
+		case string:
+			for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02T15:04:05", "2006-01-02"} {
+				if t, err := time.Parse(layout, strings.TrimSpace(v)); err == nil {
+					return t.UTC()
+				}
+			}
+		}
+	}
+	return time.Time{}
+}
+
+// frontmatterLinks 는 derived_from·relates 목록이다. 각 항목은 {path, why} — why 가 없는 링크는 버린다
+// (이유 없는 링크는 열어 볼지 판단할 수 없다).
+func frontmatterLinks(fm markdown.Frontmatter) []model.Link {
+	var links []model.Link
+	for key, typ := range map[string]model.LinkType{"derived_from": model.LinkDerivedFrom, "relates": model.LinkRelates} {
+		items, _ := fm[key].([]any)
+		for _, item := range items {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			p, _ := m["path"].(string)
+			why, _ := m["why"].(string)
+			if strings.TrimSpace(p) == "" || strings.TrimSpace(why) == "" {
+				continue
+			}
+			links = append(links, model.Link{Type: typ, To: strings.TrimSpace(p), Why: strings.TrimSpace(why)})
+		}
+	}
+	sort.Slice(links, func(i, j int) bool {
+		if links[i].Type != links[j].Type {
+			return links[i].Type < links[j].Type
+		}
+		return links[i].To < links[j].To
+	})
+	return links
+}

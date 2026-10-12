@@ -1,0 +1,36 @@
+# S3 cold 층 e2e 스택 (make test-e2e-s3 가 올리고 내린다) — 개발 스택(9202·7689)과 포트·프로젝트가 겹치지 않는다
+name: drakejin-workspace-s3e2e
+
+services:
+  localstack:
+    image: localstack/localstack:3
+    environment:
+      SERVICES: s3
+    ports:
+      - "4576:4566"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4566/_localstack/health"]
+      interval: 3s
+      retries: 40
+
+  opensearch:
+    build: .
+    image: dj-workspace-opensearch-s3:2.19.2
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+      s3.client.default.endpoint: localstack:4566
+      s3.client.default.protocol: http
+      s3.client.default.path_style_access: "true"
+      s3.client.default.region: us-east-1
+    ports:
+      - "9203:9200"
+    depends_on:
+      localstack:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health?wait_for_status=yellow || exit 1"]
+      interval: 5s
+      retries: 60

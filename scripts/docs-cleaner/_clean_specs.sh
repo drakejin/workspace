@@ -14,7 +14,7 @@ for entry in "${SPECS_DIR}"/*/; do
     [[ -d "$entry" ]] || continue
     rm -rf "$entry"
     echo "[clean] docs/specs/$(basename "$entry")"
-    ((count++))
+    count=$((count + 1))
 done
 
 echo ""

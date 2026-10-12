@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>__LABEL__</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__ROOT__/scripts/daemon/run.sh</string>
+    </array>
+    <key>WorkingDirectory</key><string>__ROOT__</string>
+    <key>EnvironmentVariables</key>
+    <dict><key>PATH</key><string>__PATH__</string></dict>
+    <!-- 로그인하면 켜지고, 죽으면 다시 띄운다. 데몬 pid 락이 중복 실행을 막는다 -->
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>ThrottleInterval</key><integer>30</integer>
+    <key>StandardOutPath</key><string>__ROOT__/.cache/schedule/daemon.log</string>
+    <key>StandardErrorPath</key><string>__ROOT__/.cache/schedule/daemon.log</string>
+</dict>
+</plist>
