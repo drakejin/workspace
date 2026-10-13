@@ -42,6 +42,8 @@ func Properties() map[string]any {
 		"workspace":  map[string]any{"type": "keyword"},
 		"team":       map[string]any{"type": "keyword"},
 		"deprecated": map[string]any{"type": "boolean"},
+		// 넘김 표시 — 데몬 밖에서 쓴 문서의 청크 0 에만 있다 (다음 데몬 사이클이 판정·증류·그래프로 넘기고 지운다)
+		"pending_cycle": map[string]any{"type": "boolean"},
 		// 프로젝트·주제는 필터(keyword)이면서 질의어로도 맞게(text) 둔다
 		"repo":          map[string]any{"type": "keyword", "fields": map[string]any{"text": text}},
 		"topic":         map[string]any{"type": "keyword", "fields": map[string]any{"text": text}},

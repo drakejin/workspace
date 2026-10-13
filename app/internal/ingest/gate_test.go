@@ -40,9 +40,9 @@ func TestIngestPathAppliesTheDaemonGates(t *testing.T) {
 		if _, ok, _ := store.Get(ctx, cold.ChunksKey(unitTeam, rel)); ok {
 			t.Errorf("%s 를 cold store 에 썼다 (게이트에 걸려야 한다)", rel)
 		}
-		res, err := ix.IngestFile(ctx, rel, "")
-		if err != nil || res == nil || res.Chunks != 0 || res.SourcePath != rel || !strings.HasPrefix(res.Skipped, reason) {
-			t.Errorf("IngestFile %s = %+v %v — 색인하지 않고 건너뛴 사유(%s)를 알린다", rel, res, err, reason)
+		res, err := ix.IngestPath(ctx, rel, "")
+		if err != nil || len(res) != 1 || res[0].Chunks != 0 || res[0].SourcePath != rel || !strings.HasPrefix(res[0].Skipped, reason) {
+			t.Errorf("IngestPath %s = %+v %v — 색인하지 않고 건너뛴 사유(%s)를 알린다", rel, res, err, reason)
 		}
 		var skip *SkipError
 		if _, err := ix.Prepare(ctx, rel, ""); !errors.As(err, &skip) || skip.Rel != rel {

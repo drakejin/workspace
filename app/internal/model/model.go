@@ -71,6 +71,9 @@ type Chunk struct {
 	Deprecated   bool     `json:"deprecated,omitempty"`
 	Summary      string   `json:"summary,omitempty"`
 	Entities     []string `json:"entities,omitempty"`
+	// PendingCycle 은 청크 0 에만 붙는 넘김 표시다 — 데몬 밖(ingest_path, CLI ingest, audit -apply)에서 쓴 문서라 다음 데몬
+	// 사이클이 판정·증류·그래프로 넘기고 지운다. 없으면 false (데몬이 쓴 문서). 색인에만 남기고 cold store 청크에는 쓰지 않는다
+	PendingCycle bool `json:"pending_cycle,omitempty"`
 }
 
 // EventTimeValue 는 EventTime 을 시각으로 읽는다.
