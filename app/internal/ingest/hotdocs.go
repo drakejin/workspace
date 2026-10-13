@@ -14,7 +14,6 @@ type IndexedDoc struct {
 	SourcePath   string
 	Team         string
 	Repo         string
-	Topic        string
 	Title        string
 	DocType      model.DocType
 	Kind         model.Kind
@@ -22,7 +21,6 @@ type IndexedDoc struct {
 	BodySHA      string
 	MtimeMs      int64
 	Size         int64
-	EventTime    string
 	Supersedes   string
 	SupersededBy string
 	Deprecated   bool
@@ -33,6 +31,8 @@ type IndexedDoc struct {
 	IndexVersion int
 	// Duplicate 면 같은 문서가 두 인덱스 이상에 있다 (인덱스를 옮기다 끊긴 경우). 다시 쓰면 한 곳만 남는다.
 	Duplicate bool
+	// PendingCycle 이면 데몬 밖(ingest_path, audit -apply)에서 쓴 문서다 — 데몬이 아직 판정·증류·그래프로 넘기지 않았다.
+	PendingCycle bool
 }
 
 // ManagedIndices 는 데몬이 맞추는 hot 인덱스다. restore_cold 로 복원한 인덱스(auto_manage=false)는 뺀다 —
@@ -75,8 +75,9 @@ func FetchIndexedDocs(ctx context.Context, c opensearch.Client, indices []string
 	if len(indices) == 0 {
 		return docs, nil
 	}
-	source := []string{"workspace", "team", "repo", "topic", "index_version", "title", "source_path", "chunk_index", "doc_type", "memory_kind", "content_sha", "body_sha",
-		"mtime_ms", "size", "event_time", "supersedes", "superseded_by", "deprecated", "summary", "entities"}
+	// IndexedDoc 에 담는 필드만 읽는다 — 데몬이 사이클마다 모든 문서에 대해 읽는다
+	source := []string{"team", "repo", "index_version", "title", "source_path", "doc_type", "memory_kind", "content_sha", "body_sha",
+		"mtime_ms", "size", "supersedes", "superseded_by", "deprecated", "summary", "entities", "pending_cycle"}
 	err := opensearch.Scan(ctx, c, joinIndices(indices), opensearch.FirstChunks(workspace), source, opensearch.ChunkSort,
 		func(h opensearch.Hit[model.Chunk]) error {
 			s := h.Source
@@ -86,10 +87,10 @@ func FetchIndexedDocs(ctx context.Context, c opensearch.Client, indices []string
 				return nil
 			}
 			docs[s.SourcePath] = IndexedDoc{
-				SourcePath: s.SourcePath, Team: s.Team, Repo: s.Repo, Topic: s.Topic, IndexVersion: s.IndexVersion, Title: s.Title, DocType: s.DocType, Kind: s.Kind,
-				ContentSHA: s.ContentSHA, BodySHA: s.BodySHA, MtimeMs: s.MtimeMs, Size: s.Size, EventTime: s.EventTime,
+				SourcePath: s.SourcePath, Team: s.Team, Repo: s.Repo, IndexVersion: s.IndexVersion, Title: s.Title, DocType: s.DocType, Kind: s.Kind,
+				ContentSHA: s.ContentSHA, BodySHA: s.BodySHA, MtimeMs: s.MtimeMs, Size: s.Size,
 				Supersedes: s.Supersedes, SupersededBy: s.SupersededBy, Deprecated: s.Deprecated, Summary: s.Summary,
-				Entities: s.Entities, Index: h.Index,
+				Entities: s.Entities, Index: h.Index, PendingCycle: s.PendingCycle,
 			}
 			return nil
 		})

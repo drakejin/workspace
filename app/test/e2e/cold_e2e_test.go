@@ -20,8 +20,8 @@ import (
 func ingestOne(t *testing.T, m *mcpHarness, rel, date, token string) string {
 	t.Helper()
 	abs := write(t, m.cfg.MetaRepoRoot, rel, "---\ndate: "+date+"\n---\n# "+token+" 문서\n"+token+" 를 쓴다.\n")
-	res, err := m.indexer.IngestFile(context.Background(), abs, "")
-	if err != nil || res == nil {
+	res, err := ingestFile(context.Background(), m.indexer, abs)
+	if err != nil {
 		t.Fatalf("ingest %s = %+v %v", rel, res, err)
 	}
 	return res.Index

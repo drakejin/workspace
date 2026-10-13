@@ -66,17 +66,17 @@ var (
 const unitMaxFileBytes = 1 << 20
 
 // RUN-4: 대소문자만 다른 철자로 ingest 해도 디스크에 있는 철자 하나가 문서의 정체다 — 같은 파일이 두 문서가 되지 않는다.
-func TestIngestFileUsesTheOnDiskSpelling(t *testing.T) {
+func TestIngestPathUsesTheOnDiskSpelling(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "docs/knowledge/limits-v2.md", []byte("# 한도\nDailyLimitToken"))
 	ix, store := newUnitIndexer(t, root, unitMaxFileBytes)
 	for _, input := range []string{"docs/knowledge/LIMITS-V2.md", "DOCS/Knowledge/Limits-V2.md", filepath.Join(root, "docs/knowledge/limits-v2.md")} {
-		res, err := ix.IngestFile(context.Background(), input, "")
-		if err != nil || res == nil {
+		res, err := ix.IngestPath(context.Background(), input, "")
+		if err != nil || len(res) != 1 {
 			t.Fatalf("%s: %v %v", input, res, err)
 		}
-		if res.SourcePath != "docs/knowledge/limits-v2.md" {
-			t.Errorf("%s → source_path %q (디스크의 철자여야 한다)", input, res.SourcePath)
+		if res[0].SourcePath != "docs/knowledge/limits-v2.md" {
+			t.Errorf("%s → source_path %q (디스크의 철자여야 한다)", input, res[0].SourcePath)
 		}
 	}
 	keys, _ := store.List(context.Background(), cold.ChunksPrefix(unitTeam))
@@ -86,17 +86,17 @@ func TestIngestFileUsesTheOnDiskSpelling(t *testing.T) {
 }
 
 // RUN-4·RUN-5: NFD 이름의 파일은 NFC 로 친 철자로도, NFD 철자로도 같은 NFC source_path 하나가 된다.
-func TestIngestFileStoresNFCSourcePath(t *testing.T) {
+func TestIngestPathStoresNFCSourcePath(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, nfdRel, []byte("# 환불 메모\nNfdTopicToken"))
 	ix, _ := newUnitIndexer(t, root, unitMaxFileBytes)
 	for name, input := range map[string]string{"NFC 입력": nfcRel, "NFD 입력": nfdRel} {
-		res, err := ix.IngestFile(context.Background(), input, "")
-		if err != nil || res == nil {
+		res, err := ix.IngestPath(context.Background(), input, "")
+		if err != nil || len(res) != 1 {
 			t.Fatalf("%s: %v %v", name, res, err)
 		}
-		if res.SourcePath != nfcRel {
-			t.Errorf("%s → source_path %q, NFC=%v (NFC %q 여야 한다)", name, res.SourcePath, norm.NFC.IsNormalString(res.SourcePath), nfcRel)
+		if got := res[0].SourcePath; got != nfcRel {
+			t.Errorf("%s → source_path %q, NFC=%v (NFC %q 여야 한다)", name, got, norm.NFC.IsNormalString(got), nfcRel)
 		}
 	}
 }

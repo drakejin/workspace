@@ -18,6 +18,7 @@ import (
 	"github.com/drakejin/workspace/app/internal/cold"
 	"github.com/drakejin/workspace/app/internal/config"
 	"github.com/drakejin/workspace/app/internal/graph"
+	"github.com/drakejin/workspace/app/internal/ingest"
 	"github.com/drakejin/workspace/app/internal/llm"
 	"github.com/drakejin/workspace/app/internal/opensearch"
 	"github.com/drakejin/workspace/app/internal/search"
@@ -105,6 +106,18 @@ func write(t *testing.T, root, rel, body string) string {
 		t.Fatal(err)
 	}
 	return p
+}
+
+// ingestFile 은 파일 하나를 IngestPath 로 적재한 결과다 — 파일 경로를 주면 결과는 하나다.
+func ingestFile(ctx context.Context, ix ingest.Indexer, path string) (ingest.Result, error) {
+	results, err := ix.IngestPath(ctx, path, "")
+	if err != nil {
+		return ingest.Result{}, err
+	}
+	if len(results) != 1 {
+		return ingest.Result{}, fmt.Errorf("ingest %s: 결과 %d개 (파일 하나면 하나다)", path, len(results))
+	}
+	return results[0], nil
 }
 
 // hotDays 는 지금 테스트 설정의 hot 기간이다 (newConfig 가 실제 MEMORY_HOT_DAYS 로 맞춘다).

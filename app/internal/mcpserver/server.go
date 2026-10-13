@@ -517,7 +517,7 @@ func NewServer(h *Handlers) *mcp.Server {
 		Name:  "ingest_path",
 		Title: "문서 수동 적재",
 		Description: "데몬이 아직 잡지 못한 문서나 디렉토리를 바로 색인한다. 경로는 meta-repository 기준 상대 경로. " +
-			"바이너리·크기 초과 파일은 데몬처럼 색인하지 않고 건너뛴 것으로 알린다.",
+			"바이너리·크기 초과 파일은 데몬처럼 색인하지 않고 건너뛴 것으로 알린다. 적재한 문서는 다음 데몬 사이클이 판정·증류·그래프로 넘긴다.",
 	}, wrap(h.Log, h.Ingest))
 
 	mcp.AddTool(server, &mcp.Tool{

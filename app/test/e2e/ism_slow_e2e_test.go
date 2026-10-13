@@ -32,7 +32,7 @@ func TestISMMovesIndexToColdAndTierPrunesHot(t *testing.T) {
 	ctx := context.Background()
 	const doc = "docs/specs/ism/aged.md"
 	abs := write(t, m.cfg.MetaRepoRoot, doc, "---\ndate: "+daysAgo(hotDays+90)+"\n---\n# ISM 대상\nIsmAgedToken\n")
-	res, err := m.indexer.IngestFile(ctx, abs, "")
+	res, err := ingestFile(ctx, m.indexer, abs)
 	if err != nil {
 		t.Fatal(err)
 	}

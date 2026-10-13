@@ -180,14 +180,15 @@ func (r *Reconciler) loadState(ctx context.Context) (cycleState, error) {
 	return cycleState{indices: indices, existing: existing, owner: cold.NewOwnership(archived, r.Cold), restored: restored}, nil
 }
 
-// syncFile 은 파일 하나를 색인과 맞춘다. 내용이 바뀌어 다시 썼으면 DiffEntry 를 돌려준다.
+// syncFile 은 파일 하나를 색인과 맞춘다. 내용이 바뀌어 다시 썼거나, 데몬 밖에서 쓴 문서(넘김 표시)면 DiffEntry 를 돌려준다.
 func (r *Reconciler) syncFile(ctx context.Context, f ingest.ScannedFile, st cycleState, sum *state.CycleSummary) (*DiffEntry, error) {
 	ex, known := st.existing[f.Rel]
 	delete(st.existing, f.Rel)
 	stat := statKey{f.MtimeMs, f.Size}
-	// current 면 색인에 있는 그대로 써도 된다 — 두 인덱스에 걸쳐 있거나 낮은 판(필드가 빠진 것)이면 다시 쓴다
+	// current 면 색인에 있는 그대로 써도 된다 — 두 인덱스에 걸쳐 있거나 낮은 판(필드가 빠진 것)이면 다시 쓴다.
+	// 넘김 표시가 있으면 stat 이 같아도 본다 — 데몬 밖(ingest_path, audit -apply)의 쓰기는 판정·증류·그래프를 거치지 않았다
 	current := known && !ex.Duplicate && ex.IndexVersion >= model.IndexVersion
-	if current && ex.MtimeMs == f.MtimeMs && ex.Size == f.Size {
+	if current && !ex.PendingCycle && ex.MtimeMs == f.MtimeMs && ex.Size == f.Size {
 		return nil, nil
 	}
 	if rex, ok := st.restored[f.Rel]; !known && ok && rex.MtimeMs == f.MtimeMs && rex.Size == f.Size {
@@ -206,23 +207,7 @@ func (r *Reconciler) syncFile(ctx context.Context, f ingest.ScannedFile, st cycl
 	}
 	b := prepared.Built
 	if known && ex.ContentSHA == b.ContentSHA {
-		if current {
-			if err := opensearch.UpdateDoc(ctx, r.OS, st.indices, r.Config.Workspace, f.Rel, map[string]any{"mtime_ms": f.MtimeMs, "size": f.Size}); err != nil {
-				return nil, err
-			}
-			sum.StatUpdated++
-			return nil, nil
-		}
-		// 내용은 그대로인데 판이 낮거나(새 필드를 채운다) 두 인덱스에 걸쳐 있다 — 다시 쓰기만 한다. 내용 변경이 아니므로
-		// 판정·증류·그래프에 넘기지 않고(아무도 고치지 않은 문서가 latest-wins 로 숨지 않게), 밀린·deprecate 표시는 색인에 있던 그대로 잇는다
-		for i := range prepared.Built.Chunks {
-			prepared.Built.Chunks[i].SupersededBy, prepared.Built.Chunks[i].Deprecated = ex.SupersededBy, ex.Deprecated
-		}
-		if _, err := r.Indexer.Write(ctx, prepared); err != nil {
-			return nil, err
-		}
-		sum.Indexed++
-		return nil, nil
+		return r.syncSameContent(ctx, f, ex, current, prepared, st.indices, sum)
 	}
 	if !known {
 		owned, err := r.isColdOwned(ctx, b, st.owner)
@@ -246,6 +231,57 @@ func (r *Reconciler) syncFile(ctx context.Context, f ingest.ScannedFile, st cycl
 	}
 	entry := diffFrom(f.Rel, b, change)
 	return &entry, nil
+}
+
+// syncSameContent 는 색인과 내용이 같은 파일이다. 판이 그대로면 stat 만 갱신하고, 판이 낮거나(새 필드를 채운다) 두 인덱스에
+// 걸쳐 있으면 다시 쓰기만 한다 — 내용 변경이 아니므로 판정·증류·그래프에 넘기지 않고(아무도 고치지 않은 문서가 latest-wins 로
+// 숨지 않게), 밀린·deprecate 표시는 색인에 있던 그대로 잇는다. 다만 데몬 밖(ingest_path, audit -apply)에서 쓴 문서(넘김 표시)는
+// 그 쓰기가 판정·증류·그래프를 거치지 않았으므로 변경분으로 넘기고 표시를 지운다 (다시 쓰면 데몬의 쓰기가 표시 없이 덮는다).
+func (r *Reconciler) syncSameContent(ctx context.Context, f ingest.ScannedFile, ex ingest.IndexedDoc, current bool, prepared ingest.Prepared,
+	indices []string, sum *state.CycleSummary) (*DiffEntry, error) {
+	if current {
+		if err := r.refreshStat(ctx, f, ex, indices, sum); err != nil {
+			return nil, err
+		}
+	} else {
+		for i := range prepared.Built.Chunks {
+			prepared.Built.Chunks[i].SupersededBy, prepared.Built.Chunks[i].Deprecated = ex.SupersededBy, ex.Deprecated
+		}
+		if _, err := r.Indexer.Write(ctx, prepared); err != nil {
+			return nil, err
+		}
+		sum.Indexed++
+	}
+	if !ex.PendingCycle {
+		return nil, nil
+	}
+	r.Log("[reconcile] handoff %s (데몬 밖에서 색인한 문서 — 판정·증류·그래프로 넘긴다)", f.Rel)
+	entry := diffFrom(f.Rel, prepared.Built, ChangeModified)
+	return &entry, nil
+}
+
+// refreshStat 은 내용이 그대로인 문서의 stat 을 고치고 넘김 표시를 지운다. 색인에 있던 내용(content_sha)의 청크에만 —
+// 그 사이 데몬 밖에서 새 내용을 썼으면(새 표시가 붙는다) 건드리지 않는다.
+func (r *Reconciler) refreshStat(ctx context.Context, f ingest.ScannedFile, ex ingest.IndexedDoc, indices []string, sum *state.CycleSummary) error {
+	fields := map[string]any{}
+	statChanged := ex.MtimeMs != f.MtimeMs || ex.Size != f.Size
+	if statChanged {
+		fields["mtime_ms"], fields["size"] = f.MtimeMs, f.Size
+	}
+	if ex.PendingCycle {
+		fields["pending_cycle"] = nil
+	}
+	if len(fields) == 0 {
+		return nil
+	}
+	sameContent := []any{map[string]any{"term": map[string]any{"content_sha": ex.ContentSHA}}}
+	if err := opensearch.UpdateDocWhere(ctx, r.OS, indices, r.Config.Workspace, f.Rel, sameContent, fields); err != nil {
+		return err
+	}
+	if statChanged {
+		sum.StatUpdated++
+	}
+	return nil
 }
 
 // skipReason 은 skip 로그의 사유다 — 게이트에 걸렸으면 그 사유(binary content, size N > M)만, 아니면 오류 그대로.

@@ -118,11 +118,11 @@ func TestReindexKeepsLiveChunksAndRemoveCleansUp(t *testing.T) {
 	m := newMCP(t, newConfig(t, nil))
 	ctx := context.Background()
 	file := write(t, m.cfg.MetaRepoRoot, "docs/specs/shrinking.md", "# S\n## 하나\nAlphaSectionToken\n## 둘\nBetaSectionToken")
-	if _, err := m.indexer.IngestFile(ctx, file, ""); err != nil {
+	if _, err := m.indexer.IngestPath(ctx, file, ""); err != nil {
 		t.Fatal(err)
 	}
 	write(t, m.cfg.MetaRepoRoot, "docs/specs/shrinking.md", "# S\n## 하나\nAlphaSectionToken 수정")
-	if _, err := m.indexer.IngestFile(ctx, file, ""); err != nil {
+	if _, err := m.indexer.IngestPath(ctx, file, ""); err != nil {
 		t.Fatal(err)
 	}
 	if got := searchPaths(t, m.cfg, "AlphaSectionToken", false); len(got) != 1 {
@@ -249,7 +249,7 @@ func TestTeamPrefixAndWorkspaceIsolation(t *testing.T) {
 	// 팀 하나는 workspace 하나에 속한다 — 다른 meta-repo 가 같은 팀으로 적재하면 거부한다
 	// (인덱스 단위로 움직이는 tier·ISM·restore 가 남의 문서를 지우지 않게)
 	write(t, base.MetaRepoRoot, "docs/same.md", "# 같은 경로\nWorkspaceAToken")
-	if _, err := m.indexer.IngestFile(ctx, filepath.Join(base.MetaRepoRoot, "docs/same.md"), ""); err != nil {
+	if _, err := m.indexer.IngestPath(ctx, filepath.Join(base.MetaRepoRoot, "docs/same.md"), ""); err != nil {
 		t.Fatal(err)
 	}
 	other := base
@@ -257,7 +257,7 @@ func TestTeamPrefixAndWorkspaceIsolation(t *testing.T) {
 	other.Workspace = base.Workspace + "-other"
 	o := newMCP(t, other)
 	write(t, other.MetaRepoRoot, "docs/same.md", "# 같은 경로\nWorkspaceBToken")
-	if _, err := o.indexer.IngestFile(ctx, filepath.Join(other.MetaRepoRoot, "docs/same.md"), ""); !errors.Is(err, ingest.ErrTeamOwned) {
+	if _, err := o.indexer.IngestPath(ctx, filepath.Join(other.MetaRepoRoot, "docs/same.md"), ""); !errors.Is(err, ingest.ErrTeamOwned) {
 		t.Fatalf("같은 팀 = %v", err)
 	}
 
@@ -265,7 +265,7 @@ func TestTeamPrefixAndWorkspaceIsolation(t *testing.T) {
 	other.DefaultTeam = sub + "-b"
 	t.Cleanup(func() { _ = client.Do(ctx, "DELETE", "/mem-"+other.DefaultTeam+"-*", nil, nil, nil) })
 	o = newMCP(t, other)
-	if _, err := o.indexer.IngestFile(ctx, filepath.Join(other.MetaRepoRoot, "docs/same.md"), ""); err != nil {
+	if _, err := o.indexer.IngestPath(ctx, filepath.Join(other.MetaRepoRoot, "docs/same.md"), ""); err != nil {
 		t.Fatal(err)
 	}
 	if got := searchPaths(t, base, "WorkspaceAToken", false); len(got) != 1 {

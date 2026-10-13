@@ -129,7 +129,7 @@ func writeLegacy(t *testing.T, m *mcpHarness, rel, onDisk string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.indexer.Write(context.Background(), ingest.Prepared{Abs: abs, Rel: rel, Content: string(content), Built: built}); err != nil {
+	if _, err := m.indexer.Write(context.Background(), ingest.Prepared{Rel: rel, Content: string(content), Built: built}); err != nil {
 		t.Fatal(err)
 	}
 }

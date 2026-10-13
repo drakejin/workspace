@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/drakejin/workspace/app/internal/config"
+	"github.com/drakejin/workspace/app/internal/document"
 	"github.com/drakejin/workspace/app/internal/llm"
 	"github.com/drakejin/workspace/app/internal/markdown"
 	"github.com/drakejin/workspace/app/internal/model"
@@ -73,7 +74,8 @@ func (j *Judge) Run(ctx context.Context, diff []DiffEntry) (state.JudgeSummary, 
 	seen := map[string]bool{}
 	var errs []error
 	for _, d := range work {
-		if d.Change == ChangeRemoved || d.Supersedes != "" || d.Kind != model.KindEpisodic {
+		// 본문이 없는 문서(빈 파일·frontmatter 만)는 주장이 없다 — 판정할 것이 없다
+		if d.Change == ChangeRemoved || d.Supersedes != "" || d.Kind != model.KindEpisodic || document.IsBlank(d.Body) {
 			continue
 		}
 		if err := j.judgeOne(ctx, d, seen, &sum); err != nil {
@@ -230,8 +232,8 @@ func BestNeighbor(ctx context.Context, c opensearch.Client, d DiffEntry, workspa
 			self = max(self, h.Score)
 			continue
 		}
-		if s.BodySHA == "" {
-			continue
+		if s.BodySHA == "" || s.Text == "" {
+			continue // 빈 청크 0 은 본문이 없는 문서다 — 판정 이웃이 아니다
 		}
 		if prev, ok := best[s.SourcePath]; !ok || prev.RelativeScore < h.Score {
 			best[s.SourcePath] = Neighbor{SourcePath: s.SourcePath, BodySHA: s.BodySHA, EventTime: s.EventTime, Text: s.Text, RelativeScore: h.Score}

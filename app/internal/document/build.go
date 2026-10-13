@@ -86,7 +86,13 @@ func Build(in Input) (Built, error) {
 	if in.Distilled != nil {
 		distilled, hasDistilled = in.Distilled(meta.Team, built.BodySHA)
 	}
-	for i, c := range markdown.ChunkMarkdown(body, rootTitle, 0) {
+	chunks := markdown.ChunkMarkdown(body, rootTitle, 0)
+	if len(chunks) == 0 {
+		// 청크로 만들 본문이 없어도(빈 파일·frontmatter 만·공백만) 빈 청크 0 하나를 남긴다 — 청크 0 의 content_sha·mtime·size 가
+		// 데몬의 "최신" 표시라, 없으면 이 문서는 색인에 흔적이 없어 매 사이클 새 문서로 다시 쓰인다
+		chunks = []markdown.Chunk{{HeaderPath: title}}
+	}
+	for i, c := range chunks {
 		chunk := model.Chunk{
 			ID:         ChunkID(in.Workspace, meta.Team, in.SourcePath, i),
 			Workspace:  in.Workspace,
@@ -119,6 +125,12 @@ func Build(in Input) (Built, error) {
 		built.Chunks = append(built.Chunks, chunk)
 	}
 	return built, nil
+}
+
+// IsBlank 는 본문에 청크로 만들 내용이 없는가다 (빈 파일·frontmatter 만·공백만). 이런 문서는 빈 청크 0 하나만 색인하고,
+// 주장이 없으니 판정·증류하지 않는다.
+func IsBlank(body string) bool {
+	return len(markdown.ChunkMarkdown(body, "", 0)) == 0
 }
 
 func locationOrUTC(loc *time.Location) *time.Location {

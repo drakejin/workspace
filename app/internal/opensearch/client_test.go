@@ -8,11 +8,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/drakejin/workspace/app/internal/config"
+	"github.com/drakejin/workspace/app/internal/model"
 )
 
 func TestClientDoAndErrors(t *testing.T) {
@@ -134,6 +136,34 @@ func TestBootstrapPropagatesOtherErrors(t *testing.T) {
 	}
 }
 
+// 인덱스를 만들 때 매핑도 준다 — 같은 클러스터의 다른 판 프로세스가 bootstrap 으로 템플릿을 옛 필드 구성으로 되돌려도
+// 이 판이 쓰는 필드(예: pending_cycle)가 strict 매핑에 거부되지 않게. 요청의 매핑은 템플릿 매핑과 합쳐진다.
+func TestEnsureIndexCreatesWithTheMapping(t *testing.T) {
+	var created any
+	os := &fakeOS{reply: func(method, path string, body any) (any, error) {
+		if method == http.MethodPut && path == "/mem-a-2026.01" {
+			created = body
+		}
+		return map[string]any{}, nil
+	}}
+	if err := EnsureIndex(context.Background(), os, "mem-a-2026.01", "a", ""); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(created)
+	var got struct {
+		Aliases  map[string]any `json:"aliases"`
+		Mappings struct {
+			Properties map[string]any `json:"properties"`
+		} `json:"mappings"`
+	}
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Mappings.Properties) != len(Properties()) || got.Mappings.Properties["pending_cycle"] == nil || got.Aliases["mem-a-hot"] == nil {
+		t.Errorf("create body = %s", b)
+	}
+}
+
 func TestEnsureIndexIgnoresExisting(t *testing.T) {
 	os := &fakeOS{reply: func(string, string, any) (any, error) {
 		return nil, &Error{Status: 400, Type: "resource_already_exists_exception"}
@@ -157,6 +187,21 @@ func TestSchemaShape(t *testing.T) {
 	keep := KeepPolicyBody()["policy"].(map[string]any)["ism_template"].([]any)[0].(map[string]any)
 	if keep["priority"].(int) <= 100 {
 		t.Error("keep 정책이 hot-cold 를 이겨야 한다")
+	}
+}
+
+// 매핑이 strict 라 청크의 json 필드는 모두 Properties 에 있어야 한다 — 빠지면 그 필드를 쓰는 _bulk 가 통째로 거부된다.
+func TestPropertiesCoverEveryChunkField(t *testing.T) {
+	props := Properties()
+	typ := reflect.TypeOf(model.Chunk{})
+	for i := 0; i < typ.NumField(); i++ {
+		name, _, _ := strings.Cut(typ.Field(i).Tag.Get("json"), ",")
+		if name == "" || name == "-" {
+			continue
+		}
+		if _, ok := props[name]; !ok {
+			t.Errorf("청크 필드 %s 가 매핑에 없다", name)
+		}
 	}
 }
 

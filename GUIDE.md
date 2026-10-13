@@ -43,6 +43,8 @@ Claude Code 가 파일 트리를 뒤지는 대신 `search_memory` 로 묻게 하
 
 1. **콘텐츠의 주인은 git(hot) 과 cold 보관소뿐이다.** 인덱스와 그래프는 파생물이라 지워도 데몬이 같은 결과로 다시 만든다 — 판정·증류는 원장에서 복원하므로 LLM 재호출 0회.
 2. **파생물의 writer 는 데몬 하나다.** 인덱스를 직접 고치지 않는다. 문서를 고치면 데몬이 따라 맞춘다. 데몬은 pid 락으로 하나만 돈다.
+   `ingest_path`·`scripts/memory/run.sh ingest`·`audit -apply` 가 데몬보다 먼저 색인한 문서는 청크 0 에 넘김 표시(`pending_cycle`)를 남기고,
+   다음 데몬 사이클이 그 문서를 판정·증류·그래프로 넘긴 뒤 표시를 지운다 (`[reconcile] handoff <path>`).
 3. **검색은 경로를 돌려주고, 본문은 원문을 읽는다.** 에이전트는 결과의 `source_path` 를 Read 한다.
 
 문서는 두 성질로 나뉜다.
@@ -54,6 +56,7 @@ Claude Code 가 파일 트리를 뒤지는 대신 `search_memory` 로 묻게 하
 
 색인 범위 밖: `main/{repo}` 의 코드 트리, `.worktrees/`, `node_modules`·`.git`·`.cache`·`dist`·`build`·`vendor` 등, `.md` 가 아닌 파일, `MEMORY_MAX_FILE_BYTES` 초과, 바이너리.
 크기·바이너리 게이트는 데몬과 `ingest_path` 가 같은 규칙 하나를 쓴다 — `ingest_path` 도 이런 파일은 색인하지 않고 `N개 건너뜀` 으로 알린다.
+빈 파일·frontmatter 만 있는 `.md` 도 빈 청크 하나로 색인한다 — 한 번 쓰면 다음 사이클은 건너뛴다. 본문이 없으니 판정·증류 대상은 아니다.
 
 문서의 정체(`source_path`)는 디스크에 있는 철자를 유니코드 NFC 로 맞춘 경로다. macOS(APFS)는 대소문자와 NFC/NFD 를 구분하지 않아
 철자만 다른 경로가 같은 파일을 연다 — `ingest_path` 에 `docs/knowledge/LIMITS.md`(실제는 `limits.md`)나 Finder 가 NFD 로 만든 한글 이름을
@@ -128,6 +131,7 @@ launchd 가 없는 머신은 nohup 백그라운드라(`[memory-daemon] backgroun
 | --- | --- |
 | `[reconcile] scanned= indexed= stat_updated= removed= skipped= failed= cold_owned= flags=` | 스캔한 파일 / 다시 색인 / mtime 만 바뀜 / 색인에서 뺌 / 건너뜀 / 쓰기 실패 / cold 소유라 되살리지 않음 / superseded_by·deprecated 수렴 |
 | `[reconcile] skip <path> (<이유>)` · `fail <path> (<오류>)` | 색인하지 않은 파일(`size N > MAX`·`binary content`·frontmatter 오류) / 쓰다 실패한 파일 — 실패는 다음 사이클이 다시 시도하고, 나머지 파일은 계속 돈다 |
+| `[reconcile] handoff <path> (…)` | `ingest_path`·`ingest`·`audit -apply` 가 먼저 색인한 문서를 판정·증류·그래프로 넘긴다 (다시 쓰지 않으므로 `indexed=` 에는 세지 않는다) |
 | `[judge] superseded A ↔ B (latest-wins …)` · `(llm: 모순, 고확신 …)` · `question …` | 판정 결과 |
 | `[distill] path: summary N자, entities M` | 증류 |
 | `[graph] docs= entities= edges=` | 그래프 재구축 (바뀐 게 있을 때만) |
@@ -185,7 +189,7 @@ launchd 가 없는 머신은 nohup 백그라운드라(`[memory-daemon] backgroun
 | `search_filters` | `project?`, `topic?`, `date?`, `time_range?`, `doc_type?`, `team?`, `org?`, `include_superseded?` | 필터에 쓸 수 있는 값과 문서 수 — 프로젝트·주제·문서 종류·날짜 범위·날짜별 수 |
 | `related_docs` | `path`, `depth?`(1~3, 기본 2) | 그래프에서 이어진 문서와 그 경로(관계·이유). depth 2 면 같은 entity·같은 repo 를 다루는 문서도 |
 | `docs_by_entity` | `entity` (`order-api` 또는 `service:order-api`, 부분 일치) | 증류 entity 로 문서 찾기 |
-| `ingest_path` | `path`(meta-repo 기준), `team?` | 데몬보다 먼저 색인 (meta-repo 밖 경로는 거부). 경로는 디스크의 철자(대소문자·NFC)로 맞춘다. 데몬과 같은 게이트 — 바이너리·`MEMORY_MAX_FILE_BYTES` 초과는 색인하지 않고 `N개 건너뜀 … - <path> (<이유>)` 로 알린다 |
+| `ingest_path` | `path`(meta-repo 기준), `team?` | 데몬보다 먼저 색인 (meta-repo 밖 경로는 거부). 경로는 디스크의 철자(대소문자·NFC)로 맞춘다. 데몬과 같은 게이트 — 바이너리·`MEMORY_MAX_FILE_BYTES` 초과는 색인하지 않고 `N개 건너뜀 … - <path> (<이유>)` 로 알린다. 새로 쓴 내용은 다음 데몬 사이클이 판정·증류·그래프로 넘긴다 (데몬이 이미 넘겨받은 같은 내용을 다시 적재하면 넘기지 않는다) |
 | `list_cold` | `team?` | cold 인덱스 목록 (그 인덱스를 담은 스냅샷 전부·최근 시각, 복원 여부). 이 meta-repo 의 팀만 |
 | `restore_cold` | `index`, `confirmed?` | cold 인덱스 복원 — 그 인덱스를 담은 스냅샷 전부를 합친다. `confirmed=true` 없이는 복원하지 않고 "사용자에게 먼저 물으라" 고 돌려준다 |
 
@@ -568,8 +572,8 @@ knowledge 인덱스는 `mem-knowledge-keep`(우선순위 200)이라 ISM 이 건�
 | 종류 | 뜻 | `-apply` |
 | --- | --- | --- |
 | `orphan-index` | 색인에는 있는데 파일이 없다 | 색인에서 뺀다 (청크 JSONL 도) |
-| `unindexed` | 파일이 있는데 색인에도 cold 에도 없다 | 색인한다 |
-| `stale-content` | 색인 내용(sha)이 파일과 다르다 (stat 이 보존된 복사 등) | 다시 색인한다 |
+| `unindexed` | 파일이 있는데 색인에도 cold 에도 없다 | 색인한다 (다음 데몬 사이클이 판정·증류·그래프로 넘긴다) |
+| `stale-content` | 색인 내용(sha)이 파일과 다르다 (stat 이 보존된 복사 등) | 다시 색인한다 (다음 데몬 사이클이 판정·증류·그래프로 넘긴다) |
 | `orphan-chunks` | cold store 에 청크만 남았다 | 지운다 (raw 원본은 이력이라 남긴다) |
 | `broken-link` | 링크 대상이 hot 에도 cold 에도 없다 | 보고만 |
 | `unsourced-fact` | knowledge 에 근거가 없다 | 보고만 |
