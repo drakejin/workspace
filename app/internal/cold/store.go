@@ -41,6 +41,9 @@ func ChunksKey(team, sourcePath string) string { return team + "/chunks/" + sour
 // ChunksPrefix 는 팀 청크 JSONL 전체 접두어다.
 func ChunksPrefix(team string) string { return team + "/chunks/" }
 
+// TeamPrefix 는 팀의 보관본(raw·청크·목록) 전체 접두어다.
+func TeamPrefix(team string) string { return team + "/" }
+
 func safeKey(key string) (string, error) {
 	clean := path.Clean(key)
 	if strings.HasPrefix(clean, "..") || path.IsAbs(clean) {
@@ -52,6 +55,7 @@ func safeKey(key string) (string, error) {
 // NewStore 는 설정대로 로컬 디렉토리 또는 S3 보관소를 만든다. 로컬 디렉토리는 meta-repo 마다 따로라
 // 그대로 쓰고, 공유 버킷인 S3 는 {prefix}/{workspace}/ 아래로 나눈다.
 // 자격 증명은 AWS SDK 기본 체인. S3 호환 저장소는 AWS_ENDPOINT_URL_S3 + COLD_STORE_S3_PATH_STYLE.
+// S3 도 목록 읽기-고치기-쓰기는 로컬 디렉토리(cfg.Dir)의 잠금 파일로 직렬화한다 — 같은 meta-repo 의 tier·archive 사이.
 func NewStore(ctx context.Context, cfg config.ColdStore, workspace string) (Store, error) {
 	if cfg.S3Bucket == "" {
 		return NewLocalStore(cfg.Dir), nil
@@ -66,13 +70,22 @@ func NewStore(ctx context.Context, cfg config.ColdStore, workspace string) (Stor
 		}
 		o.UsePathStyle = cfg.S3PathStyle
 	})
-	return NewS3Store(client, cfg.S3Bucket, path.Join(cfg.S3Prefix, workspace)), nil
+	store := newS3Store(client, cfg.S3Bucket, path.Join(cfg.S3Prefix, workspace))
+	store.locks = keyLocks{dir: filepath.Join(cfg.Dir, lockDirName)}
+	return store, nil
 }
 
-type localStore struct{ root string }
+type localStore struct {
+	root  string
+	locks keyLocks
+}
 
 // NewLocalStore 는 로컬 디렉토리 보관소다.
-func NewLocalStore(root string) Store { return &localStore{root: root} }
+func NewLocalStore(root string) Store {
+	return &localStore{root: root, locks: keyLocks{dir: filepath.Join(root, lockDirName)}}
+}
+
+func (s *localStore) lockKey(key string) (func(), error) { return s.locks.lock(key) }
 
 func (s *localStore) Location() string { return s.root }
 
@@ -84,15 +97,50 @@ func (s *localStore) file(key string) (string, error) {
 	return filepath.Join(s.root, filepath.FromSlash(clean)), nil
 }
 
+// Put 은 같은 디렉토리의 임시 파일에 다 쓰고 fsync 한 뒤 rename 으로 바꾼다. 도중에 끊겨도 정본(raw·목록)은
+// 옛 내용 그대로이거나 새 내용 전체다 — 잘라 내고 덮어쓰면 반쯤 쓴 정본이 남는다.
 func (s *localStore) Put(_ context.Context, key, body string) error {
 	f, err := s.file(key)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+	dir := filepath.Dir(f)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(f, []byte(body), 0o644)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(f)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	if err := writeSynced(tmp, body); err != nil {
+		_ = os.Remove(tmp.Name())
+		return fmt.Errorf("put %s: %w", key, err)
+	}
+	if err := os.Rename(tmp.Name(), f); err != nil {
+		_ = os.Remove(tmp.Name())
+		return fmt.Errorf("put %s: %w", key, err)
+	}
+	return nil
+}
+
+// isPutTemp 는 Put 이 쓰는 중인 임시 파일이다 (목록에 키로 내보내지 않는다).
+func isPutTemp(name string) bool {
+	return strings.HasPrefix(name, ".") && strings.Contains(name, ".tmp-")
+}
+
+// writeSynced 는 body 를 쓰고 디스크까지 내린 뒤 닫는다 (권한은 os.WriteFile 과 같은 0644).
+func writeSynced(f *os.File, body string) error {
+	_, err := f.WriteString(body)
+	if err == nil {
+		err = f.Chmod(0o644)
+	}
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
 
 func (s *localStore) Get(_ context.Context, key string) (string, bool, error) {
@@ -123,7 +171,7 @@ func (s *localStore) List(_ context.Context, prefix string) ([]string, error) {
 			}
 			return walkErr
 		}
-		if d.Type().IsRegular() {
+		if d.Type().IsRegular() && !isPutTemp(d.Name()) {
 			rel, _ := filepath.Rel(s.root, p)
 			keys = append(keys, filepath.ToSlash(rel))
 		}
@@ -159,12 +207,17 @@ type s3Store struct {
 	api    S3API
 	bucket string
 	prefix string
+	locks  keyLocks
 }
 
 // NewS3Store 는 S3 보관소다. 키는 {prefix}/{key}.
-func NewS3Store(api S3API, bucket, prefix string) Store {
+func NewS3Store(api S3API, bucket, prefix string) Store { return newS3Store(api, bucket, prefix) }
+
+func newS3Store(api S3API, bucket, prefix string) *s3Store {
 	return &s3Store{api: api, bucket: bucket, prefix: strings.Trim(prefix, "/")}
 }
+
+func (s *s3Store) lockKey(key string) (func(), error) { return s.locks.lock(key) }
 
 func (s *s3Store) Location() string { return "s3://" + s.bucket + "/" + s.prefix }
 

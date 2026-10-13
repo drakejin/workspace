@@ -168,7 +168,9 @@ launchd 가 없는 머신은 nohup 백그라운드라(`[memory-daemon] backgroun
 `scripts/mcp/run.sh` 는 빌드(바뀐 게 없으면 즉시)한 뒤 `memory-mcp serve` 를 stdio 로 띄운다. 빌드 출력은 stderr 로만 가서 MCP 프로토콜을 깨지 않는다.
 여러 meta-repo 가 같은 OpenSearch·Neo4j 를 써도 된다 — 모든 질의·삭제·판정·그래프가 `workspace`(기본: 루트 디렉토리 이름)로 갈린다.
 단 **팀 이름은 meta-repo 하나에만** 쓸 수 있다. 인덱스 단위로 움직이는 tier·ISM·restore 가 남의 문서를 지우지 않게 하려는 규칙이라,
-다른 meta-repo 가 쓰는 팀으로 적재하면 `다른 workspace 가 쓰는 팀입니다` 로 거부된다. 팀 이름 `org`·`org-*` 는 org alias 자리라 쓸 수 없다.
+다른 meta-repo 가 쓰는 팀으로 적재하면 `다른 workspace 가 쓰는 팀입니다` 로 거부된다. 스냅샷 repository 는 클러스터가 같이 쓰지만
+`list_cold`·`restore_cold` 도 이 meta-repo 의 팀(문서를 둔 팀, 또는 모든 달이 cold 로 갔어도 이 meta-repo 의 cold store 에 보관본이 있는 팀)만 다루고,
+다른 meta-repo 의 팀이면 같은 문구로 거부한다. 팀 이름 `org`·`org-*` 는 org alias 자리라 쓸 수 없다.
 
 ### 3.2 도구
 
@@ -179,8 +181,8 @@ launchd 가 없는 머신은 nohup 백그라운드라(`[memory-daemon] backgroun
 | `related_docs` | `path`, `depth?`(1~3, 기본 2) | 그래프에서 이어진 문서와 그 경로(관계·이유). depth 2 면 같은 entity·같은 repo 를 다루는 문서도 |
 | `docs_by_entity` | `entity` (`order-api` 또는 `service:order-api`, 부분 일치) | 증류 entity 로 문서 찾기 |
 | `ingest_path` | `path`(meta-repo 기준), `team?` | 데몬보다 먼저 색인 (meta-repo 밖 경로는 거부) |
-| `list_cold` | `team?` | cold 인덱스 목록 (스냅샷 이름·시각, 복원 여부) |
-| `restore_cold` | `index`, `confirmed?` | cold 인덱스 복원. `confirmed=true` 없이는 복원하지 않고 "사용자에게 먼저 물으라" 고 돌려준다 |
+| `list_cold` | `team?` | cold 인덱스 목록 (그 인덱스를 담은 스냅샷 전부·최근 시각, 복원 여부). 이 meta-repo 의 팀만 |
+| `restore_cold` | `index`, `confirmed?` | cold 인덱스 복원 — 그 인덱스를 담은 스냅샷 전부를 합친다. `confirmed=true` 없이는 복원하지 않고 "사용자에게 먼저 물으라" 고 돌려준다 |
 
 ### 3.3 SessionStart 훅
 
@@ -433,6 +435,12 @@ mem-demo-2026.06 을(를) snapshot cold-mem-demo-2026.06-20261013t003025-0649340
 
 복원본은 검색 alias 를 다시 붙이고 그 사이 deprecate 된 표시를 다시 입힌다. ISM·tier 대상에서 빠지고(`auto_manage=false`), 데몬도 건드리지 않는다.
 
+한 달이 스냅샷 여러 개에 나뉘어 있을 수 있다 — 그 달을 tier 한 뒤 그 달 날짜의 문서가 늦게 들어오면(예: seed 에 repo 를 더해 옛 커밋의 문서가 들어온다)
+인덱스가 hot 에 다시 생기고, 다음 tier 가 또 스냅샷을 뜬다. 이때 `list-cold` 는 `snapshot=A,B` 로 전부 보여 주고, 복원은 전부를 합친다
+(같은 문서는 더 최근 스냅샷의 것). 이미 복원돼 있으면 빠진 스냅샷 문서만 더한다. 그 달의 인덱스가 hot 에 다시 열려 있는 동안은
+(`[hot 에 다시 열림 — 다음 tier 뒤에 복원할 수 있다]`) 복원·archive 를 거부한다 — 데몬이 관리하는 인덱스에 cold 문서를 섞으면
+데몬이 파일 없는 문서로 보고 지운다. 다음 tier 가 그 달을 다시 cold 로 보낸 뒤에 한다.
+
 ### 4.7 효과 재기 — `bench` (발표 데모 4단계)
 
 같은 질문을 memory-mcp 가 있을 때(`with`: 파일 도구 + memory 도구)와 없을 때(`without`: Read·Glob·Grep 만) claude 에 시켜
@@ -529,12 +537,17 @@ knowledge 는 유사도로 판정하지 않으므로 선언이 없으면 구판�
 | | `tier` | ISM `mem-hot-cold` |
 | --- | --- | --- |
 | 기준 | 인덱스 안 문서의 **유효 시각** 중 가장 최근 것 | 인덱스 **생성 시각** |
-| 하는 일 | 쓰기 막기 → 스냅샷 → 스냅샷 목록(manifest) 기록 → 인덱스 삭제 → hot 원본 제거(sha 가 cold store raw 와 같을 때만) | 스냅샷 → 인덱스 삭제 (파일은 모른다) |
+| 하는 일 | 쓰기 막기 → 스냅샷(끝까지 뜬 것만 믿는다) → 스냅샷 목록(manifest) 기록 → 인덱스 삭제 → hot 원본 제거(sha 가 cold store raw 와 같을 때만) | 스냅샷 → 인덱스 삭제 (파일은 모른다) |
 | 범위 | 이 workspace 의 팀 인덱스만 (`-team` 이 없으면 이 workspace 의 모든 팀) | 클러스터의 모든 `mem-*` 월별 인덱스 |
 | 놓치는 것 | 돌리지 않으면 아무 일도 없다 | 늦게 적재된 오래된 문서 (생성은 최근) |
 
 순서에는 이유가 있다. 쓰기를 막아 스냅샷과 목록이 정확히 같은 내용이 되고, 인덱스를 원본보다 먼저 지워 그 사이에 도는 데몬 사이클이
 남은 파일을 cold 소유로 보게 한다 (원본을 먼저 지우면 데몬이 tombstone 으로 cold store 청크까지 지운다).
+
+문서가 하나도 없는 인덱스(그 달의 유일한 문서를 지우거나 옮겼다)는 스냅샷하지 않는다 — 빈 스냅샷은 "그 달을 cold 가 가졌다" 는 표시가 되어
+그 달에 나중에 쓴 hot 문서까지 cold 소유로 읽힌다. 달(인덱스 이름의 연.월)이 hot 기간을 다 지났으면 스냅샷 없이 지우고(`dropped-empty`,
+미리보기는 `would-drop-empty`), 아니면 그대로 둔다(`kept-hot`). 스냅샷 뒤 인덱스 삭제가 실패하면 쓰기 막기를 풀어 인덱스를 hot 으로 돌려놓고,
+뒤의 인덱스에서 실패해도 그때까지 한 일(지운 인덱스, hot 에서 뺀 원본)을 `[tier] 중간에 실패했습니다 — 그 전에 한 일:` 아래에 에러와 함께 출력한다.
 
 ISM 이 먼저 옮긴 달은 hot 원본이 남아 데몬 로그에 `cold_owned` 가 찍힌다. 다음 `scripts/memory/run.sh tier` 가 그 원본을 치운다(`pruned`).
 knowledge 인덱스는 `mem-knowledge-keep`(우선순위 200)이라 ISM 이 건드리지 않는다.
@@ -565,7 +578,8 @@ scripts/memory/run.sh archive edit        -by jin -reason "오타" -file /tmp/fi
 scripts/memory/run.sh archive purge       -by jin -reason "개인정보" ...                     # raw·청크·스냅샷에서 지운다. hot 에 파일이 있으면 거부
 ```
 
-edit·purge 는 그 인덱스만 담은 스냅샷을 검색 alias 없이 잠깐 복원해 고치고 새 스냅샷으로 바꾼다. 다른 인덱스가 섞인 스냅샷은 거부한다.
+edit·purge 는 그 인덱스를 담은 스냅샷 **전부**를 검색 alias 없이 잠깐 합쳐 복원해 고치고 새 스냅샷 하나로 바꾼다. 남아야 할 문서가 새 스냅샷에
+모두 들어 있을 때만 옛 스냅샷(과 그 목록 줄)을 지운다. 다른 인덱스가 섞인 스냅샷과, 그 달의 인덱스가 hot 에 다시 열려 있는 경우는 거부한다.
 
 ### 6.5 org("실") 단위 검색
 
@@ -594,9 +608,13 @@ OpenSearch 쪽 S3 설정 예는 `app/test/s3/` (repository-s3 플러그인을 �
 **cold 소유.** cold 가 그 내용을 갖고 있으면 hot 에 파일이 남아 있어도 데몬이 되살리지 않는다(`cold_owned`) — tier 직후 커밋 전이거나
 ISM 이 먼저 옮긴 경우다. "갖고 있다" 의 판단:
 
-- 그 달의 스냅샷이 모두 목록(`{team}/manifests/{index}.jsonl`, tier·archive 가 남긴다)으로 덮이면: 목록에 그 (경로, 내용 sha) 가 있을 때
-- 목록이 덮지 못하는 스냅샷(ISM 이 만든 것)이 하나라도 있으면: 그 달이 스냅샷에 있고 cold store 청크의 내용 sha 가 파일과 같을 때
+- 그 달의 스냅샷이 모두 목록(`{team}/manifests/{index}.jsonl`, tier·archive 가 남긴다)으로 덮이면: 목록에 그 (경로, 내용 sha) 가 있을 때.
+  tier·archive 의 스냅샷(이름 `cold-…`)은 문서가 없었어도 표시 줄을 남기고, 줄이 없어도(목록을 쓰기 전에 끊김) 목록이 덮는 것으로 본다
+- 목록이 덮지 못하는 스냅샷(ISM 이 만든 `ism-cold-…`)이 하나라도 있으면: 그 달이 스냅샷에 있고 cold store 청크의 내용 sha 가 파일과 같을 때
   (ISM 의 스냅샷과 삭제 사이에 그 달로 쓴 내용은 놓칠 수 있다)
+
+로컬 cold store 는 임시 파일에 다 쓰고 rename 으로 바꿔, 쓰다 끊겨도 정본이 잘리지 않는다. 목록 읽기-고치기-쓰기는 잠금 파일
+(`{COLD_STORE_DIR}/.locks/`, S3 cold store 도 이 로컬 디렉토리)로 직렬화해 tier-tick 과 archive 가 겹쳐도 줄을 잃지 않는다 — 같은 머신의 프로세스 사이만 막는다.
 
 내용을 고치면(sha 가 바뀌면) 새 문서로 보고 다시 색인한다. 그 달이 복원돼 열려 있으면 복원본에 쓰고, 다음 사이클부터는 그대로 둔다.
 복원은 스냅샷이 쓰기 막힌 채 떠졌더라도 막기를 풀어 되살린다.
@@ -633,7 +651,7 @@ ISM 이 먼저 옮긴 경우다. "갖고 있다" 의 판단:
 | `COLD_SNAPSHOT_REPOSITORY` / `COLD_SNAPSHOT_TYPE` | `mem-cold` / `fs` | 스냅샷 repository |
 | `COLD_SNAPSHOT_FS_LOCATION` | `/usr/share/opensearch/snapshots` | fs repository 경로 (컨테이너 안 — `path.repo`) |
 | `COLD_SNAPSHOT_S3_BUCKET` | — | `COLD_SNAPSHOT_TYPE=s3` 일 때 필수 |
-| `COLD_STORE_DIR` | `.cache/cold-store` | 로컬 cold store |
+| `COLD_STORE_DIR` | `.cache/cold-store` | 로컬 cold store. S3 cold store 여도 목록 쓰기 잠금 파일(`.locks/`)은 여기 둔다 |
 | `COLD_STORE_S3_BUCKET` / `COLD_STORE_S3_PREFIX` / `AWS_REGION` | — / `memory` / `ap-northeast-2` | 값이 있으면 S3 cold store |
 | `AWS_ENDPOINT_URL_S3` / `COLD_STORE_S3_PATH_STYLE` | — / `false` | S3 호환 저장소 |
 

@@ -29,6 +29,9 @@ const (
 	TierKept     TierAction = "kept-hot"
 	TierRestored TierAction = "skipped-restored"
 	TierPruned   TierAction = "pruned"
+	// TierDropped 는 문서가 하나도 없는 지난달 인덱스를 스냅샷 없이 지운 것이다 (그 달을 cold 가 가졌다고 남기지 않는다).
+	TierDropped   TierAction = "dropped-empty"
+	TierWouldDrop TierAction = "would-drop-empty"
 )
 
 // TierDecision 은 tier 결과 한 줄이다.
@@ -80,10 +83,12 @@ func Tier(ctx context.Context, c opensearch.Client, store Store, cfg config.Conf
 	decisions := make([]TierDecision, 0, len(names))
 	for _, name := range names {
 		d, err := tierOne(ctx, c, store, cfg, name, cutoff, opt)
+		if d.Action != "" {
+			decisions = append(decisions, d) // 실패했어도 이미 한 일(인덱스 삭제, hot 에서 뺀 원본)은 알린다
+		}
 		if err != nil {
 			return decisions, err
 		}
-		decisions = append(decisions, d)
 	}
 	if opt.KeepFiles || opt.DryRun {
 		return decisions, nil
@@ -111,16 +116,55 @@ func tierOne(ctx context.Context, c opensearch.Client, store Store, cfg config.C
 	case opensearch.IsUnmanaged(settings[name]):
 		d.Action = TierRestored
 		return d, nil
-	case newest != "" && !model.ParseTime(newest).Before(cutoff):
+	case newest == "":
+		return dropEmpty(ctx, c, name, cutoff, opt.DryRun, d)
+	case !model.ParseTime(newest).Before(cutoff):
 		d.Action = TierKept
 		return d, nil
 	case opt.DryRun:
 		d.Action = TierWould
 		return d, nil
 	}
-	// 순서: 쓰기 막기 → 문서 목록 → 스냅샷 → 목록(manifest) 기록 → 인덱스 삭제 → hot 원본 제거.
-	// 쓰기를 막아 스냅샷과 목록이 정확히 같은 내용이 되고, 인덱스가 먼저 사라지므로 그 사이에 도는 데몬 사이클은
-	// 남은 파일을 cold 소유로 보고 건드리지 않는다 (원본을 먼저 지우면 데몬이 tombstone 으로 cold store 청크까지 지운다).
+	return moveToCold(ctx, c, store, cfg, opt, d)
+}
+
+// dropEmpty 는 문서가 하나도 없는 인덱스다 (그 달의 유일한 문서를 지우거나 옮겼다). 스냅샷하지 않는다 — 빈 스냅샷은
+// 그 달을 cold 가 가졌다는 표시가 되어, 그 달에 나중에 쓴 hot 문서까지 스냅샷 없이 cold 소유로 읽힌다.
+// 달(인덱스 이름의 연.월)이 hot 기간을 다 지났으면 스냅샷 없이 지우고 (ISM 이 빈 인덱스를 스냅샷하지 않게), 아니면 둔다.
+func dropEmpty(ctx context.Context, c opensearch.Client, name string, cutoff time.Time, dryRun bool, d TierDecision) (TierDecision, error) {
+	idx, _ := naming.ParseIndex(name)
+	switch {
+	case idx.MonthStart.AddDate(0, 1, 0).After(cutoff):
+		d.Action = TierKept
+		return d, nil
+	case dryRun:
+		d.Action = TierWouldDrop
+		return d, nil
+	}
+	// 쓰기를 막고 다시 센다 — 그 사이 들어온 문서가 있으면 지우지 않는다 (다음 tier 가 스냅샷과 함께 옮긴다)
+	if err := setWriteBlock(ctx, c, name, true); err != nil {
+		return d, err
+	}
+	n, err := opensearch.Count(ctx, c, name, map[string]any{"match_all": map[string]any{}})
+	if err != nil {
+		return d, unblockAfter(ctx, c, name, fmt.Errorf("count %s: %w", name, err))
+	}
+	if n > 0 {
+		d.Action = TierKept
+		return d, unblockAfter(ctx, c, name, nil)
+	}
+	if err := deleteIndex(ctx, c, name); err != nil {
+		return d, unblockAfter(ctx, c, name, err)
+	}
+	d.Action = TierDropped
+	return d, nil
+}
+
+// moveToCold 는 순서대로: 쓰기 막기 → 문서 목록 → 스냅샷 → 목록(manifest) 기록 → 인덱스 삭제 → hot 원본 제거.
+// 쓰기를 막아 스냅샷과 목록이 정확히 같은 내용이 되고, 인덱스가 먼저 사라지므로 그 사이에 도는 데몬 사이클은
+// 남은 파일을 cold 소유로 보고 건드리지 않는다 (원본을 먼저 지우면 데몬이 tombstone 으로 cold store 청크까지 지운다).
+func moveToCold(ctx context.Context, c opensearch.Client, store Store, cfg config.Config, opt TierOptions, d TierDecision) (TierDecision, error) {
+	name := d.Index
 	if err := setWriteBlock(ctx, c, name, true); err != nil {
 		return d, err
 	}
@@ -131,15 +175,12 @@ func tierOne(ctx context.Context, c opensearch.Client, store Store, cfg config.C
 	if err == nil {
 		err = recordManifest(ctx, store, name, d.Snapshot, docs)
 	}
-	if err != nil {
-		// 스냅샷까지 못 갔으면 인덱스를 그대로 hot 으로 돌려놓는다
-		if uerr := setWriteBlock(context.WithoutCancel(ctx), c, name, false); uerr != nil {
-			err = fmt.Errorf("%w (쓰기 막기 해제도 실패: %v)", err, uerr)
-		}
-		return d, err
+	if err == nil {
+		err = deleteIndex(ctx, c, name)
 	}
-	if err := c.Do(ctx, http.MethodDelete, "/"+name, nil, nil, nil); err != nil {
-		return d, fmt.Errorf("delete index %s: %w", name, err)
+	if err != nil {
+		// 인덱스를 지우지 못했으면 그대로 hot 으로 돌려놓는다 (스냅샷이 남았어도 다음 tier 가 다시 뜬다)
+		return d, unblockAfter(ctx, c, name, err)
 	}
 	d.Action = TierMoved
 	if !opt.KeepFiles {
@@ -148,6 +189,25 @@ func tierOne(ctx context.Context, c opensearch.Client, store Store, cfg config.C
 		}
 	}
 	return d, nil
+}
+
+func deleteIndex(ctx context.Context, c opensearch.Client, name string) error {
+	if err := c.Do(ctx, http.MethodDelete, "/"+name, nil, nil, nil); err != nil {
+		return fmt.Errorf("delete index %s: %w", name, err)
+	}
+	return nil
+}
+
+// unblockAfter 는 tier 가 인덱스를 지우지 못하고 멈출 때 쓰기 막기를 푼다 — 막힌 채 남으면 데몬 쓰기가 계속 실패한다.
+// 풀기까지 실패하면 두 에러를 함께 돌려준다.
+func unblockAfter(ctx context.Context, c opensearch.Client, name string, cause error) error {
+	if uerr := setWriteBlock(context.WithoutCancel(ctx), c, name, false); uerr != nil {
+		if cause == nil {
+			return uerr
+		}
+		return fmt.Errorf("%w (쓰기 막기 해제도 실패: %v)", cause, uerr)
+	}
+	return cause
 }
 
 func setWriteBlock(ctx context.Context, c opensearch.Client, index string, on bool) error {
@@ -171,9 +231,13 @@ func RecordIndexManifest(ctx context.Context, c opensearch.Client, store Store, 
 	return recordManifest(ctx, store, index, snapshot, docs)
 }
 
-// recordManifest 는 스냅샷에 들어간 이 workspace 문서들을 팀별 목록에 남긴다.
+// recordManifest 는 스냅샷에 들어간 이 workspace 문서들을 팀별 목록에 남긴다. 문서가 없어도 인덱스 팀의 목록에
+// 그 스냅샷의 표시 줄을 남긴다 (빈 스냅샷이 ISM 스냅샷으로 읽히지 않게).
 func recordManifest(ctx context.Context, store Store, index, snapshot string, docs []sourceDoc) error {
 	byTeam := map[string][]ManifestEntry{}
+	if idx, ok := naming.ParseIndex(index); ok {
+		byTeam[idx.Team] = nil
+	}
 	for _, d := range docs {
 		byTeam[d.team] = append(byTeam[d.team], ManifestEntry{SourcePath: d.sourcePath, ContentSHA: d.contentSHA})
 	}

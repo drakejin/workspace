@@ -96,12 +96,12 @@ func (c *CLI) Run(ctx context.Context, name string, args []string) error {
 			return err
 		}
 	}
+	// 실패해도 명령이 돌려준 출력은 보인다 — tier 처럼 앞에서 이미 지운 것이 있는 명령이 그 내역을 잃지 않게
 	out, err := cmd.run(ctx, c, args)
-	if err != nil {
-		return err
-	}
 	if out != "" {
-		_, err = fmt.Fprintln(c.Out, out)
+		if _, werr := fmt.Fprintln(c.Out, out); err == nil {
+			err = werr
+		}
 	}
 	return err
 }

@@ -173,7 +173,7 @@ printf -- '---\ndate: %s\n---\n# 배송비 정책\n\n## 결정\n\nShippingFeePol
 | K3 | `scripts/memory/run.sh tier -team scn-cold -dry-run` | `would-tier mem-scn-cold-<J 의 연.월>`, 나머지는 `kept-hot`. 파일은 그대로 |
 | K4 | `scripts/memory/run.sh tier -team scn-cold` | `tiered mem-scn-cold-<J 의 연.월>` 과 `- hot 에서 뺌: docs/repository/alpha-api/adr/0000-legacy-queue.md`. 파일이 사라지고 `git -C "$META_REPO_ROOT" status --short` 에 `D  docs/repository/alpha-api/adr/0000-legacy-queue.md` |
 | K5 | `scripts/memory/run.sh search ScnLegacyQueue` | 0건 (cold 는 검색되지 않는다) |
-| K6 | `scripts/memory/run.sh list-cold` | `cold 인덱스 1개`, K4 의 인덱스와 스냅샷 이름 |
+| K6 | `scripts/memory/run.sh list-cold` | `cold 인덱스 1개`, K4 의 인덱스와 스냅샷 이름 (같은 인덱스의 스냅샷이 여럿이면 `snapshot=A,B`) |
 | K7 | Claude 로: `source …; scenarios/claude-mcp.sh "레거시 야간 배치 큐(NightlySettleQueue) 결정 문서를 찾아 줘. hot 에 없으면 cold 를 확인하되, 복원은 하지 말고 무엇을 할지만 말해."` | `search_memory` 가 0건 → `list_cold` 호출 → 답에 cold 인덱스 이름과 "복원할까요" 류의 확인 질문. `restore_cold` 를 `confirmed=true` 로 부르지 않았다 |
 | K8 | Claude 로: `"restore_cold 를 index=\"<K6 의 인덱스>\" 로 confirmed 없이 한 번만 호출하고 결과를 그대로 보여 줘."` | tool_result 에 `복원하지 않았습니다 … 복원할까요` — 확인 없이는 복원하지 않는다 |
 | K9 | `scripts/memory/run.sh restore <K6 의 인덱스>` 후 `search ScnLegacyQueue` | `복원했습니다`, 검색에 J |

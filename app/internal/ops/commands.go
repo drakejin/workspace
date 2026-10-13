@@ -113,9 +113,17 @@ func runTier(ctx context.Context, c *CLI, args []string) (string, error) {
 	}
 	decisions, err := cold.Tier(ctx, c.OS, c.Cold, c.Config, cold.TierOptions{Now: c.Now(), DryRun: *dryRun, Team: *team, KeepFiles: *keepFiles})
 	if err != nil {
-		return "", err
+		return renderTierPartial(decisions), err
 	}
 	return renderTier(decisions), nil
+}
+
+// renderTierPartial 은 중간에 실패한 tier 가 그때까지 한 일이다 (없으면 빈 문자열 — 에러만 보인다).
+func renderTierPartial(decisions []cold.TierDecision) string {
+	if len(decisions) == 0 {
+		return ""
+	}
+	return "[tier] 중간에 실패했습니다 — 그 전에 한 일:\n" + renderTier(decisions)
 }
 
 // tierTickDefault 는 스케줄러가 tier 를 도는 최소 간격이다 (자주 깨워도 하루 한 번만 돈다).
@@ -134,7 +142,7 @@ func runTierTick(ctx context.Context, c *CLI, args []string) (string, error) {
 	}
 	decisions, err := cold.Tier(ctx, c.OS, c.Cold, c.Config, cold.TierOptions{Now: now})
 	if err != nil {
-		return "", err
+		return renderTierPartial(decisions), err
 	}
 	rep, err := audit.Run(ctx, audit.Deps{OS: c.OS, Config: c.Config, Cold: c.Cold, Indexer: c.Indexer, Now: now}, false)
 	if err != nil {

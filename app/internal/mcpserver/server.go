@@ -312,7 +312,7 @@ func (h *Handlers) ListCold(ctx context.Context, in ListColdInput) (string, erro
 	if err := h.Ready(ctx); err != nil {
 		return "", err
 	}
-	list, err := cold.ListCold(ctx, h.OS, h.Config, team)
+	list, err := h.coldList(ctx, team)
 	if err != nil {
 		return "", err
 	}
@@ -322,14 +322,39 @@ func (h *Handlers) ListCold(ctx context.Context, in ListColdInput) (string, erro
 	var b strings.Builder
 	fmt.Fprintf(&b, "team=%s cold 인덱스 %d개 (repository %s)\n", team, len(list), h.Config.Snapshot.Repository)
 	for _, c := range list {
-		restored := ""
-		if c.Restored {
-			restored = "  [현재 복원됨]"
-		}
-		fmt.Fprintf(&b, "- %s  snapshot=%s  at=%s%s\n", c.Name, c.Snapshot, c.SnapshotTime, restored)
+		fmt.Fprintf(&b, "- %s  snapshot=%s  at=%s%s\n", c.Name, strings.Join(c.Snapshots, ","), c.SnapshotTime, coldMark(c))
 	}
 	b.WriteString("\n복원이 필요하면 사용자에게 먼저 \"cold 인덱스 X가 있는데 복원할까요\"라고 묻고, 동의를 받은 뒤 restore_cold(index, confirmed=true).")
 	return b.String(), nil
+}
+
+// coldMark 는 cold 인덱스의 지금 상태 표시다.
+func coldMark(c cold.Index) string {
+	switch {
+	case c.Restored:
+		return "  [현재 복원됨]"
+	case c.Reopened:
+		return "  [hot 에 다시 열림 — 다음 tier 뒤에 복원할 수 있다]"
+	}
+	return ""
+}
+
+// coldList 는 이 workspace 팀의 cold 인덱스 목록이다. 다른 meta-repo 의 팀이면 보여주지도 복원하지도 않는다 — 스냅샷
+// repository 는 클러스터가 같이 쓰지만, 복원과 deprecate 다시 입히기는 그 팀을 가진 workspace 의 원장으로만 맞다.
+func (h *Handlers) coldList(ctx context.Context, team string) ([]cold.Index, error) {
+	list, err := cold.ListCold(ctx, h.OS, h.Config, team)
+	if err != nil || len(list) == 0 {
+		return list, err
+	}
+	ours, err := cold.TeamInWorkspace(ctx, h.OS, h.Cold, h.Config.Workspace, team)
+	if err != nil {
+		return nil, err
+	}
+	if !ours {
+		return nil, fmt.Errorf("%w: team %q 는 workspace %q 의 팀이 아닙니다 — list_cold·restore_cold 는 이 meta-repo 가 적재한 팀의 cold 인덱스만 다룹니다",
+			ingest.ErrTeamOwned, team, h.Config.Workspace)
+	}
+	return list, nil
 }
 
 // RestoreInput 은 restore_cold 입력이다.
@@ -349,11 +374,16 @@ func (h *Handlers) Restore(ctx context.Context, in RestoreInput) (string, error)
 	if err := h.Ready(ctx); err != nil {
 		return "", err
 	}
+	idx, _ := naming.ParseIndex(in.Index)
+	if _, err := h.coldList(ctx, idx.Team); err != nil {
+		return "", err
+	}
 	restored, err := cold.Restore(ctx, h.OS, h.Config, in.Index)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%s 을(를) snapshot %s 에서 hot 으로 복원했습니다. 이제 search_memory 에 포함됩니다 (ISM 자동 관리 제외).", restored.Name, restored.Snapshot), nil
+	return fmt.Sprintf("%s 을(를) snapshot %s 에서 hot 으로 복원했습니다. 이제 search_memory 에 포함됩니다 (ISM 자동 관리 제외).",
+		restored.Name, strings.Join(restored.Snapshots, ",")), nil
 }
 
 // RelatedInput 은 related_docs 입력이다.

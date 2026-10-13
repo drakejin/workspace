@@ -143,8 +143,8 @@ claude mcp add drakejin-workspace-memory-mcp -s user -- bash ~/Workspace/drakeji
 | `related_docs(path, depth?)` | knowledge graph 에서 이어진 문서 — supersedes·derived_from·relates·링크·같은 entity·같은 repo |
 | `docs_by_entity(entity)` | 증류가 뽑은 entity(`service:order-api` 등)를 다루는 문서 |
 | `ingest_path(path, team?)` | 데몬이 아직 잡지 못한 파일·디렉토리를 바로 색인 |
-| `list_cold(team?)` | 60일이 지나 cold 로 간 인덱스 목록 |
-| `restore_cold(index, confirmed?)` | cold 인덱스 복원. `confirmed=true` 가 없으면 "사용자에게 먼저 물으라" 고 돌려준다 |
+| `list_cold(team?)` | 60일이 지나 cold 로 간 인덱스 목록 (인덱스마다 그 인덱스를 담은 스냅샷 전부). 이 meta-repo 의 팀만 — 다른 workspace 의 팀이면 거부한다 |
+| `restore_cold(index, confirmed?)` | cold 인덱스 복원 (그 인덱스를 담은 스냅샷 전부를 합친다). `confirmed=true` 가 없으면 "사용자에게 먼저 물으라" 고 돌려준다 |
 
 앞의 넷(검색·적재·cold 둘)은 발표의 도구 그대로이고, `search_filters` 는 필터 값을 고르려고, 그래프 둘은 Neo4j 를 붙이며 더했다. 그래프를 끄면(`MEMORY_GRAPH_URI=off`) 그래프 도구는 "꺼져 있다" 를,
 Neo4j 에 붙지 못하면 연결 오류를 돌려준다. 어느 쪽이든 나머지 다섯은 그대로 돈다.
@@ -324,6 +324,7 @@ MATCH (e:Entity {workspace: 'workspace'})<-[:MENTIONS]-(d:Doc) RETURN e.type, e.
 ```
 .cache/                     # git 에 넣지 않는 로컬 상태 전부 (gitignore). 지워도 되는 것과 안 되는 것이 섞여 있다
 ├── cold-store/{team}/      # ⚠ 정본 — raw/{path} 원본, chunks/{path}.jsonl 청크, manifests/{index}.jsonl 스냅샷 목록
+├── cold-store/.locks/      # 스냅샷 목록 쓰기 잠금 파일 (tier·archive 가 겹쳐도 줄을 잃지 않게) — 지워도 된다
 ├── snapshots/              # ⚠ 정본 — fs 스냅샷 repository (OpenSearch 컨테이너의 path.repo)
 ├── judge/{team}.jsonl      # 판정 원장 — 결정·질문·사람의 답 (지우면 다시 묻는다)
 ├── distill/{team}.jsonl    # 증류 캐시 — 본문 sha → 요약·entity (지우면 다시 증류한다)
