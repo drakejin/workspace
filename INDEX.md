@@ -13,4 +13,3 @@ drakejin 워크스페이스의 전체 repository 목록과 역할입니다.
 
 | Repository | 언어 | 설명 | 참조 시점 |
 |---|---|---|---|
-| **books-guitar** | - | - | - |

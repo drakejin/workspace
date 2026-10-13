@@ -24,6 +24,13 @@ import (
 // Version 은 서버 버전이다.
 const Version = "0.2.0"
 
+// 안내문은 MCP 도구와 CLI 명령(scripts/memory/run.sh <command>)이 같은 Handlers 로 보므로, 도구 이름 옆에 CLI 명령을 함께 적는다.
+const (
+	listColdHint = "list_cold(CLI: list-cold)"
+	restoreHint  = "restore_cold(index, confirmed=true) (CLI: restore <index>)"
+	searchHint   = "search_memory, CLI: search"
+)
+
 // Deps 는 서버 의존이다.
 type Deps struct {
 	Config  config.Config
@@ -136,20 +143,13 @@ func (h *Handlers) Search(ctx context.Context, in SearchInput) (string, error) {
 	listing := strings.TrimSpace(in.Query) == ""
 	if len(hits) == 0 {
 		if listing {
-			return fmt.Sprintf("%s · 필터에 맞는 문서가 없습니다. search_filters 로 쓸 수 있는 프로젝트·주제·날짜를 확인하세요.", scope), nil
+			return fmt.Sprintf("%s · 필터에 맞는 문서가 없습니다. %s 로 쓸 수 있는 프로젝트·주제·날짜를 확인하세요.", scope, search.FiltersHint), nil
 		}
 		return fmt.Sprintf("%s hot 영역에서 %q 에 맞는 문서가 없습니다.\n"+
-			"단어(서비스명, 함수명, 에러 코드)를 바꿔 다시 검색하세요. %d일보다 오래된 맥락이면 list_cold 를 확인하세요.", scope, in.Query, h.Config.HotDays), nil
+			"단어(서비스명, 함수명, 에러 코드)를 바꿔 다시 검색하세요. %d일보다 오래된 맥락이면 %s 를 확인하세요.", scope, in.Query, h.Config.HotDays, listColdHint), nil
 	}
 	var b strings.Builder
-	switch {
-	case listing && res.Total > len(hits):
-		fmt.Fprintf(&b, "%s · 문서 %d건 중 최신 %d건 (필터, 최신순 — 더 보려면 size 를 늘리거나 필터를 좁히세요)\n\n", scope, res.Total, len(hits))
-	case listing:
-		fmt.Fprintf(&b, "%s · 문서 %d건 (필터, 최신순)\n\n", scope, len(hits))
-	default:
-		fmt.Fprintf(&b, "%s · %d건 (BM25)\n\n", scope, len(hits))
-	}
+	b.WriteString(searchHeader(scope, listing, res.Total, hits) + "\n\n")
 	for i, hit := range hits {
 		meta := []string{string(hit.DocType)}
 		if in.Org != "" {
@@ -187,6 +187,29 @@ func (h *Handlers) Search(ctx context.Context, in SearchInput) (string, error) {
 	return strings.TrimRight(b.String(), "\n"), nil
 }
 
+// searchHeader 는 검색 결과의 머리 줄이다 — 질의어 검색은 청크 단위라 청크 수와 그 청크들의 문서 수를 함께
+// (한 문서의 여러 절이 size 를 나눠 쓴 것이 보인다), 필터 가져오기는 문서 하나에 한 건이라 문서 수 (잘렸으면 전체 수도).
+func searchHeader(scope string, listing bool, total int, hits []search.Hit) string {
+	shown := len(hits)
+	switch {
+	case listing && total > shown:
+		return fmt.Sprintf("%s · 문서 %d건 중 최신 %d건 (필터, 최신순 — 더 보려면 size 를 늘리거나 필터를 좁히세요)", scope, total, shown)
+	case listing:
+		return fmt.Sprintf("%s · 문서 %d건 (필터, 최신순)", scope, shown)
+	default:
+		return fmt.Sprintf("%s · 청크 %d건 · 문서 %d건 (BM25)", scope, shown, distinctDocs(hits))
+	}
+}
+
+// distinctDocs 는 결과 청크들이 나온 문서(source_path) 수다.
+func distinctDocs(hits []search.Hit) int {
+	seen := make(map[string]bool, len(hits))
+	for _, hit := range hits {
+		seen[hit.SourcePath] = true
+	}
+	return len(seen)
+}
+
 // FiltersInput 은 search_filters 입력이다.
 type FiltersInput struct {
 	Project           string          `json:"project,omitempty" jsonschema:"이 프로젝트 안에서 센다"`
@@ -213,6 +236,9 @@ func (h *Handlers) Filters(ctx context.Context, in FiltersInput) (string, error)
 			return "", fmt.Errorf("doc_type 이 잘못됐습니다: %q", in.DocType)
 		}
 		req.DocType = t
+	}
+	if err := search.Validate(req); err != nil {
+		return "", err
 	}
 	if err := h.Ready(ctx); err != nil {
 		return "", err
@@ -288,19 +314,33 @@ func (h *Handlers) Ingest(ctx context.Context, in IngestInput) (string, error) {
 	return FormatIngest(results), nil
 }
 
-// FormatIngest 는 적재 결과 목록이다.
+// FormatIngest 는 적재 결과 목록이다. 게이트(바이너리·MEMORY_MAX_FILE_BYTES 초과)에 걸린 파일은 건너뛴 것으로 따로 적는다.
 func FormatIngest(results []ingest.Result) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%d개 문서 적재", len(results))
+	var indexed, skipped []ingest.Result
 	for _, r := range results {
+		if r.Skipped != "" {
+			skipped = append(skipped, r)
+		} else {
+			indexed = append(indexed, r)
+		}
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d개 문서 적재", len(indexed))
+	for _, r := range indexed {
 		fmt.Fprintf(&b, "\n- %s → %s (%d chunks)", r.SourcePath, r.Index, r.Chunks)
+	}
+	if len(skipped) > 0 {
+		fmt.Fprintf(&b, "\n%d개 건너뜀 — 데몬과 같은 게이트: 바이너리·MEMORY_MAX_FILE_BYTES 초과는 색인하지 않는다", len(skipped))
+		for _, r := range skipped {
+			fmt.Fprintf(&b, "\n- %s (%s)", r.SourcePath, r.Skipped)
+		}
 	}
 	return b.String()
 }
 
 // ListColdInput 은 list_cold 입력이다.
 type ListColdInput struct {
-	Team string `json:"team,omitempty" jsonschema:"팀/실 이름. 생략하면 기본 팀"`
+	Team string `json:"team,omitempty" jsonschema:"팀 이름. 생략하면 기본 팀"`
 }
 
 // ListCold 는 list_cold 다.
@@ -312,7 +352,7 @@ func (h *Handlers) ListCold(ctx context.Context, in ListColdInput) (string, erro
 	if err := h.Ready(ctx); err != nil {
 		return "", err
 	}
-	list, err := cold.ListCold(ctx, h.OS, h.Config, team)
+	list, err := h.coldList(ctx, team)
 	if err != nil {
 		return "", err
 	}
@@ -322,14 +362,39 @@ func (h *Handlers) ListCold(ctx context.Context, in ListColdInput) (string, erro
 	var b strings.Builder
 	fmt.Fprintf(&b, "team=%s cold 인덱스 %d개 (repository %s)\n", team, len(list), h.Config.Snapshot.Repository)
 	for _, c := range list {
-		restored := ""
-		if c.Restored {
-			restored = "  [현재 복원됨]"
-		}
-		fmt.Fprintf(&b, "- %s  snapshot=%s  at=%s%s\n", c.Name, c.Snapshot, c.SnapshotTime, restored)
+		fmt.Fprintf(&b, "- %s  snapshot=%s  at=%s%s\n", c.Name, strings.Join(c.Snapshots, ","), c.SnapshotTime, coldMark(c))
 	}
-	b.WriteString("\n복원이 필요하면 사용자에게 먼저 \"cold 인덱스 X가 있는데 복원할까요\"라고 묻고, 동의를 받은 뒤 restore_cold(index, confirmed=true).")
+	b.WriteString("\n복원이 필요하면 사용자에게 먼저 \"cold 인덱스 X가 있는데 복원할까요\"라고 묻고, 동의를 받은 뒤 " + restoreHint + ".")
 	return b.String(), nil
+}
+
+// coldMark 는 cold 인덱스의 지금 상태 표시다.
+func coldMark(c cold.Index) string {
+	switch {
+	case c.Restored:
+		return "  [현재 복원됨]"
+	case c.Reopened:
+		return "  [hot 에 다시 열림 — 다음 tier 뒤에 복원할 수 있다]"
+	}
+	return ""
+}
+
+// coldList 는 이 workspace 팀의 cold 인덱스 목록이다. 다른 meta-repo 의 팀이면 보여주지도 복원하지도 않는다 — 스냅샷
+// repository 는 클러스터가 같이 쓰지만, 복원과 deprecate 다시 입히기는 그 팀을 가진 workspace 의 원장으로만 맞다.
+func (h *Handlers) coldList(ctx context.Context, team string) ([]cold.Index, error) {
+	list, err := cold.ListCold(ctx, h.OS, h.Config, team)
+	if err != nil || len(list) == 0 {
+		return list, err
+	}
+	ours, err := cold.TeamInWorkspace(ctx, h.OS, h.Cold, h.Config.Workspace, team)
+	if err != nil {
+		return nil, err
+	}
+	if !ours {
+		return nil, fmt.Errorf("%w: team %q 는 workspace %q 의 팀이 아닙니다 — cold 목록·복원(list_cold·restore_cold, CLI: list-cold·restore)은 이 meta-repo 가 적재한 팀의 cold 인덱스만 다룹니다",
+			ingest.ErrTeamOwned, team, h.Config.Workspace)
+	}
+	return list, nil
 }
 
 // RestoreInput 은 restore_cold 입력이다.
@@ -349,11 +414,16 @@ func (h *Handlers) Restore(ctx context.Context, in RestoreInput) (string, error)
 	if err := h.Ready(ctx); err != nil {
 		return "", err
 	}
+	idx, _ := naming.ParseIndex(in.Index)
+	if _, err := h.coldList(ctx, idx.Team); err != nil {
+		return "", err
+	}
 	restored, err := cold.Restore(ctx, h.OS, h.Config, in.Index)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%s 을(를) snapshot %s 에서 hot 으로 복원했습니다. 이제 search_memory 에 포함됩니다 (ISM 자동 관리 제외).", restored.Name, restored.Snapshot), nil
+	return fmt.Sprintf("%s 을(를) snapshot %s 에서 hot 으로 복원했습니다. 이제 검색(%s)에 포함됩니다 (ISM 자동 관리 제외).",
+		restored.Name, strings.Join(restored.Snapshots, ","), searchHint), nil
 }
 
 // RelatedInput 은 related_docs 입력이다.
@@ -374,15 +444,16 @@ func (h *Handlers) Related(ctx context.Context, in RelatedInput) (string, error)
 	if depth == 0 {
 		depth = 2
 	}
-	ns, err := h.Graph.Neighbors(ctx, h.Config.Workspace, in.Path, depth)
+	path := ingest.CanonicalRel(strings.TrimSpace(in.Path)) // 그래프의 문서 경로는 source_path 와 같은 NFC 다
+	ns, err := h.Graph.Neighbors(ctx, h.Config.Workspace, path, depth)
 	if err != nil {
 		return "", err
 	}
 	if len(ns) == 0 {
-		return in.Path + ": 그래프에서 이어진 문서가 없습니다 (그래프에 없는 문서이거나 링크·entity 가 없다)", nil
+		return path + ": 그래프에서 이어진 문서가 없습니다 (그래프에 없는 문서이거나 링크·entity 가 없다)", nil
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s 와 이어진 문서 %d건 (knowledge graph)\n", in.Path, len(ns))
+	fmt.Fprintf(&b, "%s 와 이어진 문서 %d건 (knowledge graph)\n", path, len(ns))
 	for _, n := range ns {
 		fmt.Fprintf(&b, "- [%d] %s (%s) — %s\n", n.Hops, n.Path, n.Status, describePath(n))
 	}
@@ -466,9 +537,10 @@ func NewServer(h *Handlers) *mcp.Server {
 	}, wrap(h.Log, h.Filters))
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "ingest_path",
-		Title:       "문서 수동 적재",
-		Description: "데몬이 아직 잡지 못한 문서나 디렉토리를 바로 색인한다. 경로는 meta-repository 기준 상대 경로.",
+		Name:  "ingest_path",
+		Title: "문서 수동 적재",
+		Description: "데몬이 아직 잡지 못한 문서나 디렉토리를 바로 색인한다. 경로는 meta-repository 기준 상대 경로. " +
+			"바이너리·크기 초과 파일은 데몬처럼 색인하지 않고 건너뛴 것으로 알린다. 적재한 문서는 다음 데몬 사이클이 판정·증류·그래프로 넘긴다.",
 	}, wrap(h.Log, h.Ingest))
 
 	mcp.AddTool(server, &mcp.Tool{

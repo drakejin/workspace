@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/drakejin/workspace/app/internal/config"
+	"github.com/drakejin/workspace/app/internal/document"
 	"github.com/drakejin/workspace/app/internal/llm"
 	"github.com/drakejin/workspace/app/internal/markdown"
 	"github.com/drakejin/workspace/app/internal/model"
@@ -73,7 +74,8 @@ func (j *Judge) Run(ctx context.Context, diff []DiffEntry) (state.JudgeSummary, 
 	seen := map[string]bool{}
 	var errs []error
 	for _, d := range work {
-		if d.Change == ChangeRemoved || d.Supersedes != "" || d.Kind != model.KindEpisodic {
+		// 본문이 없는 문서(빈 파일·frontmatter 만)는 주장이 없다 — 판정할 것이 없다
+		if d.Change == ChangeRemoved || d.Supersedes != "" || d.Kind != model.KindEpisodic || document.IsBlank(d.Body) {
 			continue
 		}
 		if err := j.judgeOne(ctx, d, seen, &sum); err != nil {
@@ -191,7 +193,7 @@ func BestNeighbor(ctx context.Context, c opensearch.Client, d DiffEntry, workspa
 		map[string]any{"exists": map[string]any{"field": "superseded_by"}},
 		map[string]any{"term": map[string]any{"deprecated": true}},
 	}
-	// 같은 프로젝트 안, 같은 종류의 기록끼리만 (vms: "같은 project 안") — 짧은 문서끼리는 조사·흔한 낱말만으로도
+	// 같은 프로젝트 안, 같은 종류의 기록끼리만 (drakejin 회사: "같은 project 안") — 짧은 문서끼리는 조사·흔한 낱말만으로도
 	// 비슷해 보여 엉뚱한 쌍이 latest-wins 로 숨는다 (예: ADR 이 같은 프로젝트의 PRD 에 밀림).
 	// 프로젝트가 없는 문서(여러 프로젝트에 걸친 주제)는 프로젝트 없는 문서끼리 견준다
 	if d.DocType != "" {
@@ -230,8 +232,8 @@ func BestNeighbor(ctx context.Context, c opensearch.Client, d DiffEntry, workspa
 			self = max(self, h.Score)
 			continue
 		}
-		if s.BodySHA == "" {
-			continue
+		if s.BodySHA == "" || s.Text == "" {
+			continue // 빈 청크 0 은 본문이 없는 문서다 — 판정 이웃이 아니다
 		}
 		if prev, ok := best[s.SourcePath]; !ok || prev.RelativeScore < h.Score {
 			best[s.SourcePath] = Neighbor{SourcePath: s.SourcePath, BodySHA: s.BodySHA, EventTime: s.EventTime, Text: s.Text, RelativeScore: h.Score}
@@ -250,6 +252,12 @@ func BestNeighbor(ctx context.Context, c opensearch.Client, d DiffEntry, workspa
 		return nil, nil
 	}
 	return &list[0], nil
+}
+
+// neighborScope 는 BestNeighbor 가 견주는 범위(같은 프로젝트·같은 문서 종류)의 키다. 판정 결론도 이 범위 안에서만
+// 내용을 따라간다 — 다른 프로젝트·종류의 사본은 판정이 짝지은 적이 없다.
+func neighborScope(project string, docType model.DocType) string {
+	return project + "\x00" + string(docType)
 }
 
 // readBody 는 판정에 쓸 원문 본문이다. 검색은 경로를 돌려주고 본문은 원문을 읽는다.

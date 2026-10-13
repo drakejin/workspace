@@ -23,7 +23,7 @@ func runBench(ctx context.Context, c *CLI, args []string) (string, error) {
 		return "", err
 	}
 	if *questions == "" || *runs < 1 || *maxTurns < 1 {
-		return "", usageErr("bench")
+		return "", f.usageErr()
 	}
 	if err := questionsOutside(c.Config.MetaRepoRoot, *questions); err != nil {
 		return "", err

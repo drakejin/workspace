@@ -99,8 +99,8 @@ MCP 의 `search_memory` 와 같은 핸들러를 운영 CLI 로 확인한다. `S=
 | F14 | `$S search -project alpha-api -topic payments -from $D30` | A |
 | F15 | `$S search -type adr` | A, C, J |
 | F16 | `$S search -type knowledge` | N, H (M 은 숨김) |
-| F17 | `$S search ScnFeePolicy` | L 하나 (`… 1건 (BM25)`, score 표시) |
-| F18 | `$S search -superseded ScnFeePolicy` | L, K (K 에 superseded 표시) |
+| F17 | `$S search ScnFeePolicy` | L 하나 (머리 `… 청크 1건 · 문서 1건 (BM25)` — 질의어 검색은 청크 수와 그 문서 수를 함께 센다, score 표시) |
+| F18 | `$S search -superseded ScnFeePolicy` | L, K (K 에 superseded 표시, 머리 `… include_superseded · 청크 2건 · 문서 2건 (BM25)`) |
 | F19 | `$S search -project beta-web ScnRefundFlow` | `맞는 문서가 없습니다` (D 는 프로젝트가 없다) |
 | F20 | `$S search -date 2026-1-2 x; echo "exit=$?"` | 에러 `date 는 YYYY-MM-DD 여야 합니다`, exit≠0 |
 | F21 | `$S search; echo "exit=$?"` | 사용법 에러(exit 2) — 질의어도 필터도 없음 |
@@ -109,7 +109,14 @@ MCP 의 `search_memory` 와 같은 핸들러를 운영 CLI 로 확인한다. `S=
 | F24 | `$S search -project alpha-api -size 2` | 머리 `project=alpha-api · 문서 6건 중 최신 2건 (필터, 최신순 — …)` → A, B (잘린 가져오기는 전체 수를 알린다) |
 | F25 | `$S search -date $D0` | `CLAUDE.md`, `README.md` (frontmatter 날짜가 없는 문서는 커밋 시각을 이 머신의 시간대에서 본 날, 각 줄에 `<D0>`) |
 | F26 | `MEMORY_TIME_ZONE=Mars/Base $S filters; echo "exit=$?"` | 에러 `MEMORY_TIME_ZONE: IANA 시간대 이름이어야 합니다`, exit≠0 |
-| F27 | `scenarios/teardown.sh filters` | 정리됨 |
+| F27 | `$S search -topic '!!!'; echo "exit=$?"` | 에러 `topic 에 글자·숫자가 없습니다: "!!!"`, exit≠0 — 필터를 조용히 빼고 전체 문서를 돌려주지 않는다 |
+| F28 | `python3 -c 'import os,unicodedata as u; d=os.path.join(os.environ["META_REPO_ROOT"],"docs/feature",u.normalize("NFD","환불정책")); os.makedirs(d); open(os.path.join(d,u.normalize("NFD","메모.md")),"w").write("# 환불 메모\nScnNfdTopic\n")' && scripts/memory-daemon/run.sh once` | Finder 처럼 NFD 이름의 디렉토리·파일을 만든다. `[reconcile] scanned=17 indexed=1` |
+| F29 | `$S search -topic 환불정책` | `docs/feature/환불정책/메모.md` 하나 — NFD 디렉토리의 주제도 친(NFC) 주제로 맞고, 경로도 NFC 다 |
+| F30 | `$S ingest docs/knowledge/STATUS-CODES-V2.md && $S ingest docs/feature/환불정책/메모.md` | `1개 문서 적재 - docs/knowledge/status-codes-v2.md → …` (디스크의 철자), `1개 문서 적재 - docs/feature/환불정책/메모.md → …` |
+| F31 | `$S search ScnStatusCodes; $S search ScnNfdTopic` | 각각 N 하나, `docs/feature/환불정책/메모.md` 하나 — 철자만 다른 ingest 가 문서를 하나 더 만들지 않는다 |
+| F32 | `scripts/memory-daemon/run.sh once && ls "$META_REPO_ROOT/.cache/cold-store/scn-filters/chunks/docs/knowledge/"` | `removed=0`, 목록에 `status-codes-v2.md.jsonl` 이 있다 (진짜 문서의 cold store 청크가 지워지지 않는다) |
+| F33 | `printf '\x00\x01BinaryProbe' > "$META_REPO_ROOT/docs/knowledge/probe-bin.md" && $S ingest docs/knowledge/probe-bin.md` | `0개 문서 적재`, `1개 건너뜀 — 데몬과 같은 게이트: …`, `- docs/knowledge/probe-bin.md (binary content)` |
+| F34 | `scenarios/teardown.sh filters` | 정리됨 |
 
 ## G3. Claude Code + drakejin-workspace-memory-mcp — 이름 `claude` (최종 목표)
 
@@ -173,7 +180,7 @@ printf -- '---\ndate: %s\n---\n# 배송비 정책\n\n## 결정\n\nShippingFeePol
 | K3 | `scripts/memory/run.sh tier -team scn-cold -dry-run` | `would-tier mem-scn-cold-<J 의 연.월>`, 나머지는 `kept-hot`. 파일은 그대로 |
 | K4 | `scripts/memory/run.sh tier -team scn-cold` | `tiered mem-scn-cold-<J 의 연.월>` 과 `- hot 에서 뺌: docs/repository/alpha-api/adr/0000-legacy-queue.md`. 파일이 사라지고 `git -C "$META_REPO_ROOT" status --short` 에 `D  docs/repository/alpha-api/adr/0000-legacy-queue.md` |
 | K5 | `scripts/memory/run.sh search ScnLegacyQueue` | 0건 (cold 는 검색되지 않는다) |
-| K6 | `scripts/memory/run.sh list-cold` | `cold 인덱스 1개`, K4 의 인덱스와 스냅샷 이름 |
+| K6 | `scripts/memory/run.sh list-cold` | `cold 인덱스 1개`, K4 의 인덱스와 스냅샷 이름 (같은 인덱스의 스냅샷이 여럿이면 `snapshot=A,B`) |
 | K7 | Claude 로: `source …; scenarios/claude-mcp.sh "레거시 야간 배치 큐(NightlySettleQueue) 결정 문서를 찾아 줘. hot 에 없으면 cold 를 확인하되, 복원은 하지 말고 무엇을 할지만 말해."` | `search_memory` 가 0건 → `list_cold` 호출 → 답에 cold 인덱스 이름과 "복원할까요" 류의 확인 질문. `restore_cold` 를 `confirmed=true` 로 부르지 않았다 |
 | K8 | Claude 로: `"restore_cold 를 index=\"<K6 의 인덱스>\" 로 confirmed 없이 한 번만 호출하고 결과를 그대로 보여 줘."` | tool_result 에 `복원하지 않았습니다 … 복원할까요` — 확인 없이는 복원하지 않는다 |
 | K9 | `scripts/memory/run.sh restore <K6 의 인덱스>` 후 `search ScnLegacyQueue` | `복원했습니다`, 검색에 J |
@@ -195,15 +202,15 @@ printf -- '---\ndate: %s\n---\n# 배송비 정책\n\n## 결정\n\nShippingFeePol
 | --- | --- | --- |
 | W1 | `grep -E '^[a-z][a-z0-9-]*:' Makefile \| cut -d: -f1` | 정확히 `init sync memory-init memory-daemon-start memory-daemon-stop` |
 | W2 | `make -n init sync memory-init memory-daemon-start memory-daemon-stop` | 각각 `bash scripts/{init,sync,memory-init}/run.sh`, `bash scripts/memory-daemon/run.sh start`, `… stop` |
-| W3 | `grep -E '^[a-z][a-z0-9-]*:' app/Makefile \| cut -d: -f1` | `build test test-e2e test-e2e-slow test-e2e-s3 mcp` |
-| W4 | `make init` | `[hook] pre-commit: installed`, books-guitar clone (`[clone] books-guitar: …` 또는 이미 있으면 `[skip]`), `[init] summary: 1 repos / … / 0 failed`, 이어서 sync 출력. (GitHub 인증 실패면 FAIL 로 적고 W5~W7 은 SKIP) |
-| W5 | `make sync` | `[index] INDEX.md: all repos listed` 와 pull 결과 |
+| W3 | `grep -E '^[a-z][a-z0-9-]*:' app/Makefile \| cut -d: -f1` | `build test test-e2e test-e2e-slow test-e2e-s3` (MCP 서버는 `scripts/mcp/run.sh` 하나로 부른다) |
+| W4 | `make init` | `[hook] pre-commit: installed`, books-guitar clone (`[clone] books-guitar: …` 또는 이미 있으면 `[skip]`), `[init] summary: 1 repos / … / 0 failed`, 이어서 sync 출력 — INDEX.md 에 books-guitar 행이 없으므로 `[index] INDEX.md: 1 new repo(s) — books-guitar` 다음 claude 가 행을 더한 `[index] INDEX.md: books-guitar → <카테고리>`. (GitHub 인증 실패면 FAIL 로 적고 W5~W7 은 SKIP) |
+| W5 | `make sync` | `[index] INDEX.md: all repos listed` (W4 가 행을 더했다) 와 pull 결과 — 기본 브랜치(origin/HEAD)에 있으면 `[sync] books-guitar: pulled '<기본 브랜치>'` |
 | W6 | `scripts/run-issues/run.sh SCN-TEST books-guitar` 후 `git -C main/books-guitar worktree list` | `worktree 'SCN-TEST' created`, 목록에 `main/books-guitar/.worktrees/SCN-TEST` |
 | W7 | `scripts/done-issue/run.sh SCN-TEST books-guitar` 후 `git -C main/books-guitar worktree list` 와 `git -C main/books-guitar branch -D SCN-TEST` | `worktree 'SCN-TEST' removed`, 목록에서 사라짐 |
 | W8 | `mkdir -p docs/specs/scn-x && echo x > docs/specs/scn-x/a.md && scripts/docs-cleaner/run.sh < /dev/null; echo "exit=$?"; ls docs/specs` | `[docs-cleaner] 취소`, exit=1, `scn-x` 가 남아 있다 |
 | W9 | `CONFIRM=yes scripts/docs-cleaner/run.sh; ls docs/specs` | `[clean] docs/specs/scn-x`, `docs/specs` 에 INDEX.md 만 |
 | W10 | `scripts/schedule/run.sh install --dry-run \| grep -E 'Label\|tier-tick'` | `com.drakejin.workspace.tier` 와 `tier-tick` — 설치는 하지 않는다 |
-| W11 | `scripts/memory/run.sh help` | 명령 목록에 `search … [-project P] [-topic T] [-date YYYY-MM-DD] [-from D] [-to D]`, `filters`, `tier`, `archive`, `graph` 등 |
+| W11 | `scripts/memory/run.sh help` 와 `scripts/memory/run.sh bench -h; echo "exit=$?"` | 명령 목록에 `search … [-project P] [-topic T] [-date YYYY-MM-DD] [-from D] [-to D]`, `filters`, `tier`, `archive`, `graph`, `bench … [-max-turns N] [-mcp-script P]` 등. `bench -h` 는 플래그 표(`-max-turns int … 질문당 최대 턴 (기본 15)`, `-mcp-script string …`)를 보이고 `exit=0` |
 | W12 | `rm -rf "$W"` | 사본 삭제 (실제 워크스페이스의 `main/` 은 건드리지 않았다) |
 
 ## G7. LLM 판정·증류·entity — 이름 `llm` (claude CLI 필요, 비용 발생)

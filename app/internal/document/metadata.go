@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/text/unicode/norm"
+
 	"github.com/drakejin/workspace/app/internal/markdown"
 	"github.com/drakejin/workspace/app/internal/model"
 	"github.com/drakejin/workspace/app/internal/naming"
@@ -54,9 +56,9 @@ func FactsFromPath(rel string) PathFacts {
 	rel = strings.ReplaceAll(rel, "\\", "/")
 	facts := PathFacts{DocType: model.DocNote}
 	if m := repoDocs.FindStringSubmatch(rel); m != nil {
-		facts.Repo = m[1]
+		facts.Repo = NormalizeProject(m[1])
 	} else if m := ManagedRepoDocs.FindStringSubmatch(rel); m != nil {
-		facts.Repo = m[1]
+		facts.Repo = NormalizeProject(m[1])
 	}
 	if m := topicDirs.FindStringSubmatch(rel); m != nil {
 		facts.Topic = NormalizeTopic(m[1])
@@ -111,7 +113,7 @@ func ResolveMetadata(fm markdown.Frontmatter, rel, defaultTeam string) (Metadata
 	if t, ok := model.ParseDocType(strings.ToLower(firstString(fm, "doc_type", "type"))); ok {
 		docType = t
 	}
-	repo := firstString(fm, "repo", "project")
+	repo := NormalizeProject(firstString(fm, "repo", "project"))
 	if repo == "" {
 		repo = facts.Repo
 	}
@@ -127,7 +129,7 @@ func ResolveMetadata(fm markdown.Frontmatter, rel, defaultTeam string) (Metadata
 		Kind:         KindOf(docType, rel),
 		DeclaredTime: firstTime(fm, "event_time", "date"),
 		DeclaredDay:  firstDay(fm, "event_time", "date"),
-		Supersedes:   firstString(fm, "supersedes"),
+		Supersedes:   CanonicalPath(firstString(fm, "supersedes")),
 		Links:        frontmatterLinks(fm),
 	}, nil
 }
@@ -135,10 +137,22 @@ func ResolveMetadata(fm markdown.Frontmatter, rel, defaultTeam string) (Metadata
 // dayLayout 은 날짜만 있는 값의 꼴이다.
 const dayLayout = "2006-01-02"
 
-// NormalizeTopic 은 주제를 비교할 수 있는 꼴로 맞춘다: 소문자, 글자·숫자가 아닌 것은 하이픈 하나로.
-// "Payment Retry" 와 "payment-retry" 를 같은 주제로 본다.
+// NormalizeTopic 은 주제를 비교할 수 있는 꼴로 맞춘다: NFC, 소문자, 글자·숫자가 아닌 것은 하이픈 하나로.
+// "Payment Retry" 와 "payment-retry" 를 같은 주제로 본다. NFC 를 먼저 한다 — Finder 가 만든 NFD 이름도 사람이 친(NFC)
+// 주제와 같은 값이 되고, NFD 의 결합 문자(악센트)가 글자가 아니라서 하이픈으로 바뀌지 않게.
 func NormalizeTopic(s string) string {
-	return strings.Trim(nonTopic.ReplaceAllString(strings.ToLower(strings.TrimSpace(s)), "-"), "-")
+	return strings.Trim(nonTopic.ReplaceAllString(strings.ToLower(norm.NFC.String(strings.TrimSpace(s))), "-"), "-")
+}
+
+// NormalizeProject 는 프로젝트 이름을 비교할 수 있는 꼴로 맞춘다: 앞뒤 공백을 빼고 NFC. 이름 자체(대소문자·공백)는 그대로다.
+func NormalizeProject(s string) string {
+	return norm.NFC.String(strings.TrimSpace(s))
+}
+
+// CanonicalPath 는 문서 경로(source_path, 그리고 그것을 가리키는 링크·supersedes)의 정본 꼴이다 — 유니코드 NFC.
+// macOS 의 Finder 는 한글 이름을 NFD 로 쓰고 사람·LLM 은 NFC 로 친다. 같은 글자의 두 철자가 한 문서가 되게 NFC 하나로 맞춘다.
+func CanonicalPath(p string) string {
+	return norm.NFC.String(p)
 }
 
 func firstString(fm markdown.Frontmatter, keys ...string) string {
@@ -204,7 +218,7 @@ func frontmatterLinks(fm markdown.Frontmatter) []model.Link {
 			if strings.TrimSpace(p) == "" || strings.TrimSpace(why) == "" {
 				continue
 			}
-			links = append(links, model.Link{Type: typ, To: strings.TrimSpace(p), Why: strings.TrimSpace(why)})
+			links = append(links, model.Link{Type: typ, To: CanonicalPath(strings.TrimSpace(p)), Why: strings.TrimSpace(why)})
 		}
 	}
 	sort.Slice(links, func(i, j int) bool {

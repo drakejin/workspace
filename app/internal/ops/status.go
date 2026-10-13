@@ -79,9 +79,7 @@ func (p *liveProbe) ClusterHealth(ctx context.Context) (string, bool) {
 }
 
 func (p *liveProbe) IndexStats(ctx context.Context) (IndexStats, bool) {
-	var rows []struct {
-		Index string `json:"index"`
-	}
+	var rows []struct{} // 인덱스 수만 센다
 	if err := p.os.Do(ctx, http.MethodGet, "/_cat/indices/"+naming.AllPattern, nil, url.Values{"format": {"json"}, "h": {"index"}}, &rows); err != nil {
 		return IndexStats{}, false
 	}

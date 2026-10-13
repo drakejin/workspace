@@ -108,6 +108,45 @@ func TestBuild(t *testing.T) {
 	}
 }
 
+// RUN-6·IDX-1: 빈 파일·frontmatter 만·공백만 있는 문서도 청크 0 하나를 남긴다 — 청크 0 의 content_sha·mtime·size 가 데몬의
+// "최신" 표시라, 청크가 0개면 색인에 흔적이 없어 매 사이클 새 문서로 다시 쓰였다 (판정·그래프 재구축·cold store 쓰기가 되풀이).
+func TestBuildKeepsChunkZeroForABlankBody(t *testing.T) {
+	cases := map[string]struct{ content, title string }{
+		"빈 파일":          {"", "0007-dedup"},
+		"frontmatter 만": {"---\ndoc_type: adr\ndate: 2026-10-01\n---\n", "0007-dedup"},
+		"공백만":           {"  \n\n\t\n", "0007-dedup"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			in := baseInput(c.content)
+			b, err := Build(in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(b.Chunks) != 1 {
+				t.Fatalf("chunks = %d — 청크 0 하나가 남아야 한다", len(b.Chunks))
+			}
+			got := b.Chunks[0]
+			if got.ChunkIndex != 0 || got.ID != ChunkID("ws", "ads", in.SourcePath, 0) || got.Text != "" || got.ContentSHA != b.ContentSHA ||
+				got.BodySHA != b.BodySHA || got.MtimeMs != 1000 || got.Size != 42 || got.IndexVersion != model.IndexVersion ||
+				got.Title != c.title || got.HeaderPath != c.title || got.EventDay != b.EventTime.UTC().Format("2006-01-02") {
+				t.Errorf("chunk 0 = %+v", got)
+			}
+		})
+	}
+}
+
+// RUN-6: 청크로 만들 본문이 없는 문서(빈 파일·frontmatter 만·공백만)는 주장이 없다 — 판정·증류하지 않는다.
+// 제목 줄은 청크의 본문이다 (제목만 있는 문서도 청크가 있다).
+func TestIsBlank(t *testing.T) {
+	cases := map[string]bool{"": true, "  \n\t\n": true, "# 제목만\n": false, "# 제목\n본문": false, "본문만": false}
+	for body, want := range cases {
+		if got := IsBlank(body); got != want {
+			t.Errorf("IsBlank(%q) = %v", body, got)
+		}
+	}
+}
+
 func TestBuildDeterministicAndDistill(t *testing.T) {
 	a, _ := Build(baseInput("---\ndate: 2026-01-01\n---\n# A\nx"))
 	b, _ := Build(baseInput("---\ndate: 2026-02-01\n---\n# A\nx"))
@@ -233,7 +272,7 @@ func TestEventDay(t *testing.T) {
 	}
 	// frontmatter 에 시각까지 적었으면 그 시각을 시간대로 본다
 	b, _ = Build(Input{Workspace: "ws", SourcePath: "docs/c.md", Content: "---\ndate: 2026-10-06T23:30:00Z\n---\n# C", DefaultTeam: "t", Now: time.Now(), Location: seoul})
-	if b.Chunks[0].EventDay != "2026-10-07" || b.EventDay != "2026-10-07" {
+	if b.Chunks[0].EventDay != "2026-10-07" {
 		t.Errorf("frontmatter 시각 = %q", b.Chunks[0].EventDay)
 	}
 }

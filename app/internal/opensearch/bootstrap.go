@@ -111,9 +111,12 @@ func IndexAliases(team, org string) map[string]any {
 	return aliases
 }
 
-// EnsureIndex 는 인덱스가 없으면 alias 를 붙여 만든다.
+// EnsureIndex 는 인덱스가 없으면 alias 와 매핑을 붙여 만든다. 매핑은 템플릿에도 있지만 만들 때 한 번 더 준다 — 같은 클러스터의
+// 다른 판 프로세스(업그레이드 중인 데몬 등)가 bootstrap 으로 템플릿을 옛 필드 구성으로 되돌려도, 이 판이 쓰는 필드가 strict
+// 매핑에 거부되지 않게 (요청의 매핑은 템플릿의 매핑·설정과 합쳐진다).
 func EnsureIndex(ctx context.Context, c Client, index, team, org string) error {
-	err := c.Do(ctx, http.MethodPut, "/"+index, map[string]any{"aliases": IndexAliases(team, org)}, nil, nil)
+	body := map[string]any{"aliases": IndexAliases(team, org), "mappings": map[string]any{"properties": Properties()}}
+	err := c.Do(ctx, http.MethodPut, "/"+index, body, nil, nil)
 	if HasType(err, "resource_already_exists_exception") {
 		return nil
 	}

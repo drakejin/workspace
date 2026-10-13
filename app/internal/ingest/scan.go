@@ -3,7 +3,6 @@ package ingest
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -37,8 +36,9 @@ func ScanHot(root string, maxFileBytes int64) ([]ScannedFile, []Skipped, error) 
 		partial bool
 	)
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
+		// 디스크의 이름(Finder 가 만든 NFD 일 수 있다)으로 걷되, 문서는 NFC rel 로 맞춘다. IO 는 실제 경로(Abs)로 한다
 		rel, _ := filepath.Rel(root, p)
-		rel = filepath.ToSlash(rel)
+		rel = CanonicalRel(rel)
 		if walkErr != nil {
 			if p == root {
 				return walkErr
@@ -60,8 +60,8 @@ func ScanHot(root string, maxFileBytes int64) ([]ScannedFile, []Skipped, error) 
 		if err != nil {
 			return nil
 		}
-		if info.Size() > maxFileBytes {
-			skipped = append(skipped, Skipped{Rel: rel, Reason: fmt.Sprintf("size %d > %d", info.Size(), maxFileBytes)})
+		if reason := sizeGate(info.Size(), maxFileBytes); reason != "" {
+			skipped = append(skipped, Skipped{Rel: rel, Reason: reason})
 			return nil
 		}
 		files = append(files, ScannedFile{Rel: rel, Abs: p, MtimeMs: info.ModTime().UnixMilli(), Size: info.Size()})

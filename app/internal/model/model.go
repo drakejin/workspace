@@ -39,8 +39,9 @@ const (
 
 // IndexVersion 은 청크에 담는 필드 구성의 판이다. 필드를 더하면 올린다 — 데몬은 판이 낮은 문서를 내용이 같아도 다시 써서
 // 새 필드(예: topic)를 채운다. 1: 처음, 2: topic, 3: topic·repo 를 질의어로도 검색 (text 하위 필드),
-// 4: event_day (날짜 필터가 UTC 가 아니라 문서의 날로 맞게).
-const IndexVersion = 4
+// 4: event_day (날짜 필터가 UTC 가 아니라 문서의 날로 맞게), 5: topic·repo·supersedes 를 NFC 로 (Finder 의 NFD 이름이 사람이 친
+// NFC 값과 맞게 — 다시 쓰면서 옛 철자 문서가 덮어쓴 cold store 청크도 정본 철자로 다시 쓴다).
+const IndexVersion = 5
 
 // Chunk 는 OpenSearch 에 들어가는 청크 한 건이다. ID 는 _id 라 본문(_source)에 넣지 않는다.
 type Chunk struct {
@@ -70,6 +71,9 @@ type Chunk struct {
 	Deprecated   bool     `json:"deprecated,omitempty"`
 	Summary      string   `json:"summary,omitempty"`
 	Entities     []string `json:"entities,omitempty"`
+	// PendingCycle 은 청크 0 에만 붙는 넘김 표시다 — 데몬 밖(ingest_path, CLI ingest, audit -apply)에서 쓴 문서라 다음 데몬
+	// 사이클이 판정·증류·그래프로 넘기고 지운다. 없으면 false (데몬이 쓴 문서). 색인에만 남기고 cold store 청크에는 쓰지 않는다
+	PendingCycle bool `json:"pending_cycle,omitempty"`
 }
 
 // EventTimeValue 는 EventTime 을 시각으로 읽는다.

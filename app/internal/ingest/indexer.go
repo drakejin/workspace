@@ -26,23 +26,28 @@ type Result struct {
 	SourcePath string
 	Index      string
 	Chunks     int
+	// Skipped 는 게이트(바이너리·MEMORY_MAX_FILE_BYTES 초과)에 걸려 색인하지 않았을 때의 사유다. 색인했으면 "".
+	Skipped string
 }
 
 // Prepared 는 쓰기 전에 읽어 둔 문서다. 데몬이 변경·cold 소유 여부를 판단할 때 쓴다.
 type Prepared struct {
-	Abs     string
 	Rel     string
 	Content string
 	Built   document.Built
+	// PendingCycle 이면 Write 가 청크 0 에 넘김 표시(pending_cycle)를 남긴다 — 데몬 밖의 쓰기라 다음 데몬 사이클이
+	// 판정·증류·그래프로 넘겨야 한다 (Prepare 가 정한다)
+	PendingCycle bool
 }
 
 // Indexer 는 문서 파일을 색인한다.
 type Indexer interface {
 	Prepare(ctx context.Context, input, teamOverride string) (Prepared, error)
 	Write(ctx context.Context, p Prepared) (Result, error)
-	IngestFile(ctx context.Context, input, teamOverride string) (*Result, error)
+	// IngestPath 는 파일 또는 디렉토리를 적재한다 (ingest_path·CLI ingest). 파일 하나도 이 길로 적재한다.
 	IngestPath(ctx context.Context, input, teamOverride string) ([]Result, error)
-	// RemoveFile 은 문서를 색인과 청크 JSONL 에서 뺀다. indices 가 nil 이면 모든 메모리 인덱스에서.
+	// RemoveFile 은 문서를 색인과 청크 JSONL 에서 뺀다. indices 가 nil 이면 모든 메모리 인덱스에서. input 은 색인에 있는
+	// source_path 그대로 지운다 — 같은 파일이 디스크에 다른 철자로 있으면 청크 JSONL 은 남긴다 (LiveUnderOtherSpelling).
 	RemoveFile(ctx context.Context, input string, indices []string) (int, error)
 	BulkChunks(ctx context.Context, chunks []model.Chunk) (int, error)
 }
@@ -56,6 +61,7 @@ type Deps struct {
 	// Distilled 는 증류 캐시 조회다 (데몬이 꽂는다). hit 면 LLM 없이 summary/entities 가 붙는다.
 	Distilled func(team, bodySHA string) (model.Distilled, bool)
 	// SupersededBy 는 지금 알려진 superseded_by 다 (데몬이 꽂는다). 재색인해도 밀린 표시와 인덱스 위치가 유지된다.
+	// 이것이 있으면 데몬 사이클 안의 쓰기다 — 판정·증류·그래프를 그 사이클이 이어서 하므로 넘김 표시를 남기지 않는다.
 	SupersededBy func(sourcePath string) string
 }
 
@@ -79,8 +85,10 @@ func New(d Deps) Indexer {
 	return &indexer{Deps: d, owned: map[string]bool{}}
 }
 
+// Prepare 는 파일 하나를 읽어 청크로 만든다. 입력 철자는 디스크의 철자로 바꾸고 NFC 로 맞춘 rel 이 문서의 정체다 (ResolveOnDisk).
+// 게이트(바이너리·크기)에 걸리면 *SkipError 다.
 func (ix *indexer) Prepare(ctx context.Context, input, teamOverride string) (Prepared, error) {
-	abs, rel, err := ResolveInsideRoot(ix.Config.MetaRepoRoot, input)
+	abs, rel, err := ResolveOnDisk(ix.Config.MetaRepoRoot, input)
 	if err != nil {
 		return Prepared{}, err
 	}
@@ -90,13 +98,9 @@ func (ix *indexer) Prepare(ctx context.Context, input, teamOverride string) (Pre
 	if err := RealInsideRoot(ix.Config.MetaRepoRoot, abs); err != nil {
 		return Prepared{}, err
 	}
-	content, err := os.ReadFile(abs)
+	content, info, err := ix.readGated(abs, rel)
 	if err != nil {
-		return Prepared{}, fmt.Errorf("read %s: %w", rel, err)
-	}
-	info, err := os.Stat(abs)
-	if err != nil {
-		return Prepared{}, fmt.Errorf("stat %s: %w", rel, err)
+		return Prepared{}, err
 	}
 	git := document.LastCommit(ctx, abs)
 	fallback := git.CommittedAt
@@ -120,36 +124,66 @@ func (ix *indexer) Prepare(ctx context.Context, input, teamOverride string) (Pre
 	if err != nil {
 		return Prepared{}, fmt.Errorf("%s: %w", rel, err)
 	}
-	by, deprecated, err := ix.flagsOf(ctx, rel)
+	kept, err := ix.carriedOf(ctx, rel, built.ContentSHA)
 	if err != nil {
 		return Prepared{}, err
 	}
 	for i := range built.Chunks {
-		built.Chunks[i].SupersededBy, built.Chunks[i].Deprecated = by, deprecated
+		built.Chunks[i].SupersededBy, built.Chunks[i].Deprecated = kept.supersededBy, kept.deprecated
 	}
-	return Prepared{Abs: abs, Rel: rel, Content: string(content), Built: built}, nil
+	return Prepared{Rel: rel, Content: string(content), Built: built, PendingCycle: kept.pendingCycle}, nil
 }
 
-// flagsOf 는 다시 쓸 문서에 이어 붙일 superseded_by·deprecated 다. 데몬은 정본(선언·원장)에서 계산한 값을 꽂고(SupersededBy),
-// 데몬 밖(ingest_path, audit -apply)에서는 지금 색인에 있는 값을 이어받는다 — 재색인이 밀린 문서를 기본 검색에 되살리지 않게.
-func (ix *indexer) flagsOf(ctx context.Context, rel string) (string, bool, error) {
+// readGated 는 게이트(크기·바이너리 — 데몬과 같은 규칙)를 거친 파일 내용과 stat 이다. 걸리면 *SkipError. 크기는 읽기 전에 본다.
+func (ix *indexer) readGated(abs, rel string) ([]byte, fs.FileInfo, error) {
+	info, err := os.Stat(abs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("stat %s: %w", rel, err)
+	}
+	reason, err := Gate(abs, info.Size(), ix.Config.Reconcile.MaxFileBytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read %s: %w", rel, err)
+	}
+	if reason != "" {
+		return nil, nil, &SkipError{Rel: rel, Reason: reason}
+	}
+	content, err := os.ReadFile(abs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read %s: %w", rel, err)
+	}
+	return content, info, nil
+}
+
+// carried 는 다시 쓸 문서에 이어 붙일 값이다.
+type carried struct {
+	supersededBy string
+	deprecated   bool
+	pendingCycle bool
+}
+
+// carriedOf 는 다시 쓸 문서에 이어 붙일 superseded_by·deprecated 와 넘김 표시다. 데몬은 정본(선언·원장)에서 계산한 값을
+// 꽂고(SupersededBy) 넘김 표시를 남기지 않는다 — 판정·증류·그래프를 그 사이클이 이어서 한다. 데몬 밖(ingest_path, audit -apply)
+// 에서는 지금 색인에 있는 값을 이어받고(재색인이 밀린 문서를 기본 검색에 되살리지 않게), 색인에 없거나 내용이 다르거나 아직
+// 넘기지 못한 문서면 넘김 표시를 남긴다 — 데몬은 색인이 최신인 문서를 건너뛰므로, 표시가 없으면 이 문서는 판정·증류·그래프를
+// 영영 거치지 않는다. 데몬이 이미 넘겨받은 같은 내용을 다시 적재할 때는 남기지 않는다 (같은 내용은 한 번만 판정한다).
+func (ix *indexer) carriedOf(ctx context.Context, rel, contentSHA string) (carried, error) {
 	if ix.SupersededBy != nil {
-		return ix.SupersededBy(rel), false, nil
+		return carried{supersededBy: ix.SupersededBy(rel)}, nil
 	}
 	var out opensearch.SearchResponse[model.Chunk]
 	body := map[string]any{
 		"size":    1,
-		"_source": []string{"superseded_by", "deprecated"},
+		"_source": []string{"superseded_by", "deprecated", "content_sha", "pending_cycle"},
 		"query":   opensearch.FirstChunks(ix.Config.Workspace, map[string]any{"term": map[string]any{"source_path": rel}}),
 	}
 	if err := ix.OS.Do(ctx, http.MethodPost, "/"+naming.AllPattern+"/_search", body, opensearch.Lenient(), &out); err != nil {
-		return "", false, fmt.Errorf("flags %s: %w", rel, err)
+		return carried{}, fmt.Errorf("flags %s: %w", rel, err)
 	}
 	if len(out.Hits.Hits) == 0 {
-		return "", false, nil
+		return carried{pendingCycle: true}, nil
 	}
 	h := out.Hits.Hits[0].Source
-	return h.SupersededBy, h.Deprecated, nil
+	return carried{supersededBy: h.SupersededBy, deprecated: h.Deprecated, pendingCycle: h.PendingCycle || h.ContentSHA != contentSHA}, nil
 }
 
 // Write 는 문서 하나를 색인과 cold store 에 쓴다. 청크 0 의 mtime·size·content_sha 가 데몬의 "최신" 표시이고,
@@ -159,7 +193,7 @@ func (ix *indexer) flagsOf(ctx context.Context, rel string) (string, bool, error
 //  2. 남길 것(대상 인덱스 안의 새 id)만 빼고 이 문서의 청크를 지운다 — 날짜·성질이 바뀌어 인덱스가 달라졌으면 옛 인덱스 쪽은 전부
 //  3. 나머지 청크를 쓴다 (id 가 결정적이라 덮어쓰기)
 //  4. cold store 에 원본과 청크 JSONL 을 쓴다
-//  5. 청크 0 을 진짜 표시로 다시 쓴다
+//  5. 청크 0 을 진짜 표시로 다시 쓴다 — 데몬 밖의 쓰기면 넘김 표시(pending_cycle)도 여기서만 붙인다 (cold store 청크에는 없다)
 func (ix *indexer) Write(ctx context.Context, p Prepared) (Result, error) {
 	b := p.Built
 	index := naming.KnowledgeIndex(b.Meta.Team)
@@ -195,15 +229,18 @@ func (ix *indexer) Write(ctx context.Context, p Prepared) (Result, error) {
 		return Result{}, fmt.Errorf("cold store chunks %s: %w", p.Rel, err)
 	}
 	if len(b.Chunks) > 0 {
-		if _, err := ix.BulkChunks(ctx, b.Chunks[:1]); err != nil {
+		head := b.Chunks[0]
+		head.PendingCycle = p.PendingCycle
+		if _, err := ix.BulkChunks(ctx, []model.Chunk{head}); err != nil {
 			return Result{}, fmt.Errorf("index %s: %w", p.Rel, err)
 		}
 	}
 	return Result{SourcePath: p.Rel, Index: index, Chunks: len(b.Chunks)}, nil
 }
 
-func (ix *indexer) IngestFile(ctx context.Context, input, teamOverride string) (*Result, error) {
-	_, rel, err := ResolveInsideRoot(ix.Config.MetaRepoRoot, input)
+// ingestFile 은 파일 하나를 적재한다. 색인 대상이 아니면 nil, 게이트에 걸리면 Skipped 에 사유를 담은 결과다.
+func (ix *indexer) ingestFile(ctx context.Context, input, teamOverride string) (*Result, error) {
+	_, rel, err := ResolveOnDisk(ix.Config.MetaRepoRoot, input)
 	if err != nil {
 		return nil, err
 	}
@@ -211,6 +248,10 @@ func (ix *indexer) IngestFile(ctx context.Context, input, teamOverride string) (
 		return nil, nil
 	}
 	p, err := ix.Prepare(ctx, input, teamOverride)
+	var skip *SkipError
+	if errors.As(err, &skip) {
+		return &Result{SourcePath: skip.Rel, Skipped: skip.Reason}, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -221,8 +262,9 @@ func (ix *indexer) IngestFile(ctx context.Context, input, teamOverride string) (
 	return &r, nil
 }
 
+// IngestPath 는 파일 또는 디렉토리를 적재한다. 디렉토리도 디스크의 철자로 바꿔 걷는다 (색인 대상 판단이 실제 이름으로 되게).
 func (ix *indexer) IngestPath(ctx context.Context, input, teamOverride string) ([]Result, error) {
-	abs, _, err := ResolveInsideRoot(ix.Config.MetaRepoRoot, input)
+	abs, _, err := ResolveOnDisk(ix.Config.MetaRepoRoot, input)
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +273,7 @@ func (ix *indexer) IngestPath(ctx context.Context, input, teamOverride string) (
 		return nil, fmt.Errorf("stat %s: %w", input, err)
 	}
 	if !info.IsDir() {
-		r, err := ix.IngestFile(ctx, abs, teamOverride)
+		r, err := ix.ingestFile(ctx, abs, teamOverride)
 		if err != nil || r == nil {
 			return nil, err
 		}
@@ -260,7 +302,7 @@ func (ix *indexer) IngestPath(ctx context.Context, input, teamOverride string) (
 	sort.Strings(files)
 	results := make([]Result, 0, len(files))
 	for _, f := range files {
-		r, err := ix.IngestFile(ctx, f, teamOverride)
+		r, err := ix.ingestFile(ctx, f, teamOverride)
 		if err != nil {
 			return results, err
 		}
@@ -289,6 +331,11 @@ func (ix *indexer) RemoveFile(ctx context.Context, input string, indices []strin
 	deleted, err := opensearch.DeleteDoc(ctx, ix.OS, indices, ix.Config.Workspace, rel)
 	if err != nil {
 		return 0, err
+	}
+	if LiveUnderOtherSpelling(ix.Config.MetaRepoRoot, rel) {
+		// 같은 파일이 디스크에 다른 철자로 있다 — rel 은 옛 철자의 색인일 뿐이다. APFS 위의 로컬 cold store 에서는 두 철자의 키가
+		// 같은 파일이라, 청크 JSONL 을 지우면 진짜 문서의 사본(isColdOwned·archive·reload 가 기대는 것)이 사라진다
+		return deleted, nil
 	}
 	for _, team := range teams {
 		if err := ix.Cold.Remove(ctx, cold.ChunksKey(team, rel)); err != nil {

@@ -32,14 +32,14 @@ func runBootstrap(ctx context.Context, c *CLI, args []string) (string, error) {
 func runSearch(ctx context.Context, c *CLI, args []string) (string, error) {
 	f := newFlags("search")
 	team := f.String("team", c.Config.DefaultTeam, "팀")
-	org := f.String("org", "", "org(실)")
+	org := f.String("org", "", "org(실) — 그 org 의 모든 팀을 함께 검색 (-team 무시)")
 	project := f.String("project", "", "프로젝트(관리 대상 repository)")
 	topic := f.String("topic", "", "주제")
 	date := f.String("date", "", "날짜 YYYY-MM-DD")
 	from := f.String("from", "", "범위 시작 (YYYY-MM-DD 또는 now-30d)")
 	to := f.String("to", "", "범위 끝 (YYYY-MM-DD 또는 now)")
-	docType := f.String("type", "", "문서 종류")
-	size := f.Int("size", 0, "결과 수")
+	docType := f.String("type", "", "문서 종류 (spec|adr|prd|plan|knowledge|guide|note)")
+	size := f.Int("size", 0, "결과 수 (1~50, 기본 8)")
 	superseded := f.Bool("superseded", false, "밀린·deprecate 된 문서도 본다")
 	rest, err := f.parse(args)
 	if err != nil {
@@ -50,7 +50,7 @@ func runSearch(ctx context.Context, c *CLI, args []string) (string, error) {
 		TimeRange: model.TimeRange{From: *from, To: *to}, DocType: *docType, Size: *size, IncludeSuperseded: *superseded,
 	}
 	if strings.TrimSpace(in.Query) == "" && in.Filters() == "" {
-		return "", usageErr("search")
+		return "", f.usageErr()
 	}
 	return c.Handlers.Search(ctx, in)
 }
@@ -58,20 +58,20 @@ func runSearch(ctx context.Context, c *CLI, args []string) (string, error) {
 func runFilters(ctx context.Context, c *CLI, args []string) (string, error) {
 	f := newFlags("filters")
 	team := f.String("team", c.Config.DefaultTeam, "팀")
-	org := f.String("org", "", "org(실)")
+	org := f.String("org", "", "org(실) — 그 org 의 모든 팀을 함께 센다 (-team 무시)")
 	project := f.String("project", "", "프로젝트")
 	topic := f.String("topic", "", "주제")
 	date := f.String("date", "", "날짜 YYYY-MM-DD")
 	from := f.String("from", "", "범위 시작")
 	to := f.String("to", "", "범위 끝")
-	docType := f.String("type", "", "문서 종류")
+	docType := f.String("type", "", "문서 종류 (spec|adr|prd|plan|knowledge|guide|note)")
 	superseded := f.Bool("superseded", false, "밀린·deprecate 된 문서도 센다")
 	rest, err := f.parse(args)
 	if err != nil {
 		return "", err
 	}
 	if len(rest) != 0 {
-		return "", usageErr("filters")
+		return "", f.usageErr()
 	}
 	return c.Handlers.Filters(ctx, mcpserver.FiltersInput{Team: *team, Org: *org, Project: *project, Topic: *topic, Date: *date,
 		TimeRange: model.TimeRange{From: *from, To: *to}, DocType: *docType, IncludeSuperseded: *superseded})
@@ -85,7 +85,7 @@ func runIngest(ctx context.Context, c *CLI, args []string) (string, error) {
 		return "", err
 	}
 	if len(rest) != 1 {
-		return "", usageErr("ingest")
+		return "", f.usageErr()
 	}
 	return c.Handlers.Ingest(ctx, mcpserver.IngestInput{Path: rest[0], Team: *team})
 }
@@ -113,9 +113,17 @@ func runTier(ctx context.Context, c *CLI, args []string) (string, error) {
 	}
 	decisions, err := cold.Tier(ctx, c.OS, c.Cold, c.Config, cold.TierOptions{Now: c.Now(), DryRun: *dryRun, Team: *team, KeepFiles: *keepFiles})
 	if err != nil {
-		return "", err
+		return renderTierPartial(decisions), err
 	}
 	return renderTier(decisions), nil
+}
+
+// renderTierPartial 은 중간에 실패한 tier 가 그때까지 한 일이다 (없으면 빈 문자열 — 에러만 보인다).
+func renderTierPartial(decisions []cold.TierDecision) string {
+	if len(decisions) == 0 {
+		return ""
+	}
+	return "[tier] 중간에 실패했습니다 — 그 전에 한 일:\n" + renderTier(decisions)
 }
 
 // tierTickDefault 는 스케줄러가 tier 를 도는 최소 간격이다 (자주 깨워도 하루 한 번만 돈다).
@@ -134,7 +142,7 @@ func runTierTick(ctx context.Context, c *CLI, args []string) (string, error) {
 	}
 	decisions, err := cold.Tier(ctx, c.OS, c.Cold, c.Config, cold.TierOptions{Now: now})
 	if err != nil {
-		return "", err
+		return renderTierPartial(decisions), err
 	}
 	rep, err := audit.Run(ctx, audit.Deps{OS: c.OS, Config: c.Config, Cold: c.Cold, Indexer: c.Indexer, Now: now}, false)
 	if err != nil {
@@ -156,12 +164,13 @@ func runListCold(ctx context.Context, c *CLI, args []string) (string, error) {
 }
 
 func runRestore(ctx context.Context, c *CLI, args []string) (string, error) {
-	rest, err := newFlags("restore").parse(args)
+	f := newFlags("restore")
+	rest, err := f.parse(args)
 	if err != nil {
 		return "", err
 	}
 	if len(rest) != 1 {
-		return "", usageErr("restore")
+		return "", f.usageErr()
 	}
 	// CLI 는 사람이 직접 치는 것이라 확인을 거친 것으로 본다
 	return c.Handlers.Restore(ctx, mcpserver.RestoreInput{Index: rest[0], Confirmed: true})
@@ -208,16 +217,17 @@ func runQuestions(_ context.Context, c *CLI, args []string) (string, error) {
 }
 
 func runAnswer(_ context.Context, c *CLI, args []string) (string, error) {
-	rest, err := newFlags("answer").parse(args)
+	f := newFlags("answer")
+	rest, err := f.parse(args)
 	if err != nil {
 		return "", err
 	}
 	if len(rest) != 2 {
-		return "", usageErr("answer")
+		return "", f.usageErr()
 	}
 	a, ok := ParseAnswer(rest[1])
 	if !ok {
-		return "", usageErr("answer")
+		return "", f.usageErr()
 	}
 	return AnswerQuestion(c.Config.MetaRepoRoot, rest[0], a, c.Now())
 }
@@ -236,22 +246,22 @@ func runAudit(ctx context.Context, c *CLI, args []string) (string, error) {
 }
 
 func runArchive(ctx context.Context, c *CLI, args []string) (string, error) {
-	if len(args) == 0 {
-		return "", usageErr("archive")
-	}
-	action, args := args[0], args[1:]
-	f := newFlags("archive " + action)
+	f := newFlags("archive")
 	team := f.String("team", c.Config.DefaultTeam, "팀")
 	by := f.String("by", "", "누가")
 	reason := f.String("reason", "", "왜")
 	supersededBy := f.String("superseded-by", "", "(deprecate) 대신 볼 문서")
 	file := f.String("file", "", "(edit) 새 본문 파일")
+	action, args, err := f.sub(args)
+	if err != nil {
+		return "", err
+	}
 	rest, err := f.parse(args)
 	if err != nil {
 		return "", err
 	}
 	if len(rest) != 1 {
-		return "", usageErr("archive")
+		return "", f.usageErr()
 	}
 	svc := &archive.Service{OS: c.OS, Config: c.Config, Cold: c.Cold, Indexer: c.Indexer, Now: c.Now}
 	a := archive.Audit{By: *by, Reason: *reason}
@@ -264,34 +274,38 @@ func runArchive(ctx context.Context, c *CLI, args []string) (string, error) {
 		return svc.Purge(ctx, *team, rest[0], a)
 	case "edit":
 		if *file == "" {
-			return "", usageErr("archive")
+			return "", f.usageErr()
 		}
 		return svc.Edit(ctx, *team, rest[0], *file, a)
 	default:
-		return "", usageErr("archive")
+		return "", f.usageErr()
 	}
 }
 
 func runGraph(ctx context.Context, c *CLI, args []string) (string, error) {
-	if len(args) == 0 {
-		return "", usageErr("graph")
+	f := newFlags("graph")
+	depth := f.Int("depth", 2, "(neighbors) 몇 걸음 (1~3)")
+	sub, args, err := f.sub(args)
+	if err != nil {
+		return "", err
+	}
+	if sub == "neighbors" { // 플래그('-h' 포함)는 그래프가 꺼져 있어도 먼저 읽는다
+		if args, err = f.parse(args); err != nil {
+			return "", err
+		}
 	}
 	if c.Graph == nil {
 		return "", graph.ErrDisabled
 	}
-	sub, args := args[0], args[1:]
 	switch sub {
 	case "neighbors":
-		f := newFlags("graph neighbors")
-		depth := f.Int("depth", 2, "몇 걸음")
-		rest, err := f.parse(args)
-		if err != nil || len(rest) != 1 {
-			return "", usageErr("graph")
+		if len(args) != 1 {
+			return "", f.usageErr()
 		}
-		return c.Handlers.Related(ctx, mcpserver.RelatedInput{Path: rest[0], Depth: *depth})
+		return c.Handlers.Related(ctx, mcpserver.RelatedInput{Path: args[0], Depth: *depth})
 	case "entity":
 		if len(args) != 1 {
-			return "", usageErr("graph")
+			return "", f.usageErr()
 		}
 		return c.Handlers.Entities(ctx, mcpserver.EntityInput{Entity: args[0]})
 	case "stats":
@@ -321,7 +335,7 @@ func runGraph(ctx context.Context, c *CLI, args []string) (string, error) {
 		}
 		return fmt.Sprintf("[graph] rebuild: docs=%d entities=%d repos=%d edges=%d (LLM 0회 — 색인·파일·원장에서)", len(g.Docs), len(g.Entities), len(g.Repos), len(g.Edges)), nil
 	default:
-		return "", usageErr("graph")
+		return "", f.usageErr()
 	}
 }
 

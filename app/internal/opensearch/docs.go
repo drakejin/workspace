@@ -65,7 +65,7 @@ func UpdateDocWhere(ctx context.Context, c Client, indices []string, workspace, 
 
 // DeleteDoc 는 indices 에서 문서의 청크를 모두 지운다.
 func DeleteDoc(ctx context.Context, c Client, indices []string, workspace, sourcePath string) (int, error) {
-	return deleteDoc(ctx, c, indices, workspace, sourcePath, map[string]any{"filter": DocFilter(workspace, sourcePath)})
+	return deleteDoc(ctx, c, indices, sourcePath, map[string]any{"filter": DocFilter(workspace, sourcePath)})
 }
 
 // DeleteDocExcept 는 indices 에서 문서의 청크를 지우되, keepIndex 안의 keepIDs 청크만 남긴다.
@@ -78,10 +78,11 @@ func DeleteDocExcept(ctx context.Context, c Client, indices []string, workspace,
 			map[string]any{"ids": map[string]any{"values": keepIDs}},
 		}}}}
 	}
-	return deleteDoc(ctx, c, indices, workspace, sourcePath, query)
+	return deleteDoc(ctx, c, indices, sourcePath, query)
 }
 
-func deleteDoc(ctx context.Context, c Client, indices []string, workspace, sourcePath string, query map[string]any) (int, error) {
+// deleteDoc 은 query 에 맞는 청크를 지운다. workspace 격리는 호출하는 쪽이 query 에 넣는다(DocFilter).
+func deleteDoc(ctx context.Context, c Client, indices []string, sourcePath string, query map[string]any) (int, error) {
 	if len(indices) == 0 {
 		return 0, nil
 	}

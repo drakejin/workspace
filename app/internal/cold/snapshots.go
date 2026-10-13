@@ -2,6 +2,7 @@ package cold
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -15,12 +16,14 @@ import (
 	"github.com/drakejin/workspace/app/internal/state"
 )
 
-// Index 는 cold(스냅샷)에 있는 인덱스 하나다. 같은 인덱스가 여러 스냅샷에 있으면 최신 것.
+// Index 는 cold(스냅샷)에 있는 인덱스 하나다. 한 달을 tier 한 뒤 그 달 날짜의 문서가 늦게 들어오면 같은 인덱스가
+// 여러 스냅샷에 있다 — 복원·archive 는 그 전부를 합친다.
 type Index struct {
 	Name         string
-	Snapshot     string
-	SnapshotTime string
-	Restored     bool // 지금 hot 에 복원돼 있는가
+	Snapshots    []string // 이 인덱스를 담은 성공 스냅샷 전부 (오래된 것부터)
+	SnapshotTime string   // 가장 최근 스냅샷 시각
+	Restored     bool     // 복원본(auto_manage=false)이 열려 있다
+	Reopened     bool     // 같은 이름의 hot 인덱스가 다시 생겼다 (다음 tier 전까지 복원·archive 를 하지 않는다)
 }
 
 // Snapshot 은 스냅샷 하나다.
@@ -45,7 +48,7 @@ func Snapshots(ctx context.Context, c opensearch.Client, repo string) ([]Snapsho
 	}
 	ok := make([]Snapshot, 0, len(out.Snapshots))
 	for _, s := range out.Snapshots {
-		if s.State == "SUCCESS" {
+		if s.State == snapshotSuccess {
 			ok = append(ok, s)
 		}
 	}
@@ -77,11 +80,12 @@ func ListCold(ctx context.Context, c opensearch.Client, cfg config.Config, team 
 	if err != nil {
 		return nil, err
 	}
-	live, err := LiveIndices(ctx, c, naming.TeamPattern(team))
+	open, err := opensearch.Settings(ctx, c, naming.TeamPattern(team))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list indices %s: %w", team, err)
 	}
-	latest := map[string]Index{}
+	sort.SliceStable(snaps, func(i, j int) bool { return snaps[i].StartTime < snaps[j].StartTime })
+	byName := map[string]Index{}
 	for _, s := range snaps {
 		for _, name := range s.Indices {
 			// mem-ads-* 는 mem-ads-data-* 도 잡으므로 이름에서 파싱한 team 으로 거른다
@@ -89,17 +93,41 @@ func ListCold(ctx context.Context, c opensearch.Client, cfg config.Config, team 
 			if !ok || idx.Team != team || idx.Knowledge {
 				continue
 			}
-			if prev, seen := latest[name]; !seen || prev.SnapshotTime < s.StartTime {
-				latest[name] = Index{Name: name, Snapshot: s.Name, SnapshotTime: s.StartTime, Restored: live[name]}
+			entry, seen := byName[name]
+			if !seen {
+				settings, live := open[name]
+				unmanaged := opensearch.IsUnmanaged(settings)
+				entry = Index{Name: name, Restored: live && unmanaged, Reopened: live && !unmanaged}
 			}
+			entry.Snapshots = append(entry.Snapshots, s.Name)
+			entry.SnapshotTime = s.StartTime
+			byName[name] = entry
 		}
 	}
-	out := make([]Index, 0, len(latest))
-	for _, v := range latest {
+	out := make([]Index, 0, len(byName))
+	for _, v := range byName {
 		out = append(out, v)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+// TeamInWorkspace 는 team 이 이 workspace 의 팀인가다 — 이 workspace 가 문서를 둔 팀이거나(opensearch.WorkspaceTeams),
+// 이 workspace 의 cold store 에 그 팀의 보관본이 있다 (모든 달이 cold 로 가 열린 인덱스가 없는 팀). 스냅샷 repository 는
+// 클러스터의 모든 meta-repo 가 같이 쓰지만 cold store 는 workspace 마다 따로다 (로컬은 meta-repo 아래, S3 는 {prefix}/{workspace}/).
+func TeamInWorkspace(ctx context.Context, c opensearch.Client, store Store, workspace, team string) (bool, error) {
+	owned, err := opensearch.WorkspaceTeams(ctx, c, workspace)
+	if err != nil {
+		return false, err
+	}
+	if owned[team] {
+		return true, nil
+	}
+	keys, err := store.List(ctx, TeamPrefix(team))
+	if err != nil {
+		return false, fmt.Errorf("cold store %s: %w", team, err)
+	}
+	return len(keys) > 0, nil
 }
 
 // Archive 는 cold 로 간(스냅샷에 들어간) 월별 인덱스와 그 인덱스를 담은 성공 스냅샷 이름들이다 (복원 여부 무관).
@@ -125,14 +153,39 @@ func ArchivedMonths(ctx context.Context, c opensearch.Client, cfg config.Config)
 	return out, nil
 }
 
+// tierSnapshotPrefix 는 tier·archive 가 뜨는 스냅샷 이름의 머리다. ISM 스냅샷(ism-cold-…)과 갈린다.
+const tierSnapshotPrefix = "cold-"
+
+// isTierSnapshot 은 tier·archive 가 뜬 스냅샷인가다 (그 내용은 목록이 말한다).
+func isTierSnapshot(name string) bool { return strings.HasPrefix(name, tierSnapshotPrefix) }
+
 // SnapshotIndex 는 인덱스 하나를 새 스냅샷으로 뜬다. 같은 초에 두 번 떠도 겹치지 않게 나노초까지 쓴다.
 func SnapshotIndex(ctx context.Context, c opensearch.Client, cfg config.Config, index string, now time.Time) (string, error) {
-	name := fmt.Sprintf("cold-%s-%s-%09d", index, strings.ToLower(now.UTC().Format("20060102t150405")), time.Now().Nanosecond())
+	name := fmt.Sprintf("%s%s-%s-%09d", tierSnapshotPrefix, index, strings.ToLower(now.UTC().Format("20060102t150405")), time.Now().Nanosecond())
 	body := map[string]any{"indices": index, "include_global_state": false}
-	if err := c.Do(ctx, http.MethodPut, "/_snapshot/"+cfg.Snapshot.Repository+"/"+name, body, url.Values{"wait_for_completion": {"true"}}, nil); err != nil {
+	var out struct {
+		Snapshot struct {
+			State string `json:"state"`
+		} `json:"snapshot"`
+	}
+	if err := c.Do(ctx, http.MethodPut, "/_snapshot/"+cfg.Snapshot.Repository+"/"+name, body, url.Values{"wait_for_completion": {"true"}}, &out); err != nil {
 		return "", fmt.Errorf("snapshot %s: %w", index, err)
 	}
+	// 끝까지 뜬 스냅샷만 믿는다 — 그 뒤에 인덱스·옛 스냅샷을 지우기 때문이다 (PARTIAL·FAILED 는 cold 목록에도 없다)
+	if out.Snapshot.State != snapshotSuccess {
+		return "", fmt.Errorf("snapshot %s: %s 가 %s 로 끝났습니다", index, name, orUnknown(out.Snapshot.State))
+	}
 	return name, nil
+}
+
+// snapshotSuccess 는 다 뜬 스냅샷의 상태다.
+const snapshotSuccess = "SUCCESS"
+
+func orUnknown(s string) string {
+	if s == "" {
+		return "알 수 없는 상태"
+	}
+	return s
 }
 
 // SnapshotsOf 는 index 를 담은 스냅샷이다 (오래된 것부터).
@@ -163,24 +216,34 @@ func DeleteSnapshot(ctx context.Context, c opensearch.Client, cfg config.Config,
 }
 
 // RestoreIndex 는 스냅샷에서 인덱스를 되살린다. 복원본은 ISM 자동 관리에서 뺀다 — 원래 생성일을 유지하므로
-// 그대로 두면 ISM 이 바로 다시 cold 로 보낸다. withAliases 가 false 면 검색 alias 없이 (cold 다시 쓰기용).
-func RestoreIndex(ctx context.Context, c opensearch.Client, cfg config.Config, index, snapshot string, withAliases bool) error {
-	body := map[string]any{
-		"indices":              index,
-		"include_global_state": false,
-		"include_aliases":      withAliases,
-		"index_settings":       map[string]any{opensearch.AutoManageSetting: false},
-		// tier 는 쓰기를 막고 스냅샷한다 — 복원본은 deprecate 표시·archive 조치를 받아야 하므로 막기를 풀어 되살린다
-		"ignore_index_settings": []string{"index.blocks.write"},
-	}
-	path := "/_snapshot/" + cfg.Snapshot.Repository + "/" + snapshot + "/_restore"
-	if err := c.Do(ctx, http.MethodPost, path, body, url.Values{"wait_for_completion": {"true"}}, nil); err != nil {
+// 그대로 두면 ISM 이 바로 다시 cold 로 보낸다. 검색 alias 없이 되살린다 — restore_cold 는 다 합치고 deprecate 표시를
+// 입힌 뒤에 alias 를 붙이고(Restore), archive 는 alias 없이 잠깐 열어 고친다.
+func RestoreIndex(ctx context.Context, c opensearch.Client, cfg config.Config, index, snapshot string) error {
+	if err := restoreSnapshot(ctx, c, cfg, snapshot, restoreBody(index)); err != nil {
 		return fmt.Errorf("restore %s from %s: %w", index, snapshot, err)
 	}
 	return nil
 }
 
-// Restore 는 cold 인덱스 하나를 hot 으로 되돌리고, 그 사이 deprecate 된 문서 표시를 다시 입힌다.
+func restoreBody(index string) map[string]any {
+	return map[string]any{
+		"indices":              index,
+		"include_global_state": false,
+		"include_aliases":      false,
+		"index_settings":       map[string]any{opensearch.AutoManageSetting: false},
+		// tier 는 쓰기를 막고 스냅샷한다 — 복원본은 deprecate 표시·archive 조치를 받아야 하므로 막기를 풀어 되살린다
+		"ignore_index_settings": []string{"index.blocks.write"},
+	}
+}
+
+func restoreSnapshot(ctx context.Context, c opensearch.Client, cfg config.Config, snapshot string, body map[string]any) error {
+	path := "/_snapshot/" + cfg.Snapshot.Repository + "/" + snapshot + "/_restore"
+	return c.Do(ctx, http.MethodPost, path, body, url.Values{"wait_for_completion": {"true"}}, nil)
+}
+
+// Restore 는 cold 인덱스 하나를 hot 으로 되돌린다 — 그 인덱스를 담은 스냅샷 전부를 합치고, 그 사이 deprecate 된 문서
+// 표시를 다시 입힌 뒤에야 검색 alias 를 붙인다. 이미 복원돼 있으면 빠진 스냅샷 문서만 더한다 (중간에 끊긴 복원·예전 판이
+// 최신 스냅샷만 되살린 복원본).
 func Restore(ctx context.Context, c opensearch.Client, cfg config.Config, name string) (Index, error) {
 	idx, ok := naming.ParseIndex(name)
 	if !ok || idx.Knowledge {
@@ -194,24 +257,48 @@ func Restore(ctx context.Context, c opensearch.Client, cfg config.Config, name s
 		if target.Name != name {
 			continue
 		}
-		if target.Restored {
-			return target, nil
+		if target.Reopened {
+			return Index{}, Reopened(name)
 		}
-		if err := RestoreIndex(ctx, c, cfg, name, target.Snapshot, true); err != nil {
-			return Index{}, err
-		}
-		// 검색 alias 는 스냅샷 메타데이터에 기대지 않고 다시 붙인다 — archive edit·purge 가 다시 쓴 스냅샷에는 alias 가 없고,
-		// 그 사이 org 설정이 바뀌었을 수도 있다
-		if err := attachAliases(ctx, c, name, idx.Team, cfg.OrgOf(idx.Team)); err != nil {
-			return Index{}, err
-		}
-		if err := applyDeprecations(ctx, c, cfg, idx.Team, name); err != nil {
+		if err := restoreSearchable(ctx, c, cfg, target, idx.Team); err != nil {
 			return Index{}, err
 		}
 		target.Restored = true
 		return target, nil
 	}
 	return Index{}, fmt.Errorf("cold 에 %s 가 없습니다. list_cold 로 먼저 확인하세요", name)
+}
+
+// restoreSearchable 은 target 의 스냅샷 전부를 합치고 deprecate 표시를 다시 입힌 뒤에 검색 alias 를 붙인다 — 그 전까지
+// 새로 연 복원본은 검색에 나오지 않아, 합치다 멈춰도 표시가 빠진 문서가 기본 검색에 나오지 않는다.
+func restoreSearchable(ctx context.Context, c opensearch.Client, cfg config.Config, target Index, team string) error {
+	if err := RestoreAll(ctx, c, cfg, target.Name, target.Snapshots); err != nil {
+		return partialRestore(ctx, c, cfg, team, target.Name, err)
+	}
+	if err := applyDeprecations(ctx, c, cfg, team, target.Name); err != nil {
+		return fmt.Errorf("%s: 스냅샷은 다 합쳤지만 deprecate 표시를 다시 입히지 못해 검색에 붙이지 않았습니다 — restore 를 다시 하세요: %w", target.Name, err)
+	}
+	// 검색 alias 는 스냅샷 메타데이터에 기대지 않고 다시 붙인다 — archive edit·purge 가 다시 쓴 스냅샷에는 alias 가 없고,
+	// 그 사이 org 설정이 바뀌었을 수도 있다
+	return attachAliases(ctx, c, target.Name, team, cfg.OrgOf(team))
+}
+
+// partialRestore 는 스냅샷을 합치다 멈춘 복원의 오류다. 복원본이 열려 있으면 deprecate 표시를 다시 입힌다 — 예전 판의
+// 복원본은 이미 검색 alias 가 붙어 있어, 합치며 더한 문서가 표시 없이 기본 검색에 나온다.
+func partialRestore(ctx context.Context, c opensearch.Client, cfg config.Config, team, index string, cause error) error {
+	restored, _, err := OpenState(ctx, c, index)
+	if err != nil {
+		return fmt.Errorf("%s 를 일부만 복원했을 수 있습니다 — 복원본 상태를 읽지 못해 deprecate 표시를 다시 입히지 못했습니다. restore 를 다시 하세요: %w",
+			index, errors.Join(cause, err))
+	}
+	if !restored {
+		return cause // 아무것도 열지 못했다 (가장 최근 스냅샷부터 실패했거나, hot 에 다시 열렸다)
+	}
+	if err := applyDeprecations(ctx, c, cfg, team, index); err != nil {
+		return fmt.Errorf("%s 를 일부만 복원했고 deprecate 표시도 다시 입히지 못했습니다 — restore 를 다시 하세요: %w", index, errors.Join(cause, err))
+	}
+	return fmt.Errorf("%s 를 일부만 복원했습니다 — 스냅샷을 합치다 멈췄습니다(deprecate 표시는 다시 입혔다). "+
+		"새로 연 복원본은 다 합칠 때까지 검색에 나오지 않습니다. restore 를 다시 하면 빠진 문서만 더해 마무리합니다: %w", index, cause)
 }
 
 func attachAliases(ctx context.Context, c opensearch.Client, index, team, org string) error {

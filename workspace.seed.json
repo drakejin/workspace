@@ -3,8 +3,7 @@
   "org": "drakejin",
   "workspaces": [
     {
-      "name": "books-guitar",
-      "mainBranch": "main"
+      "name": "books-guitar"
     }
   ]
 }

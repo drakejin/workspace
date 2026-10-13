@@ -76,7 +76,7 @@ type Config struct {
 	OpenSearchURL string
 	MetaRepoRoot  string
 	// Workspace 는 이 meta-repository 의 이름이다. 같은 OpenSearch 를 여러 meta-repo 가 써도
-	// 문서 id·삭제·수렴·판정·검색이 서로 섞이지 않게 하는 격리 축이다 (vms 의 project).
+	// 문서 id·삭제·수렴·판정·검색이 서로 섞이지 않게 하는 격리 축이다 (drakejin 회사 메모리 층의 project).
 	Workspace   string
 	DefaultTeam string
 	HotDays     int

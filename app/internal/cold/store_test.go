@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
@@ -137,5 +139,41 @@ func TestChunkCodec(t *testing.T) {
 	_ = store.Put(ctx, ChunksKey("t", "docs/empty.md"), "{broken\n")
 	if _, ok, _ := Archived(ctx, store, "t", "docs/empty.md"); ok {
 		t.Error("읽을 수 있는 청크가 없으면 false")
+	}
+}
+
+func TestLocalStorePutReplacesTheFileAtomically(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store := NewLocalStore(root)
+	key := ManifestKey("t", "mem-t-2026.05")
+	old := strings.Repeat("{\"snapshot\":\"snap-1\"}\n", 1000)
+	if err := store.Put(ctx, key, old); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(root, filepath.FromSlash(key))
+	reader, err := os.Open(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	if err := store.Put(ctx, key, "new\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 쓰기 전에 연 독자는 옛 내용을 끝까지 읽는다 — 잘라 내고 덮어쓰면 반쯤 쓴(또는 빈) 정본을 본다
+	if got, _ := io.ReadAll(reader); string(got) != old {
+		t.Errorf("옛 독자가 본 내용 %d bytes, want %d", len(got), len(old))
+	}
+	if body, _, _ := store.Get(ctx, key); body != "new\n" {
+		t.Errorf("새 내용 = %q", body)
+	}
+	entries, _ := os.ReadDir(filepath.Dir(file))
+	if len(entries) != 1 {
+		t.Errorf("임시 파일이 남지 않는다: %v", entries)
+	}
+	if info, err := os.Stat(file); err != nil || info.Mode().Perm() != 0o644 {
+		t.Errorf("mode = %v %v", info.Mode(), err)
 	}
 }

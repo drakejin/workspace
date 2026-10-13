@@ -34,9 +34,10 @@ type Request struct {
 	IncludeSuperseded bool // 판정·선언으로 밀린 문서와 deprecate 된 문서도 본다 (기본: 숨김)
 }
 
-// HasFilter 는 질의어 말고 문서를 좁히는 조건이 있는가다.
+// HasFilter 는 질의어 말고 문서를 좁히는 조건이 있는가다. 프로젝트·주제는 BuildQuery 와 같은 정규화한 값으로 본다.
 func HasFilter(r Request) bool {
-	return r.Date != "" || r.TimeRange.From != "" || r.TimeRange.To != "" || r.Project != "" || r.Topic != "" || r.DocType != ""
+	return r.Date != "" || r.TimeRange.From != "" || r.TimeRange.To != "" || document.NormalizeProject(r.Project) != "" ||
+		document.NormalizeTopic(r.Topic) != "" || r.DocType != ""
 }
 
 var dayOnly = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
@@ -49,7 +50,7 @@ func isDay(v string) bool {
 	return err == nil
 }
 
-// Validate 는 필터 값을 검사한다. 프로젝트·주제는 색인이 받은 이름이면 무엇이든 되므로 제어 문자만 막는다.
+// Validate 는 필터 값을 검사한다.
 func Validate(r Request) error {
 	if r.Date != "" && !isDay(r.Date) {
 		return fmt.Errorf("date 는 YYYY-MM-DD 여야 합니다: %q", r.Date)
@@ -59,10 +60,22 @@ func Validate(r Request) error {
 			return fmt.Errorf("%s 날짜가 잘못됐습니다: %q", name, v)
 		}
 	}
+	return validateNames(r)
+}
+
+// validateNames 는 프로젝트·주제 값을 검사한다. 색인이 받은 이름이면 무엇이든 되므로 제어 문자만 막되, 준 값이 정규화하면
+// 비는 경우(topic "!!!", project "  ")는 거부한다 — 조용히 필터를 빼면 결과 머리에는 걸러진 것처럼 보이면서 전체 문서가 나온다.
+func validateNames(r Request) error {
 	for name, v := range map[string]string{"project": r.Project, "topic": r.Topic} {
 		if strings.IndexFunc(v, unicode.IsControl) >= 0 {
 			return fmt.Errorf("%s 에 제어 문자가 있습니다: %q", name, v)
 		}
+	}
+	if r.Topic != "" && document.NormalizeTopic(r.Topic) == "" {
+		return fmt.Errorf("topic 에 글자·숫자가 없습니다: %q (%s 로 쓸 수 있는 주제를 확인하세요)", r.Topic, FiltersHint)
+	}
+	if r.Project != "" && document.NormalizeProject(r.Project) == "" {
+		return fmt.Errorf("project 가 공백뿐입니다: %q", r.Project)
 	}
 	return nil
 }
@@ -84,7 +97,6 @@ func boundFilter(op, v, timeZone string) map[string]any {
 type Hit struct {
 	Team         string
 	Score        float64
-	Index        string
 	SourcePath   string
 	HeaderPath   string
 	Project      string
@@ -118,8 +130,13 @@ type Result struct {
 	Total int
 }
 
-// ErrEmptyQuery 는 질의어도 필터도 없다는 뜻이다.
-var ErrEmptyQuery = errors.New("query 가 비어 있습니다 (질의어 없이 가져오려면 date·time_range·project·topic·doc_type 중 하나를 주세요)")
+// FiltersHint 는 필터 값을 보는 방법이다. 안내문은 MCP 도구와 CLI 명령(scripts/memory/run.sh <command>)이 같이 보므로
+// 두 이름을 함께 적는다.
+const FiltersHint = "search_filters(CLI: filters)"
+
+// ErrEmptyQuery 는 질의어도 필터도 없다는 뜻이다. MCP 입력 이름과 CLI 플래그를 함께 적는다.
+var ErrEmptyQuery = errors.New("query 가 비어 있습니다 (질의어 없이 가져오려면 필터를 하나 이상 주세요 — " +
+	"MCP: date·time_range·project·topic·doc_type, CLI: -date·-from/-to·-project·-topic·-type)")
 
 // BuildQuery 는 BM25 multi_match + 필터 질의다.
 func BuildQuery(r Request) map[string]any {
@@ -143,8 +160,8 @@ func BuildQuery(r Request) map[string]any {
 	if r.TimeRange.To != "" {
 		filter = append(filter, boundFilter("lte", r.TimeRange.To, r.TimeZone))
 	}
-	if r.Project != "" {
-		filter = append(filter, map[string]any{"term": map[string]any{"repo": r.Project}})
+	if project := document.NormalizeProject(r.Project); project != "" {
+		filter = append(filter, map[string]any{"term": map[string]any{"repo": project}})
 	}
 	if topic := document.NormalizeTopic(r.Topic); topic != "" {
 		filter = append(filter, map[string]any{"term": map[string]any{"topic": topic}})
@@ -174,12 +191,13 @@ func BuildQuery(r Request) map[string]any {
 
 // Search 는 팀 hot alias 에 묻는다. alias 가 아직 없으면(문서 0건) 빈 결과.
 func Search(ctx context.Context, c opensearch.Client, r Request) (Result, error) {
+	// 필터 값부터 본다 — 정규화하면 비는 필터만 준 요청이 "질의어가 비었다" 가 아니라 무엇이 잘못됐는지로 거부되게
+	if err := Validate(r); err != nil {
+		return Result{}, err
+	}
 	listing := strings.TrimSpace(r.Query) == ""
 	if listing && !HasFilter(r) {
 		return Result{}, ErrEmptyQuery
-	}
-	if err := Validate(r); err != nil {
-		return Result{}, err
 	}
 	alias := naming.HotAlias(r.Team)
 	if r.Org != "" {
@@ -203,7 +221,7 @@ func Search(ctx context.Context, c opensearch.Client, r Request) (Result, error)
 		s := h.Source
 		hits = append(hits, Hit{
 			Team:  s.Team,
-			Score: h.Score, Index: h.Index, SourcePath: s.SourcePath, HeaderPath: s.HeaderPath, Project: s.Repo, Topic: s.Topic,
+			Score: h.Score, SourcePath: s.SourcePath, HeaderPath: s.HeaderPath, Project: s.Repo, Topic: s.Topic,
 			DocType: s.DocType, EventTime: s.EventTime, EventDay: s.EventDay, GitSHA: s.GitSHA, Text: s.Text, Summary: s.Summary, SupersededBy: s.SupersededBy, Deprecated: s.Deprecated,
 		})
 	}

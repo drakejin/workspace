@@ -23,7 +23,7 @@ func (c *captureOS) Bulk(context.Context, []any, url.Values) (opensearch.BulkRes
 	return opensearch.BulkResponse{}, nil
 }
 
-// 판정 이웃은 같은 프로젝트 안에서만 찾는다 (vms: "같은 project 안"). 프로젝트가 없는 문서는 프로젝트 없는 문서끼리.
+// 판정 이웃은 같은 프로젝트 안에서만 찾는다 (drakejin 회사: "같은 project 안"). 프로젝트가 없는 문서는 프로젝트 없는 문서끼리.
 func TestBestNeighborStaysInTheSameProject(t *testing.T) {
 	os := &captureOS{}
 	if _, err := BestNeighbor(context.Background(), os, DiffEntry{SourcePath: "a.md", Team: "t", Project: "alpha-api", DocType: model.DocADR, Body: "x"}, "ws", 0.3); err != nil {

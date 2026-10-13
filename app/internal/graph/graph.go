@@ -24,10 +24,11 @@ const (
 
 // DocStatus 는 그래프 안 문서 노드의 상태다.
 const (
-	StatusHot        = "hot"        // 지금 색인에 있다
-	StatusUnindexed  = "unindexed"  // 링크로만 알려졌다 (cold 로 갔거나, 오타거나, 색인 범위 밖)
-	StatusSuperseded = "superseded" // 더 새 문서에 밀렸다
-	StatusDeprecated = "deprecated" // 틀린 것으로 표시됐다
+	StatusHot        = "hot"          // 지금 색인에 있다
+	StatusUnindexed  = "unindexed"    // 링크로만 알려졌다 (cold 로 갔거나, 오타거나, 범위 안인데 색인되지 않았다)
+	StatusOutOfScope = "out-of-scope" // 링크로만 알려졌지만 디스크에 있다 — 색인 범위 밖의 가이드(scenarios/·.claude/·examples/). 깨진 링크가 아니다
+	StatusSuperseded = "superseded"   // 더 새 문서에 밀렸다
+	StatusDeprecated = "deprecated"   // 틀린 것으로 표시됐다
 )
 
 // Doc 은 문서 노드다.
@@ -87,14 +88,15 @@ type Input struct {
 func Key(workspace, kind, name string) string { return workspace + "|" + kind + "|" + name }
 
 // Build 는 문서 목록에서 그래프를 만든다. 순수 함수 — 같은 입력이면 같은 그래프.
-func Build(workspace string, inputs []Input) Graph {
+// outOfScope 는 링크로만 알려진 대상 가운데 디스크에 있는 색인 범위 밖 파일이다 (그 노드는 unindexed 가 아니라 out-of-scope).
+func Build(workspace string, inputs []Input, outOfScope map[string]bool) Graph {
 	g := Graph{Workspace: workspace}
 	docKey := func(p string) string { return Key(workspace, LabelDoc, p) }
 	hot := map[string]bool{}
 	for _, in := range inputs {
 		hot[in.Path] = true
 	}
-	unindexed := map[string]bool{}
+	linkedOnly := map[string]bool{}
 	entities := map[string]Named{}
 	repos := map[string]Named{}
 	edges := map[string]Edge{}
@@ -124,10 +126,10 @@ func Build(workspace string, inputs []Input) Graph {
 				continue
 			}
 			if !hot[l.To] {
-				unindexed[l.To] = true
+				linkedOnly[l.To] = true
 			}
 			if l.Type == model.LinkSupersedes {
-				continue // 선언은 수렴 결과(SupersededBy)로 이미 들어간다 — 대상이 없으면 아래 unindexed 노드만 남긴다
+				continue // 선언은 수렴 결과(SupersededBy)로 이미 들어간다 — 대상이 없으면 아래 링크로만 알려진 노드만 남긴다
 			}
 			addEdge(Edge{From: docKey(in.Path), To: docKey(l.To), Type: string(l.Type), Why: l.Why, Source: "document"})
 		}
@@ -146,8 +148,12 @@ func Build(workspace string, inputs []Input) Graph {
 			addEdge(Edge{From: docKey(in.Path), To: k, Type: RelInRepo, Source: "path"})
 		}
 	}
-	for p := range unindexed {
-		g.Docs = append(g.Docs, Doc{Key: docKey(p), Path: p, Title: p, Status: StatusUnindexed})
+	for p := range linkedOnly {
+		status := StatusUnindexed
+		if outOfScope[p] {
+			status = StatusOutOfScope
+		}
+		g.Docs = append(g.Docs, Doc{Key: docKey(p), Path: p, Title: p, Status: status})
 	}
 	for _, n := range entities {
 		g.Entities = append(g.Entities, n)

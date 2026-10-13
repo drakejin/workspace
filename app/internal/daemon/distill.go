@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/drakejin/workspace/app/internal/config"
+	"github.com/drakejin/workspace/app/internal/document"
 	"github.com/drakejin/workspace/app/internal/ingest"
 	"github.com/drakejin/workspace/app/internal/llm"
 	"github.com/drakejin/workspace/app/internal/model"
@@ -88,14 +89,15 @@ func (q *DistillQueue) EnqueueDiff(diff []DiffEntry) {
 	q.Enqueue(jobs)
 }
 
-// Enqueue 는 작업을 넣는다. 같은 (팀, 경로, 본문) 은 한 번만.
+// Enqueue 는 작업을 넣는다. 같은 (팀, 경로, 본문) 은 한 번만. 본문이 없는 문서(빈 파일·frontmatter 만)는 요약할 것이
+// 없으니 넣지 않는다.
 func (q *DistillQueue) Enqueue(jobs []DistillJob) {
 	if !q.cfg.Distill.Enabled {
 		return
 	}
 	q.mu.Lock()
 	for _, j := range jobs {
-		if q.queued[jobKey(j)] {
+		if q.queued[jobKey(j)] || document.IsBlank(j.Body) {
 			continue
 		}
 		q.queued[jobKey(j)] = true

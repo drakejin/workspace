@@ -60,7 +60,7 @@ func TestRenderStatusRunning(t *testing.T) {
 	now := time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)
 	sum := state.CycleSummary{Scanned: 9, ColdOwned: 2, Refused: true, Partial: true}
 	_ = state.WriteStatus(root, state.Status{
-		PID: 1, StartedAt: "s", HeartbeatAt: now.Add(-10 * time.Minute).Format(time.RFC3339Nano), IntervalSeconds: 60, Cycles: 4,
+		StartedAt: "s", HeartbeatAt: now.Add(-10 * time.Minute).Format(time.RFC3339Nano), IntervalSeconds: 60, Cycles: 4,
 		LastCycle: &state.CycleRecord{Trigger: "timer", At: "a", Summary: &sum, Graph: "docs=4 entities=2 edges=3"},
 	})
 	_ = state.NewJudgeState(root).Ledger.Append("t", state.JudgeRecord{PairKey: "k", Decision: state.DecisionQuestion})
@@ -245,5 +245,22 @@ func TestBenchRefusesQuestionsInsideMetaRepo(t *testing.T) {
 	}
 	if err := cli.Run(context.Background(), "bench", []string{"-questions", outside, "-modes", "without"}); err == nil || strings.Contains(err.Error(), "meta-repo 안") {
 		t.Errorf("밖의 질문 파일은 검사를 통과하고 claude 실행에서 실패해야 한다: %v", err)
+	}
+}
+
+func TestRunPrintsWhatACommandDidBeforeItFailed(t *testing.T) {
+	boom := errors.New("boom")
+	commands["test-partial"] = command{offline: true, run: func(context.Context, *CLI, []string) (string, error) {
+		return "tiered mem-t-2026.01", boom
+	}}
+	t.Cleanup(func() { delete(commands, "test-partial") })
+	var out bytes.Buffer
+	cli := &CLI{Out: &out}
+
+	err := cli.Run(context.Background(), "test-partial", nil)
+
+	// 파괴적인 명령(tier)이 중간에 실패해도 이미 한 일은 보여야 한다
+	if !errors.Is(err, boom) || !strings.Contains(out.String(), "tiered mem-t-2026.01") {
+		t.Errorf("out = %q err = %v", out.String(), err)
 	}
 }

@@ -23,7 +23,30 @@ func FromHot(root, workspace string, docs map[string]ingest.IndexedDoc) Graph {
 		}
 		inputs = append(inputs, in)
 	}
-	return Build(workspace, inputs)
+	return Build(workspace, inputs, outOfScope(root, inputs))
+}
+
+// outOfScope 는 hot 이 아닌 링크 대상 가운데 색인 범위 밖이면서 디스크에 그 철자로 있는 것이다 (scenarios/·.claude/·examples/
+// 의 가이드). 범위 안인데 hot 이 아닌 대상(cold 로 갔거나, 오타거나, 게이트에 걸렸다)은 그대로 unindexed 로 둔다.
+func outOfScope(root string, inputs []Input) map[string]bool {
+	hot := make(map[string]bool, len(inputs))
+	for _, in := range inputs {
+		hot[in.Path] = true
+	}
+	checked := map[string]bool{}
+	out := map[string]bool{}
+	for _, in := range inputs {
+		for _, l := range in.Links {
+			if hot[l.To] || checked[l.To] || ingest.IsIndexable(l.To) {
+				continue
+			}
+			checked[l.To] = true
+			if ingest.ExistsAsSpelled(root, l.To) {
+				out[l.To] = true
+			}
+		}
+	}
+	return out
 }
 
 // Rebuild 는 hot 문서로 workspace 그래프를 통째로 다시 만든다 (LLM 0회).

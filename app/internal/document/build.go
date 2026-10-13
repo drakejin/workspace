@@ -37,7 +37,6 @@ type Input struct {
 type Built struct {
 	Meta       Metadata
 	EventTime  time.Time
-	EventDay   string // YYYY-MM-DD — 날짜 필터가 맞추는 값
 	ContentSHA string // 원문 전체 — 데몬의 변경 감지 기준
 	BodySHA    string // frontmatter 제외 본문 — 판정 쌍·증류 캐시 키. 메타만 바뀌면 그대로다
 	Title      string
@@ -75,7 +74,6 @@ func Build(in Input) (Built, error) {
 	built := Built{
 		Meta:       meta,
 		EventTime:  eventTime,
-		EventDay:   eventDay,
 		ContentSHA: SHA256(in.Content),
 		BodySHA:    SHA256(body),
 		Title:      title,
@@ -86,7 +84,13 @@ func Build(in Input) (Built, error) {
 	if in.Distilled != nil {
 		distilled, hasDistilled = in.Distilled(meta.Team, built.BodySHA)
 	}
-	for i, c := range markdown.ChunkMarkdown(body, rootTitle, 0) {
+	chunks := markdown.ChunkMarkdown(body, rootTitle, 0)
+	if len(chunks) == 0 {
+		// 청크로 만들 본문이 없어도(빈 파일·frontmatter 만·공백만) 빈 청크 0 하나를 남긴다 — 청크 0 의 content_sha·mtime·size 가
+		// 데몬의 "최신" 표시라, 없으면 이 문서는 색인에 흔적이 없어 매 사이클 새 문서로 다시 쓰인다
+		chunks = []markdown.Chunk{{HeaderPath: title}}
+	}
+	for i, c := range chunks {
 		chunk := model.Chunk{
 			ID:         ChunkID(in.Workspace, meta.Team, in.SourcePath, i),
 			Workspace:  in.Workspace,
@@ -121,6 +125,12 @@ func Build(in Input) (Built, error) {
 	return built, nil
 }
 
+// IsBlank 는 본문에 청크로 만들 내용이 없는가다 (빈 파일·frontmatter 만·공백만). 이런 문서는 빈 청크 0 하나만 색인하고,
+// 주장이 없으니 판정·증류하지 않는다.
+func IsBlank(body string) bool {
+	return len(markdown.ChunkMarkdown(body, "", 0)) == 0
+}
+
 func locationOrUTC(loc *time.Location) *time.Location {
 	if loc == nil {
 		return time.UTC
@@ -138,13 +148,13 @@ func Title(body, sourcePath string) string {
 
 var markdownLink = regexp.MustCompile(`\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)`)
 
-// MarkdownLinks 는 본문의 상대 경로 마크다운 링크(.md)다. 대상은 meta-repository 기준 경로로 바꾼다.
+// MarkdownLinks 는 본문의 상대 경로 마크다운 링크(.md)다. 대상은 meta-repository 기준 경로(NFC — source_path 와 같은 꼴)로 바꾼다.
 // 외부 URL·앵커만 있는 링크·meta-repository 밖을 가리키는 링크는 버린다.
 func MarkdownLinks(body, sourcePath string) []model.Link {
 	seen := map[string]bool{}
 	var links []model.Link
 	for _, m := range markdownLink.FindAllStringSubmatch(body, -1) {
-		target, _, _ := strings.Cut(m[1], "#")
+		target, _, _ := strings.Cut(CanonicalPath(m[1]), "#")
 		if target == "" || strings.Contains(target, "://") || strings.HasPrefix(target, "mailto:") || path.Ext(target) != ".md" {
 			continue
 		}
@@ -174,7 +184,7 @@ func ChunkID(workspace, team, sourcePath string, index int) string {
 func Links(content, sourcePath string) []model.Link {
 	fm, body := markdown.SplitFrontmatter(content)
 	links := frontmatterLinks(fm)
-	if s := firstString(fm, "supersedes"); s != "" {
+	if s := CanonicalPath(firstString(fm, "supersedes")); s != "" {
 		links = append(links, model.Link{Type: model.LinkSupersedes, To: s, Why: "frontmatter supersedes"})
 	}
 	return append(links, MarkdownLinks(body, sourcePath)...)

@@ -1,5 +1,5 @@
 // Package archive 는 cold 문서의 유일한 쓰기 경로다 — deprecate·purge·edit.
-// 스냅샷은 고칠 수 없으므로 "복원(검색 alias 없이) → 고침 → 새 스냅샷 → 옛 스냅샷 삭제"로 다시 쓴다.
+// 스냅샷은 고칠 수 없으므로 "그 달의 스냅샷 전부를 합쳐 복원(검색 alias 없이) → 고침 → 남을 문서 확인 → 새 스냅샷 → 옛 스냅샷 삭제"로 다시 쓴다.
 // 모든 조치는 --by·--reason 과 함께 .cache/archive/{team}.jsonl 에 남는다 (리뷰 없는 cold 쓰기의 감사 기록).
 package archive
 
@@ -108,7 +108,7 @@ func (s *Service) Purge(ctx context.Context, team, path string, a Audit) (string
 	if err != nil {
 		return "", err
 	}
-	snaps, err := s.rewriteIndex(ctx, index, func(target string) error {
+	snaps, err := s.rewriteIndex(ctx, index, path, func(target string) error {
 		_, err := opensearch.DeleteDoc(ctx, s.OS, []string{target}, s.Config.Workspace, path)
 		return err
 	})
@@ -170,7 +170,7 @@ func (s *Service) Edit(ctx context.Context, team, path, file string, a Audit) (s
 	if len(built.Chunks) == 0 || naming.IndexFor(built.Chunks[0]) != index {
 		return "", fmt.Errorf("고친 본문의 날짜가 %s 밖입니다 — 날짜를 바꾸려면 hot 에 새 문서로 쓰세요", index)
 	}
-	snaps, err := s.rewriteIndex(ctx, index, func(target string) error {
+	snaps, err := s.rewriteIndex(ctx, index, "", func(target string) error {
 		current, err := ingest.DocChunks(ctx, s.OS, []string{target}, s.Config.Workspace, path)
 		if err != nil {
 			return err
@@ -204,29 +204,34 @@ func (s *Service) hotFileExists(path string) bool {
 	return !errors.Is(err, fs.ErrNotExist)
 }
 
-// rewriteIndex 는 index 를 담은 스냅샷을 mutate 를 적용한 새 스냅샷으로 바꾼다. 새 스냅샷 이름을 돌려준다.
-// 인덱스가 열려 있으면(복원돼 있거나 hot) 그 자리에서 고치고, 아니면 검색 alias 없이 잠깐 복원해 고친다.
-func (s *Service) rewriteIndex(ctx context.Context, index string, mutate func(target string) error) (written []string, err error) {
+// rewriteIndex 는 index 를 담은 스냅샷들을 mutate 를 적용한 새 스냅샷 하나로 바꾼다. 새 스냅샷 이름을 돌려준다.
+// 같은 달의 스냅샷이 여럿이면(tier 뒤 늦게 들어온 문서) 전부를 합친 뒤 고친다 — 최신 하나만 고치고 옛것을 지우면
+// 옛 스냅샷에만 있던 문서를 잃는다. drop 은 mutate 가 지우는 문서다 (purge). 그 밖의 문서가 하나라도 빠졌으면
+// 옛 스냅샷을 지우지 않는다. 복원본이 열려 있으면 그 자리에서, 닫혀 있으면 검색 alias 없이 잠깐 복원해 고친다.
+func (s *Service) rewriteIndex(ctx context.Context, index, drop string, mutate func(target string) error) (written []string, err error) {
 	old, err := cold.SnapshotsOf(ctx, s.OS, s.Config, index)
 	if err != nil {
 		return nil, err
 	}
+	names := make([]string, 0, len(old))
 	for _, snap := range old {
 		if len(snap.Indices) != 1 {
 			return nil, fmt.Errorf("스냅샷 %s 에 다른 인덱스도 들어 있어 다시 쓸 수 없습니다: %v", snap.Name, snap.Indices)
 		}
+		names = append(names, snap.Name)
 	}
-	live, err := cold.LiveIndices(ctx, s.OS, index)
-	if err != nil {
+	restored, hot, err := cold.OpenState(ctx, s.OS, index)
+	switch {
+	case err != nil:
 		return nil, err
+	case len(names) == 0 && !restored && !hot:
+		return nil, fmt.Errorf("%s 를 담은 스냅샷이 없습니다", index)
+	case len(names) == 0:
+		return nil, mutate(index) // cold 로 간 적 없는 인덱스 — 그 자리에서 고치면 끝이다
+	case hot:
+		return nil, cold.Reopened(index)
 	}
-	if !live[index] {
-		if len(old) == 0 {
-			return nil, fmt.Errorf("%s 를 담은 스냅샷이 없습니다", index)
-		}
-		if err := cold.RestoreIndex(ctx, s.OS, s.Config, index, old[len(old)-1].Name, false); err != nil {
-			return nil, err
-		}
+	if !restored {
 		// 잠깐 복원한 인덱스는 어느 길로 끝나든 지운다 — 남으면 alias 없는 인덱스가 열린 채로 남고, 다음 조치가 그걸 hot 으로 착각한다
 		defer func() {
 			if derr := s.OS.Do(context.WithoutCancel(ctx), http.MethodDelete, "/"+index, nil, nil, nil); derr != nil && err == nil {
@@ -234,24 +239,45 @@ func (s *Service) rewriteIndex(ctx context.Context, index string, mutate func(ta
 			}
 		}()
 	}
+	if err := cold.RestoreAll(ctx, s.OS, s.Config, index, names); err != nil {
+		return nil, err
+	}
+	keep, err := cold.DocPaths(ctx, s.OS, index)
+	if err != nil {
+		return nil, err
+	}
+	delete(keep, drop)
 	if err := mutate(index); err != nil {
 		return nil, err
 	}
-	if len(old) > 0 {
-		name, err := cold.SnapshotIndex(ctx, s.OS, s.Config, index, s.Now())
-		if err != nil {
-			return nil, err
-		}
-		// 새 스냅샷의 목록을 통째로 남긴다 — 이 달이 ISM 스냅샷뿐이었어도 이제 목록이 덮는다
-		if err := cold.RecordIndexManifest(ctx, s.OS, s.Cold, s.Config, index, name); err != nil {
-			return nil, err
-		}
-		written = append(written, name)
-		for _, snap := range old {
-			if err := cold.DeleteSnapshot(ctx, s.OS, s.Config, snap.Name); err != nil {
-				return written, err
-			}
-		}
+	return s.replaceSnapshots(ctx, index, names, keep)
+}
+
+// replaceSnapshots 는 index 의 지금 내용을 새 스냅샷으로 뜨고, 남아야 할 문서(keep)가 모두 들어 있을 때만 옛 스냅샷과
+// 그 목록 줄을 지운다.
+func (s *Service) replaceSnapshots(ctx context.Context, index string, old []string, keep map[string]bool) ([]string, error) {
+	missing, err := cold.MissingDocs(ctx, s.OS, index, keep)
+	if err != nil {
+		return nil, err
 	}
-	return written, nil
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("다시 쓴 %s 에 문서 %d개가 빠져 옛 스냅샷을 지우지 않습니다: %v", index, len(missing), missing)
+	}
+	name, err := cold.SnapshotIndex(ctx, s.OS, s.Config, index, s.Now())
+	if err != nil {
+		return nil, err
+	}
+	// 새 스냅샷의 목록을 통째로 남긴다 — 이 달이 ISM 스냅샷뿐이었어도 이제 목록이 덮는다
+	if err := cold.RecordIndexManifest(ctx, s.OS, s.Cold, s.Config, index, name); err != nil {
+		return nil, err
+	}
+	idx, _ := naming.ParseIndex(index)
+	deleted := make([]string, 0, len(old))
+	for _, snap := range old {
+		if err := cold.DeleteSnapshot(ctx, s.OS, s.Config, snap); err != nil {
+			return []string{name}, errors.Join(err, cold.DropSnapshotsFromManifest(ctx, s.Cold, idx.Team, index, deleted))
+		}
+		deleted = append(deleted, snap)
+	}
+	return []string{name}, cold.DropSnapshotsFromManifest(ctx, s.Cold, idx.Team, index, deleted)
 }
