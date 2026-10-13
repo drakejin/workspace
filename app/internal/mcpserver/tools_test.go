@@ -2,11 +2,15 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/drakejin/workspace/app/internal/cold"
+	"github.com/drakejin/workspace/app/internal/config"
 	"github.com/drakejin/workspace/app/internal/ingest"
+	"github.com/drakejin/workspace/app/internal/opensearch"
 )
 
 // RUN-14: confirmed 없는 restore_cold 는 그 인덱스가 정말 cold 에 있는지 먼저 본다 — 없는 인덱스를 두고 사용자에게
@@ -25,6 +29,41 @@ func TestRestoreWithoutConfirmationChecksTheIndexIsInCold(t *testing.T) {
 	out, err := h.Restore(ctx, RestoreInput{Index: "mem-ads-2026.06"})
 	if err != nil || !strings.Contains(out, "복원할까요") || !strings.Contains(out, "confirmed=true") {
 		t.Errorf("cold 에 있는 인덱스는 먼저 물으라고 돌려준다: %q %v", out, err)
+	}
+}
+
+// coldStateHandlers 는 hintHandlers 의 cold 인덱스(mem-ads-2026.06)가 지금 settings·aliases 처럼 열려 있는 Handlers 다.
+func coldStateHandlers(settings, aliases string) *Handlers {
+	os := routeOS{
+		"/_snapshot/mem-cold/_all": `{"snapshots":[{"snapshot":"cold-mem-ads-2026.06","indices":["mem-ads-2026.06"],"state":"SUCCESS","start_time":"2026-10-01T00:00:00Z"}]}`,
+		"/mem-*/_search":           `{"aggregations":{"teams":{"buckets":[{"key":"ads"}]}}}`,
+		"/mem-ads-*/_settings":     settings,
+		"/mem-ads-*/_alias":        aliases,
+	}
+	cfg := config.Config{Workspace: "ws", DefaultTeam: "ads", HotDays: 60, Snapshot: config.Snapshot{Repository: "mem-cold"}}
+	return &Handlers{Deps: Deps{Config: cfg, OS: os}, ready: true}
+}
+
+// R4-query-b-5: list_cold 가 [현재 복원됨] 으로 보이는 인덱스를 두고 confirmed 없는 restore_cold 가 사용자에게 "복원할까요" 를
+// 묻게 시키지 않는다 — 이미 검색에 나온다고 알린다. hot 에 다시 열린 인덱스([hot 에 다시 열림])는 지금 복원할 수 없다고 바로
+// 알리고, 합치다 멈춘 복원본([복원 중단])은 예전처럼 먼저 물으라고 돌려준다.
+func TestRestoreWithoutConfirmationFollowsTheColdMark(t *testing.T) {
+	unmanaged := `{"mem-ads-2026.06":{"settings":{"` + opensearch.AutoManageSetting + `":"false"}}}`
+	searchable := `{"mem-ads-2026.06":{"aliases":{"mem-ads-hot":{}}}}`
+	ctx := context.Background()
+	in := RestoreInput{Index: "mem-ads-2026.06"}
+
+	restored, err := coldStateHandlers(unmanaged, searchable).Restore(ctx, in)
+	if err != nil || strings.Contains(restored, "복원할까요") || !strings.Contains(restored, "이미 복원") || !strings.Contains(restored, searchHint) {
+		t.Errorf("이미 복원된 인덱스 = %q %v", restored, err)
+	}
+	partial, err := coldStateHandlers(unmanaged, `{"mem-ads-2026.06":{"aliases":{}}}`).Restore(ctx, in)
+	if err != nil || !strings.Contains(partial, "복원할까요") {
+		t.Errorf("합치다 멈춘 복원본은 먼저 묻는다 = %q %v", partial, err)
+	}
+	reopened, err := coldStateHandlers(`{"mem-ads-2026.06":{"settings":{}}}`, searchable).Restore(ctx, in)
+	if !errors.Is(err, cold.ErrReopened) || strings.Contains(reopened, "복원할까요") {
+		t.Errorf("hot 에 다시 열린 인덱스 = %q %v", reopened, err)
 	}
 }
 

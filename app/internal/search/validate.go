@@ -47,8 +47,9 @@ func Validate(r Request) error {
 	return validateNames(r)
 }
 
-// validateTimeRange 는 범위의 두 경계를 본다 — OpenSearch 가 읽는 꼴인지, 그리고 뒤집혔는지(맞는 문서가 있을 수 없다).
-// 뒤집힘은 날짜·시각·date math 가 섞여도 요청의 시간대(timeZone)로 계산해 조용한 0건 대신 거부한다.
+// validateTimeRange 는 범위의 두 경계를 본다 — 받는 꼴(boundForms: OpenSearch 가 읽는 꼴 중 흔한 것 — datemath.go)인지,
+// 그리고 뒤집혔는지(맞는 문서가 있을 수 없다). 뒤집힘은 날짜·시각·date math 가 섞여도 요청의 시간대(timeZone)로 계산해 조용한
+// 0건 대신 거부한다.
 func validateTimeRange(tr model.TimeRange, timeZone string) error {
 	loc := locationOf(timeZone)
 	for _, b := range []struct{ name, v string }{{"time_range.from", tr.From}, {"time_range.to", tr.To}} {

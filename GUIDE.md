@@ -201,17 +201,18 @@ launchd 가 없는 머신은 nohup 백그라운드라(`[memory-daemon] backgroun
 | --- | --- | --- |
 | `search_memory` | `query?`, `project?`, `topic?`, `date?`(YYYY-MM-DD), `time_range?{from,to}`, `doc_type?`, `team?`, `org?`, `size?`, `include_superseded?` | hot BM25 검색, 또는 질의어 없이 필터로 가져오기(최신순, 문서 하나에 한 건). 밀린 문서·deprecate 된 문서는 기본으로 숨긴다. 쓰기 쪽 bootstrap 없이 읽기만 한다 — cold·스냅샷 설정이 잘못돼도 이미 색인된 문서는 찾는다 |
 | `search_filters` | `project?`, `topic?`, `date?`, `time_range?`, `doc_type?`, `team?`, `org?`, `include_superseded?` | 필터에 쓸 수 있는 값과 문서 수 — 프로젝트·주제·문서 종류·날짜 범위·날짜별 수. 값이 100개를 넘는 필터는 `외 문서 N건(…상위만 보임…)` 으로 잘린 것을 알린다 |
-| `related_docs` | `path`, `depth?`(1~3, 기본 2) | 그래프에서 이어진 문서와 그 경로(관계·이유). depth 2 면 같은 entity·같은 repo 를 다루는 문서도. `path` 는 `ingest_path` 처럼 맞춘다(`./docs/…`·meta-repo 안의 절대 경로·디스크의 철자). 이어진 것이 없으면 `그래프에 없는 문서입니다`(경로 오타, 아직 그래프에 없는 새 문서) 와 `그래프에 있지만 이어진 문서가 없습니다` 를 가른다 |
+| `related_docs` | `path`, `depth?`(1~3, 기본 2) | 그래프에서 이어진 문서와 그 경로(관계·이유). depth 2 면 같은 entity·같은 repo 를 다루는 문서도. `path` 는 `ingest_path` 처럼 맞춘다(`./docs/…`·meta-repo 안의 절대 경로·디스크의 철자 — `META_REPO_ROOT` 가 링크 경로면 링크를 푼 철자의 절대 경로도). meta-repo 밖의 경로는 `related_docs: meta-repository 밖의 경로입니다` 로 거부한다. 이어진 것이 없으면 `그래프에 없는 문서입니다`(경로 오타, 아직 그래프에 없는 새 문서) 와 `그래프에 있지만 이어진 문서가 없습니다` 를 가른다 |
 | `docs_by_entity` | `entity` (`order-api` 또는 `service:order-api`, 부분 일치) | 증류 entity 로 문서 찾기. 기본 검색에서 숨는 문서에는 `related_docs` 와 같은 상태 이름 `(superseded)`·`(deprecated)` 를 붙인다 |
 | `ingest_path` | `path`(meta-repo 기준), `team?` | 데몬보다 먼저 색인 (meta-repo 밖 경로는 거부). 경로는 디스크의 철자(대소문자·NFC)로 맞춘다. 데몬과 같은 게이트 — 바이너리·`MEMORY_MAX_FILE_BYTES` 초과는 색인하지 않고 `N개 건너뜀 … - <path> (<이유>)` 로 알린다. 새로 쓴 내용은 다음 데몬 사이클이 판정·증류·그래프로 넘긴다 (데몬이 이미 넘겨받은 같은 내용을 다시 적재하면 넘기지 않는다). `team` 은 이번 적재에만 쓰는 일회성이다 — frontmatter 를 바꾸지 않으므로 파일이 바뀌면 데몬이 frontmatter team(없으면 기본 팀)으로 다시 쓴다. 계속 둘 팀은 frontmatter `team:` 에 적는다 |
 | `list_cold` | `team?` | cold 인덱스 목록 (그 인덱스를 담은 스냅샷 전부·최근 시각, 복원 여부). 이 meta-repo 의 팀만 |
-| `restore_cold` | `index`, `confirmed?` | cold 인덱스 복원 — 그 인덱스를 담은 스냅샷 전부를 합친다. 먼저 이 workspace 팀의 cold 에 그 인덱스가 있는지 보고, 없으면 `confirmed` 와 상관없이 `cold 에 … 가 없습니다 — list_cold …` 로 실패한다. 있으면 `confirmed=true` 없이는 복원하지 않고 "사용자에게 먼저 물으라" 고 돌려준다 |
+| `restore_cold` | `index`, `confirmed?` | cold 인덱스 복원 — 그 인덱스를 담은 스냅샷 전부를 합친다. 먼저 이 workspace 팀의 cold 에 그 인덱스가 있는지 보고, 없으면 `confirmed` 와 상관없이 `cold 에 … 가 없습니다 — list_cold …` 로 실패한다. 있으면 `confirmed=true` 없이는 복원하지 않고 "사용자에게 먼저 물으라" 고 돌려준다 — 이미 복원돼 검색에 나오는 인덱스(`list_cold` 의 `[현재 복원됨]`)는 `이미 복원돼 있어 … 물을 필요도 없습니다`, hot 에 다시 열린 인덱스는 지금 복원할 수 없다는 오류로 답한다 |
 
 ### 3.3 SessionStart 훅
 
 `.claude/settings.json` 이 세션을 열 때마다 `scripts/session-context/run.sh` 를 부른다. 세션 디렉토리가 `main/{repo}` 나 그 worktree
 (`main/{repo}/.worktrees/{issue}`)면 repo 이름과 브랜치 이름의 단어로 메모리를 검색해 상위 5건의 경로를 맥락으로 붙인다.
-세션 디렉토리와 `META_REPO_ROOT` 는 심볼릭 링크를 풀어 비교한다 — 한쪽만 링크 경로여도(macOS 의 `/var` → `/private/var`) 같은 repo 로 본다.
+세션 디렉토리와 `META_REPO_ROOT` 는 적힌 철자와 심볼릭 링크를 푼 철자를 모두 본다 — 한쪽만 링크 경로여도(macOS 의 `/var` → `/private/var`),
+`main/{repo}` 가 meta-repo 밖의 checkout 을 가리키는 링크여도(세션 디렉토리가 링크 철자든 푼 철자든) 같은 repo 로 본다.
 판정 질문이 쌓여 있으면 "사용자에게 `scripts/memory/run.sh questions` 를 알려 줄 것" 도 붙인다. 발표 Q&A 의 "search_memory 를 안 부르면?" 에 대한 답이다.
 빌드·검색이 실패하면 아무것도 출력하지 않는다 (세션을 막지 않는다).
 
@@ -347,11 +348,14 @@ team=demo · project=order-api, time_range=2026-10-01~ · 문서 3건 (필터, �
 프로젝트는 `docs/repository/{프로젝트}/`·`main/{프로젝트}/docs/` 경로나 frontmatter `repo`/`project` 에서 정한다. `-from` 처럼 날짜만 주면 그날 전체가 들어간다.
 주제는 NFC·소문자로, 글자·숫자가 아닌 것은 하이픈으로 맞춰 비교한다 — Finder 가 NFD 로 만든 디렉토리 이름도 친 그대로 맞는다.
 글자·숫자가 하나도 없는 주제(`-topic '!!!'`)나 공백뿐인 프로젝트는 필터를 조용히 빼지 않고 `topic 에 글자·숫자가 없습니다` 로 거부한다.
-프로젝트는 대소문자를 가리지 않는다(`-project Alpha-API` 도 `alpha-api` 를 찾는다). `-from`/`-to`(`time_range`)는 OpenSearch 가 읽는 꼴만 받는다 —
+프로젝트는 대소문자를 가리지 않는다(`-project Alpha-API` 도 `alpha-api` 를 찾는다). `-from`/`-to`(`time_range`)는 OpenSearch 가 읽는 꼴 중 흔한 것만 받는다 —
 날짜(`2026-10-01`, `2026-10`, `2026`), 시각(`2026-10-01T09`, `2026-10-01T09:00:00.5+09:00`, 시간대 생략 가능), epoch 밀리초, date math(`now-30d`, `now-d`, `now-7d/d`, `2026-10-01||+1M`).
+OpenSearch 가 읽더라도 드문 꼴(쉼표 소수 `…:00,5`, 초까지 적은 오프셋 `+09:00:00`, 소수 epoch, 끝의 `T`, 다섯 자리 연도, 오프셋 뒤의 `Z`)과 없는 날(`2026-02-30` — OpenSearch 는 `-to` 에서 그달 끝으로 당긴다)은 거부한다.
+epoch 밀리초는 시간대를 입히지 않은 그 시각이다 (OpenSearch 는 epoch 에도 `time_zone` 을 입혀 서울이면 9시간 이르게 읽으므로 같은 시각의 UTC 표기로 바꿔 보낸다 — 뒤의 date math 는 다른 경계처럼 `MEMORY_TIME_ZONE` 에서 계산한다).
+시간대 없는 시각과 date math 는 서머타임이 바뀌는 날도 OpenSearch(java.time)처럼 읽는다 — 없는 시각(틈)은 틈 길이만큼 늦게, 두 번 오는 시각(겹침)은 앞의 것으로.
 `yesterday` 같은 값이나 뒤집힌 범위(`-from` 이 `-to` 보다 늦다 — 날짜·시각·date math 가 섞여도 OpenSearch 처럼 계산한다)는 OpenSearch 에 묻기 전에
 무엇이 틀렸는지(뒤집혔으면 두 경계를 읽은 시각까지) 알리며 거부한다. 연·월만 적은 `-to 2026-10` 은 OpenSearch 규칙대로 10월 1일 끝까지다 — 달 전체는 `-to '2026-10||/M'`.
-팀·org 의 hot 색인이 없으면 0건이 아니라 `team=… 의 hot 색인이 없습니다` 로 구별하고 까닭 셋(이름 오타, 아직 적재 전, 문서가 모두 cold 로 내려감)과
+팀·org 의 hot 색인이 없으면 0건이 아니라 `team=… 의 hot 색인이 없습니다` 로 구별하고 까닭 셋(이름 오타, 아직 적재 전, 문서가 모두 cold 로 내려감 — org 는 하나 더: 검색은 org alias 를 만들지 않으므로 `MEMORY_TEAM_ORGS` 를 바꾼 뒤 `scripts/memory/run.sh bootstrap`·데몬 재시작 전)과
 `list_cold(CLI: list-cold)` 를 함께 알린다. 가져오기가 잘렸을 때 size 가 이미 상한(50)이면 size 대신 필터를 좁히라고 안내한다 (페이지 넘김은 없다).)
 
 ### 4.3 그래프

@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,4 +106,66 @@ func TestParseEnvelope(t *testing.T) {
 	if _, ok := ParseEnvelope("nothing"); ok {
 		t.Error("없으면 false")
 	}
+}
+
+// heldFor 는 가짜 claude 가 남긴 자식이 stdout 을 쥐고 있는 시간이다 — 기다리지 않는다면 이 시간보다 한참 먼저 돌아온다.
+const heldFor = 20 * time.Second
+
+// R4-daemon-b-7: 끊긴 호출(시간 초과·데몬 종료)은 claude 가 띄운 자식이 stdout 을 쥐고 있어도 그 자식을 기다리지 않는다 — 예전에는
+// claude 를 죽인 뒤에도 Wait 가 파이프가 닫힐 때까지(자식이 끝날 때까지) 묶여, 데몬 종료가 LLM 시간 상한만큼 늦었다.
+func TestAskDoesNotWaitForAChildHoldingStdoutAfterCancel(t *testing.T) {
+	started := filepath.Join(t.TempDir(), "started")
+	bin := fakeClaude(t, fmt.Sprintf("touch %s\nsleep %d\necho '{}'", started, int(heldFor.Seconds())))
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan bool)
+	var logs []string
+	go func() {
+		_, ok := asker(bin, &logs).Ask(ctx, input)
+		done <- ok
+	}()
+	waitForFile(t, started)
+
+	cancel()
+	begin := time.Now()
+
+	select {
+	case ok := <-done:
+		if ok {
+			t.Error("끊긴 호출은 폴백이다")
+		}
+		if waited := time.Since(begin); waited > heldFor/2 {
+			t.Errorf("자식이 끝나기를 %v 기다렸다", waited)
+		}
+	case <-time.After(heldFor + 5*time.Second):
+		t.Fatal("끊긴 호출이 돌아오지 않는다")
+	}
+}
+
+// R4-daemon-b-7: claude 가 답을 쓰고 끝났는데 남은 자식이 stdout 을 쥐고 있으면, 그 자식을 기다리지 않고 받은 답을 쓴다.
+func TestAskKeepsTheAnswerWhenAChildHoldsStdout(t *testing.T) {
+	bin := fakeClaude(t, fmt.Sprintf("sleep %d &\necho '{\"subtype\":\"success\",\"structured_output\":{\"ok\":true}}'", int(heldFor.Seconds())))
+	var logs []string
+	begin := time.Now()
+
+	raw, ok := asker(bin, &logs).Ask(context.Background(), input)
+
+	if !ok || string(raw) != `{"ok":true}` {
+		t.Errorf("답 = %s %v %v", raw, ok, logs)
+	}
+	if waited := time.Since(begin); waited > heldFor/2 {
+		t.Errorf("자식이 끝나기를 %v 기다렸다", waited)
+	}
+}
+
+// waitForFile 은 가짜 claude 가 파일을 만들 때까지 기다린다 (새 실행 파일의 첫 기동이 느린 머신에서도).
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(heldFor)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("가짜 claude 가 %s 를 만들지 않았다", path)
 }

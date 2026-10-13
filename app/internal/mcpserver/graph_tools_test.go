@@ -75,6 +75,35 @@ func TestRelatedDocsNormalizesTheTypedPath(t *testing.T) {
 	}
 }
 
+// R4-query-b-3: related_docs 는 읽기만 한다 — meta-repo 밖의 경로를 거부할 때 ingest_path 의 "적재할 수 없습니다" 를 빌려 쓰지
+// 않는다. META_REPO_ROOT 가 심볼릭 링크 경로(/var/…)여도 링크를 푼 철자(/private/var/…)로 준 절대 경로는 meta-repo 안이다.
+func TestRelatedDocsPathRulesForAReadOnlyLookup(t *testing.T) {
+	h, root := graphHandlers(t)
+	link := filepath.Join(t.TempDir(), "meta-link")
+	if err := os.Symlink(root, link); err != nil {
+		t.Fatal(err)
+	}
+	real, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.Config.MetaRepoRoot = link
+	ctx := context.Background()
+
+	_, outside := h.Related(ctx, RelatedInput{Path: "../outside.md"})
+	if outside == nil || strings.Contains(outside.Error(), "적재") || !strings.Contains(outside.Error(), "related_docs") ||
+		!strings.Contains(outside.Error(), "meta-repository 밖") {
+		t.Errorf("밖의 경로 = %v", outside)
+	}
+	for _, typed := range []string{filepath.Join(real, limitsV2), filepath.Join(link, limitsV2)} {
+		out, err := h.Related(ctx, RelatedInput{Path: typed, Depth: 1})
+
+		if err != nil || !strings.HasPrefix(out, limitsV2+" 와 이어진 문서 1건") {
+			t.Errorf("related_docs %q = %q %v", typed, out, err)
+		}
+	}
+}
+
 // RUN-13: 그래프에 없는 문서와, 그래프에 있지만 이어진 것이 없는 문서를 같은 말로 답하지 않는다.
 func TestRelatedDocsTellsMissingFromUnconnected(t *testing.T) {
 	h, _ := graphHandlers(t)

@@ -181,8 +181,12 @@ func (f flags) usageErr() error {
 	return fmt.Errorf("%w: %s", ErrUsage, f.help())
 }
 
-// invalid 는 이 명령의 인자가 틀렸다는 사용 오류다 — 무엇이 틀렸는지와 사용법·플래그 표를 함께 보인다.
+// invalid 는 이 명령의 인자가 틀렸다는 사용 오류다 — 무엇이 틀렸는지와 사용법·플래그 표를 함께 보인다. 원인이 이미 명령
+// 이름으로 시작하면(bench.Options.Validate 의 "bench: …") 이름을 다시 붙이지 않는다.
 func (f flags) invalid(err error) error {
+	if strings.HasPrefix(err.Error(), f.name+": ") {
+		return fmt.Errorf("%w: %w\n%s", ErrUsage, err, f.help())
+	}
 	return fmt.Errorf("%w: %s: %w\n%s", ErrUsage, f.name, err, f.help())
 }
 
