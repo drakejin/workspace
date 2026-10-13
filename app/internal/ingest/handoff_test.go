@@ -11,6 +11,7 @@ import (
 	"github.com/drakejin/workspace/app/internal/cold"
 	"github.com/drakejin/workspace/app/internal/config"
 	"github.com/drakejin/workspace/app/internal/document"
+	"github.com/drakejin/workspace/app/internal/model"
 	"github.com/drakejin/workspace/app/internal/opensearch"
 )
 
@@ -107,7 +108,7 @@ func TestWriteOutsideTheDaemonMarksChunkZeroForTheNextCycle(t *testing.T) {
 			store := cold.NewLocalStore(t.TempDir())
 			deps := unitDeps(root, os, store)
 			if c.daemon {
-				deps.SupersededBy = func(string) string { return "" }
+				deps.SupersededBy = func(string) (string, bool) { return "", false }
 			}
 			ix := New(deps)
 			p, err := ix.Prepare(ctx, rel, "")
@@ -149,11 +150,52 @@ func TestIngestPathWritesChunkZeroOfABlankDocument(t *testing.T) {
 	}
 	for _, rel := range blank {
 		head := os.head(t, rel)
-		if sha, _ := head["content_sha"].(string); sha == "" || head["mtime_ms"] == float64(0) || head["text"] != "" {
+		if sha, _ := head["content_sha"].(string); sha == "" || head["mtime_ms"] == float64(0) {
 			t.Errorf("%s 청크 0 = %v", rel, head)
+		}
+		// R2-handoff-1: 본문이 없는 청크는 text 필드 없이 쓴다 — 검색이 text 가 있는 청크만 보여 빈 문서가 결과에 나오지 않는다
+		if text, has := head["text"]; has {
+			t.Errorf("%s 청크 0 에 text(%q)가 있다", rel, text)
 		}
 		if _, ok, err := cold.Archived(ctx, store, unitTeam, rel); err != nil || !ok {
 			t.Errorf("%s 의 cold store 청크 = %v %v", rel, ok, err)
 		}
+	}
+}
+
+// IDX-13: 데몬이 다시 쓰는 문서는 지금 알려진 숨김 표시(superseded_by 와 deprecated 둘 다)를 잇는다 — 예전에는 deprecated 를 늘 false
+// 로 써서, 사이클 끝의 수렴이 되돌리기 전까지 deprecate 한 문서가 기본 검색에 보였다.
+func TestDaemonWriteCarriesBothHiddenFlags(t *testing.T) {
+	const rel = "docs/specs/old/spec.md"
+	ctx := context.Background()
+	root := t.TempDir()
+	writeFile(t, root, rel, []byte("# 낡은 스펙\n## 하나\nOne\n## 둘\nTwo\n"))
+	os := &recordOS{}
+	deps := unitDeps(root, os, cold.NewLocalStore(t.TempDir()))
+	deps.SupersededBy = func(string) (string, bool) { return "docs/specs/old/spec-v2.md", true }
+	ix := New(deps)
+	p, err := ix.Prepare(ctx, rel, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Built.Chunks) < 2 {
+		t.Fatalf("청크 = %d", len(p.Built.Chunks))
+	}
+	for _, c := range p.Built.Chunks {
+		if c.SupersededBy != "docs/specs/old/spec-v2.md" || !c.Deprecated {
+			t.Errorf("청크 %d = superseded_by %q deprecated %v", c.ChunkIndex, c.SupersededBy, c.Deprecated)
+		}
+	}
+}
+
+// IDX-12: 숨김 표시는 청크의 사본에 붙인다 — 받은 슬라이스를 제자리에서 고치지 않는다.
+func TestWithFlagsReturnsACopy(t *testing.T) {
+	in := []model.Chunk{{SourcePath: "a.md"}, {SourcePath: "a.md", ChunkIndex: 1}}
+	out := WithFlags(in, "b.md", true)
+	if in[0].SupersededBy != "" || in[1].Deprecated {
+		t.Errorf("받은 청크를 고쳤다: %+v", in)
+	}
+	if len(out) != 2 || out[0].SupersededBy != "b.md" || !out[1].Deprecated || out[1].ChunkIndex != 1 {
+		t.Errorf("사본 = %+v", out)
 	}
 }

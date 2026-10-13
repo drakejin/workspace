@@ -141,6 +141,9 @@ func BuildQuery(r Request) map[string]any {
 			map[string]any{"term": map[string]any{"deprecated": true}},
 		}
 	}
+	// 본문이 있는 청크만 돌려준다 — 본문이 없는 문서(빈 파일·frontmatter 만)의 청크 0 은 text 가 없다. 필터로만 가져오기(최신순)의
+	// 맨 위를 빈 결과로 차지해 size 안의 진짜 문서를 밀어내거나 세션 훅의 맥락에 들어가지 않게 (색인에는 남아 search_filters 의 수에는 든다)
+	query["post_filter"] = map[string]any{"exists": map[string]any{"field": "text"}}
 	return query
 }
 
