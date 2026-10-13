@@ -254,6 +254,12 @@ func BestNeighbor(ctx context.Context, c opensearch.Client, d DiffEntry, workspa
 	return &list[0], nil
 }
 
+// neighborScope 는 BestNeighbor 가 견주는 범위(같은 프로젝트·같은 문서 종류)의 키다. 판정 결론도 이 범위 안에서만
+// 내용을 따라간다 — 다른 프로젝트·종류의 사본은 판정이 짝지은 적이 없다.
+func neighborScope(project string, docType model.DocType) string {
+	return project + "\x00" + string(docType)
+}
+
 // readBody 는 판정에 쓸 원문 본문이다. 검색은 경로를 돌려주고 본문은 원문을 읽는다.
 func readBody(root, rel, fallback string) string {
 	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))

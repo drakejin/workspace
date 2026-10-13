@@ -239,7 +239,7 @@ func (s *Service) rewriteIndex(ctx context.Context, index, drop string, mutate f
 			}
 		}()
 	}
-	if err := cold.RestoreAll(ctx, s.OS, s.Config, index, names, false); err != nil {
+	if err := cold.RestoreAll(ctx, s.OS, s.Config, index, names); err != nil {
 		return nil, err
 	}
 	keep, err := cold.DocPaths(ctx, s.OS, index)

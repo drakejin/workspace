@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -49,8 +50,27 @@ func TestCloneReposCallsCloneScript(t *testing.T) {
 	}
 }
 
-var makeTarget = regexp.MustCompile(`(?:^|[^A-Za-z0-9_-])make ([a-z][a-z0-9-]*)`)
+// makeCommand 는 주석·메시지에서 make 로 타깃을 부르는 자리다. 영어 산문("make sure")은 거르고 명령으로 쓴 자리만 본다:
+// 코드 표기(`make x …`), 따옴표·괄호로 감싼 명령('make x', "make x", (make x)), 명령 줄의 make(줄 머리, 프롬프트 "$ ",
+// &&·||·;·| 뒤). 한국어 문장 속 명령도 이 중 하나로 쓴다.
+var makeCommand = regexp.MustCompile("`make ([a-z][a-z0-9-]*)[^`]*`" +
+	`|'make ([a-z][a-z0-9-]*)'|"make ([a-z][a-z0-9-]*)"|\(make ([a-z][a-z0-9-]*)\)` +
+	`|(?:^\s*|\$ |&&\s*|\|\|?\s*|;\s*)make ([a-z][a-z0-9-]*)`)
 var makefileTarget = regexp.MustCompile(`^([a-z][a-z0-9-]*):`)
+
+// makeTargetsIn 은 line 에서 make 로 부르는 타깃들이다 (makeCommand 의 자리마다 하나).
+func makeTargetsIn(line string) []string {
+	var out []string
+	for _, m := range makeCommand.FindAllStringSubmatch(line, -1) {
+		for _, target := range m[1:] {
+			if target != "" {
+				out = append(out, target)
+				break
+			}
+		}
+	}
+	return out
+}
 
 // FILE-6 / FILE-7 / DEAD-15: 스크립트·예제 주석이 가리키는 make 타깃은 실제로 있어야 하고,
 // 없어진 memory-up(지금은 make memory-init)을 가리키지 않는다.
@@ -64,16 +84,48 @@ func TestCommentsNameLiveCommands(t *testing.T) {
 			}
 		}
 	}
+	checked := 0
 	for _, rel := range commentFiles(t, root) {
 		for n, line := range readLines(t, filepath.Join(root, rel)) {
-			for _, m := range makeTarget.FindAllStringSubmatch(line, -1) {
-				if !targets[m[1]] {
-					t.Errorf("%s:%d: 없는 타깃 'make %s'", rel, n+1, m[1])
+			for _, target := range makeTargetsIn(line) {
+				checked++
+				if !targets[target] {
+					t.Errorf("%s:%d: 없는 타깃 'make %s'", rel, n+1, target)
 				}
 			}
 			if strings.Contains(line, "memory-up") {
 				t.Errorf("%s:%d: 없어진 memory-up 을 가리킨다 (make memory-init)", rel, n+1)
 			}
+		}
+	}
+	if checked == 0 {
+		t.Error("make 타깃을 하나도 찾지 못했다 — 검사가 헛돈다")
+	}
+}
+
+// R1-shell-4: 주석·메시지의 영어 산문("make sure")은 타깃으로 보지 않는다 — 명령으로 쓴 자리만 본다.
+func TestMakeTargetsInCommandContextsOnly(t *testing.T) {
+	cases := []struct {
+		line string
+		want []string
+	}{
+		{"# make sure the stack is up before running", nil},
+		{"# Please make sure that OpenSearch answers", nil},
+		{"echo \"make sure docker is running\"", nil},
+		{"# (make sure it is up) 먼저", nil},
+		{"# 스택 종료 (make memory-init) — 다시 만든다", []string{"memory-init"}},
+		{"echo \"다음: 'make memory-daemon-start' 로 데몬을 상주시키세요\"", []string{"memory-daemon-start"}},
+		{"# 먼저 `make memory-daemon-stop` 을 하세요", []string{"memory-daemon-stop"}},
+		{"# 코드 표기 안의 인자도 된다: `make memory-init FOO=1`", []string{"memory-init"}},
+		{"#   $ make memory-init", []string{"memory-init"}},
+		{"make memory-init", []string{"memory-init"}},
+		{"    cd app && make test-e2e", []string{"test-e2e"}},
+		{"build; make lint || make fmt", []string{"lint", "fmt"}},
+		{"# remake things, automake it", nil},
+	}
+	for _, tc := range cases {
+		if got := makeTargetsIn(tc.line); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("makeTargetsIn(%q) = %q, want %q", tc.line, got, tc.want)
 		}
 	}
 }

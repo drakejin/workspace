@@ -46,7 +46,11 @@ func judgedPair(t *testing.T) (config.Config, *daemon.Daemon, *fakeLLM) {
 
 func movePath(t *testing.T, root, from, to string) {
 	t.Helper()
-	if err := os.Rename(filepath.Join(root, filepath.FromSlash(from)), filepath.Join(root, filepath.FromSlash(to))); err != nil {
+	dst := filepath.Join(root, filepath.FromSlash(to))
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil { // git mv 처럼 새 디렉토리도 만든다
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(root, filepath.FromSlash(from)), dst); err != nil {
 		t.Fatal(err)
 	}
 }
