@@ -76,7 +76,7 @@ func (s *Service) Deprecate(ctx context.Context, team, path, supersededBy string
 	if err := s.record(team, state.ArchiveRecord{Action: state.ArchiveDeprecate, Path: path, SupersededBy: supersededBy, By: a.By, Reason: a.Reason}); err != nil {
 		return "", err
 	}
-	if err := opensearch.UpdateDoc(ctx, s.OS, []string{naming.AllPattern}, s.Config.Workspace, path, map[string]any{"deprecated": true}); err != nil {
+	if err := s.setDeprecated(ctx, team, path, true); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("%s: deprecated — 기본 검색에서 빠집니다 (include_superseded 로는 보인다). 기록: .cache/archive/%s.jsonl", path, team), nil
@@ -90,10 +90,20 @@ func (s *Service) Undeprecate(ctx context.Context, team, path string, a Audit) (
 	if err := s.record(team, state.ArchiveRecord{Action: state.ArchiveRestore, Path: path, By: a.By, Reason: a.Reason}); err != nil {
 		return "", err
 	}
-	if err := opensearch.UpdateDoc(ctx, s.OS, []string{naming.AllPattern}, s.Config.Workspace, path, map[string]any{"deprecated": false}); err != nil {
+	if err := s.setDeprecated(ctx, team, path, false); err != nil {
 		return "", err
 	}
 	return path + ": deprecated 해제", nil
+}
+
+// setDeprecated 는 팀의 열린 인덱스(복원한 달 포함)에 있는 문서 청크의 deprecated 를 바꾼다 — mem-* 전체가 아니라 그 팀의
+// 인덱스에만 보내 다른 workspace 의 인덱스 변화에 실패하지 않게 한다. 열린 인덱스가 없으면 할 일이 없다(복원할 때 원장대로 입힌다).
+func (s *Service) setDeprecated(ctx context.Context, team, path string, deprecated bool) error {
+	indices, err := opensearch.TeamIndices(ctx, s.OS, team)
+	if err != nil {
+		return err
+	}
+	return opensearch.UpdateDoc(ctx, s.OS, indices, s.Config.Workspace, path, map[string]any{"deprecated": deprecated})
 }
 
 // Purge 는 cold 문서를 원본(raw)·청크·스냅샷에서 지운다 (개인정보 등). hot 에 파일이 있으면 거부한다.

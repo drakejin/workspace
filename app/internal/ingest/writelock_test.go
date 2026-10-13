@@ -109,12 +109,12 @@ func TestRemoveFileRemovesAnOutOfScopePath(t *testing.T) {
 	if err := store.Put(ctx, cold.ChunksKey(unitTeam, legacy), "{}\n"); err != nil {
 		t.Fatal(err)
 	}
-	log := &opLog{}
-	ix := New(unitDeps(root, &orderOS{name: "audit", log: log}, store))
+	os := &scopedOS{}
+	ix := New(unitDeps(root, os, store))
 	if _, err := ix.RemoveFile(ctx, legacy, nil); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(log.ops, ",") != "audit:delete" {
-		t.Errorf("범위 밖 경로를 색인에서 지우지 않았다: %v", log.ops)
+	if got := os.deletes(); len(got) != 1 {
+		t.Errorf("범위 밖 경로를 색인에서 지우지 않았다: %v", got)
 	}
 }

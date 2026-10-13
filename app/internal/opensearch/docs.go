@@ -123,3 +123,28 @@ func WorkspaceTeams(ctx context.Context, c Client, workspace string) (map[string
 	}
 	return teams, nil
 }
+
+// TeamIndices 는 teams 의 열린 메모리 인덱스다(정렬). 쓰기(_update_by_query·_delete_by_query)는 mem-* 전체가 아니라 여기에만
+// 보낸다 — 같은 스택의 다른 workspace 가 그 사이 인덱스를 지우면 mem-* 로 보낸 요청이 search_context_missing 으로 실패한다.
+// 팀 이름은 인덱스 이름을 풀어 정확히 맞춘다 (mem-t-* 패턴은 팀 t-x 의 인덱스까지 잡는다).
+func TeamIndices(ctx context.Context, c Client, teams ...string) ([]string, error) {
+	if len(teams) == 0 {
+		return nil, nil
+	}
+	want := make(map[string]bool, len(teams))
+	for _, t := range teams {
+		want[t] = true
+	}
+	settings, err := Settings(ctx, c, naming.AllPattern)
+	if err != nil {
+		return nil, fmt.Errorf("indices of teams %v: %w", teams, err)
+	}
+	var out []string
+	for index := range settings {
+		if idx, ok := naming.ParseIndex(index); ok && want[idx.Team] {
+			out = append(out, index)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}

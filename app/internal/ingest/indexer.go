@@ -308,7 +308,11 @@ func (ix *indexer) replaceChunks(ctx context.Context, p Prepared, index string) 
 	for _, c := range p.Built.Chunks {
 		keep = append(keep, c.ID)
 	}
-	if _, err := opensearch.DeleteDocExcept(ctx, ix.OS, []string{naming.AllPattern}, ix.Config.Workspace, p.Rel, index, keep); err != nil {
+	indices, err := ix.docIndices(ctx, p.Rel, p.Built.Meta.Team)
+	if err != nil {
+		return err
+	}
+	if _, err := opensearch.DeleteDocExcept(ctx, ix.OS, indices, ix.Config.Workspace, p.Rel, index, keep); err != nil {
 		return err
 	}
 	if len(p.Built.Chunks) > 1 {
@@ -426,7 +430,9 @@ func (ix *indexer) RemoveFile(ctx context.Context, input string, indices []strin
 		return 0, err
 	}
 	if indices == nil {
-		indices = []string{naming.AllPattern}
+		if indices, err = opensearch.TeamIndices(ctx, ix.OS, teams...); err != nil {
+			return 0, err
+		}
 	}
 	deleted, err := opensearch.DeleteDoc(ctx, ix.OS, indices, ix.Config.Workspace, rel)
 	if err != nil {
@@ -517,6 +523,15 @@ func (ix *indexer) ensureTeamOwner(ctx context.Context, team string) error {
 	ix.owned[team] = true
 	ix.mu.Unlock()
 	return nil
+}
+
+// docIndices 는 문서의 청크가 있을 수 있는 인덱스다 — 지금 그 문서를 가진 팀들(팀을 바꾼 문서의 옛 팀 포함)과 새로 쓸 팀의 인덱스.
+func (ix *indexer) docIndices(ctx context.Context, rel, team string) ([]string, error) {
+	teams, err := ix.teamsOf(ctx, rel)
+	if err != nil {
+		return nil, err
+	}
+	return opensearch.TeamIndices(ctx, ix.OS, append(teams, team)...)
 }
 
 func (ix *indexer) teamsOf(ctx context.Context, rel string) ([]string, error) {
