@@ -58,10 +58,25 @@ var makeCommand = regexp.MustCompile("`make ([a-z][a-z0-9-]*)[^`]*`" +
 	`|(?:^\s*|\$ |&&\s*|\|\|?\s*|;\s*)make ([a-z][a-z0-9-]*)`)
 var makefileTarget = regexp.MustCompile(`^([a-z][a-z0-9-]*):`)
 
-// makeTargetsIn 은 line 에서 make 로 부르는 타깃들이다 (makeCommand 의 자리마다 하나).
+// makeProse 는 주석·메시지의 꾸밈 없는 산문 속 명령이다 ("상주 데몬은 make memory-daemon-stop 으로 멈춘다").
+// 영어 산문("make sure", "make it")과 가르려고 타깃 꼴 — 하이픈이 든 kebab-case — 이고 뒤가 줄 끝·공백·문장부호일 때만 본다.
+// 하이픈이 없는 타깃(init, sync)을 산문으로 쓰면 보지 못하니 그런 것은 코드 표기(`make init`)로 쓴다.
+const makeProse = `(?:^|\s)make ([a-z][a-z0-9]*(?:-[a-z0-9]+)+)(?:$|[\s.,;:!?)\]"'])`
+
+// makeCommandOrProse 는 makeCommand 에 makeProse 를 더한 것이다 — 한 정규식이라 같은 자리를 두 번 세지 않는다.
+var makeCommandOrProse = regexp.MustCompile(makeCommand.String() + "|" + makeProse)
+
+// proseLine 은 산문 속 명령까지 볼 줄이다: 주석(# 뒤)이나 echo·printf 메시지.
+var proseLine = regexp.MustCompile(`(?:^|\s)#|\b(?:echo|printf)\b`)
+
+// makeTargetsIn 은 line 에서 make 로 부르는 타깃들이다 (makeCommand 의 자리마다 하나, 주석·메시지 줄이면 makeProse 의 자리도).
 func makeTargetsIn(line string) []string {
+	re := makeCommand
+	if proseLine.MatchString(line) {
+		re = makeCommandOrProse
+	}
 	var out []string
-	for _, m := range makeCommand.FindAllStringSubmatch(line, -1) {
+	for _, m := range re.FindAllStringSubmatch(line, -1) {
 		for _, target := range m[1:] {
 			if target != "" {
 				out = append(out, target)
@@ -122,6 +137,15 @@ func TestMakeTargetsInCommandContextsOnly(t *testing.T) {
 		{"    cd app && make test-e2e", []string{"test-e2e"}},
 		{"build; make lint || make fmt", []string{"lint", "fmt"}},
 		{"# remake things, automake it", nil},
+		// R2-followups-3: 주석·echo 의 꾸밈 없는 산문 속 명령도 본다 — 타깃 꼴(하이픈이 든 kebab-case) 뒤가 끝·공백·문장부호일 때만
+		{"# 상주 데몬은 make memory-nonexistent 로 멈춘다", []string{"memory-nonexistent"}},
+		{"    echo \"[x] 먼저 make memory-daemon-stop 하세요\" >&2", []string{"memory-daemon-stop"}},
+		{"printf '%s\\n' \"다시 만들려면 make memory-init\"", []string{"memory-init"}},
+		{"# 끝에 오는 명령도 make memory-init.", []string{"memory-init"}},
+		{"# 한 줄에 둘: make memory-daemon-stop, make memory-daemon-start", []string{"memory-daemon-stop", "memory-daemon-start"}},
+		{"# make sure 는 보지 않지만 make sure-fire 처럼 하이픈이 든 말은 타깃 꼴이라 본다", []string{"sure-fire"}},
+		{"value=make memory-init-x", nil},
+		{"run make memory-init-x now", nil},
 	}
 	for _, tc := range cases {
 		if got := makeTargetsIn(tc.line); !reflect.DeepEqual(got, tc.want) {

@@ -54,6 +54,20 @@ memory_build() {
     (cd "${root_dir}/app" && go build -o "${root_dir}/.cache/bin/memory-mcp" ./memory-mcp && go build -o "${root_dir}/.cache/bin/memory-daemon" ./daemon)
 }
 
+# 상주 진입점(launchd 가 부르는 데몬 run, .mcp.json 이 부르는 MCP 서버)용 빌드: memory_build_or_reuse <root> <바이너리 이름>
+# 이 레포의 Go 코드를 고치는 중(컴파일 오류)이어도 .cache/bin 에 바이너리가 있으면 경고만 남기고 그것을 쓴다 — 여기서 멈추면
+# launchd 는 30초마다 재시작을 되풀이하고 메모리 MCP 는 붙지 않는다. 바이너리가 없을 때만 실패한다.
+# 빌드 출력과 경고는 모두 stderr 로 보낸다 (MCP 의 stdout 은 프로토콜 전용이다)
+memory_build_or_reuse() {
+    local root_dir="$1" bin="$2"
+    memory_build "$root_dir" >&2 && return 0
+    if [[ ! -x "${root_dir}/.cache/bin/${bin}" ]]; then
+        echo "[memory] build: 실패했고 기존 .cache/bin/${bin} 도 없습니다 — 컴파일 오류를 고친 뒤 다시 실행하세요" >&2
+        return 1
+    fi
+    echo "[memory] build: 실패 — 기존 .cache/bin/${bin} 로 계속합니다 (컴파일 오류를 고치면 다음 기동 때 새로 빌드한다)" >&2
+}
+
 # http 엔드포인트가 응답할 때까지 기다린다 (최대 5분)
 memory_wait_http() {
     local name="$1" url="$2"
