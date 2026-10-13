@@ -14,21 +14,21 @@ type Answer string
 
 const (
 	AnswerLatest Answer = "latest" // 최신이 사실 — 구판을 숨긴다
-	AnswerOld    Answer = "old"    // 구판이 사실 — 신판을 숨긴다
-	AnswerKeep   Answer = "keep"   // 둘 다 유지 (공존)
+	answerOld    Answer = "old"    // 구판이 사실 — 신판을 숨긴다
+	answerKeep   Answer = "keep"   // 둘 다 유지 (공존)
 )
 
-// ParseAnswer 는 답을 읽는다.
-func ParseAnswer(s string) (Answer, bool) {
+// parseAnswer 는 답을 읽는다.
+func parseAnswer(s string) (Answer, bool) {
 	switch Answer(s) {
-	case AnswerLatest, AnswerOld, AnswerKeep:
+	case AnswerLatest, answerOld, answerKeep:
 		return Answer(s), true
 	}
 	return "", false
 }
 
-// RenderQuestions 는 판정이 사람에게 넘긴 질문 목록이다. 같은 내용 쌍은 다시 묻지 않는다.
-func RenderQuestions(root string) (string, error) {
+// renderQuestions 는 판정이 사람에게 넘긴 질문 목록이다. 같은 내용 쌍은 다시 묻지 않는다.
+func renderQuestions(root string) (string, error) {
 	judge := state.NewJudgeState(root)
 	teams, err := judge.Ledger.Teams()
 	if err != nil {
@@ -82,11 +82,11 @@ func AnswerQuestion(root, pairKey string, answer Answer, now time.Time) (string,
 		}
 		rec := state.JudgeRecord{PairKey: pairKey, Old: older, New: newer, By: "human", At: now.UTC().Format(time.RFC3339)}
 		switch answer {
-		case AnswerKeep:
+		case answerKeep:
 			rec.Decision, rec.Reason = state.DecisionKeep, "사람: 공존"
 		case AnswerLatest:
 			rec.Decision, rec.Reason = state.DecisionSuperseded, "사람: 최신이 사실"
-		case AnswerOld:
+		case answerOld:
 			rec.Decision, rec.Reason = state.DecisionSuperseded, "사람: 구판이 사실"
 			rec.Old, rec.New = newer, older
 		}

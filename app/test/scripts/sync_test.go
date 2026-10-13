@@ -1,6 +1,7 @@
 package scripts
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -129,5 +130,87 @@ func TestSyncPullsMainWhenOriginHeadIsStale(t *testing.T) {
 	}
 	if got := w.git(repo, "rev-parse", "HEAD"); got != want {
 		t.Errorf("app HEAD = %s, want %s", got, want)
+	}
+}
+
+// OPS-14: 커밋이 없는(unborn HEAD — git init 만 했거나 빈 원격을 clone 한) repo 가 있어도 sync 는 멈추지 않는다.
+// 그 repo 는 [skip] 으로 알리고 뒤의 repo 를 계속 pull 한다.
+func TestSyncSkipsRepoWithoutCommitsAndContinues(t *testing.T) {
+	w := newSyncWorkspace(t, "main")
+	w.git(w.sb.dir, "init", "-q", "-b", "main", filepath.Join(w.root, "main", "aaa-empty"))
+	repo := w.clone("zzz-ok")
+	want := w.push("main", "v2\n")
+
+	r := w.pull()
+
+	if r.err != nil {
+		t.Fatalf("_pull_repos.sh: %v\n%s", r.err, r.output())
+	}
+	if !strings.Contains(r.stdout, "[skip] aaa-empty:") {
+		t.Errorf("커밋이 없는 repo 는 [skip] 으로 알려야 한다:\n%s", r.output())
+	}
+	if got := w.git(repo, "rev-parse", "HEAD"); got != want {
+		t.Errorf("뒤의 repo 를 pull 하지 않았다 — zzz-ok HEAD = %s, want %s\n%s", got, want, r.output())
+	}
+	if !strings.Contains(r.stdout, "2 repos / 1 synced / 1 skipped / 0 failed") {
+		t.Errorf("요약:\n%s", r.output())
+	}
+}
+
+// OPS-14: detached HEAD 인 repo 도 [skip] 이다 (어느 브랜치를 pull 할지 모른다).
+func TestSyncSkipsDetachedHead(t *testing.T) {
+	w := newSyncWorkspace(t, "main")
+	repo := w.clone("app")
+	w.git(repo, "checkout", "-q", "--detach")
+
+	r := w.pull()
+
+	if r.err != nil || !strings.Contains(r.stdout, "[skip] app:") {
+		t.Fatalf("detached HEAD 는 건너뛴다: %v\n%s", r.err, r.output())
+	}
+}
+
+// OPS-14: sync/run.sh 는 pull 실패를 삼키지 않는다 — INDEX.md 단계까지 마친 뒤 실패를 알리고 0 이 아닌 값으로 끝난다.
+func TestSyncRunReportsPullFailure(t *testing.T) {
+	w := newSyncWorkspace(t, "main")
+	w.clone("app")
+	if err := os.RemoveAll(w.origin); err != nil { // 원격이 사라져 pull 이 실패한다
+		t.Fatal(err)
+	}
+
+	r := w.sb.bash(gitEnv, filepath.Join(w.root, "scripts", "sync", "run.sh"))
+
+	if r.err == nil {
+		t.Errorf("pull 이 실패했는데 sync 가 성공(exit 0)했다:\n%s", r.output())
+	}
+	for _, want := range []string{"[fail] app", "0 synced / 0 skipped / 1 failed", "[index] INDEX.md"} {
+		if !strings.Contains(r.output(), want) {
+			t.Errorf("출력에 %q 가 없다:\n%s", want, r.output())
+		}
+	}
+}
+
+// R4-ops-scripts-3: make init 은 끝에 sync 를 부르므로 pull 에 실패한 repo 가 있으면 init 도 끝까지 돈 뒤 0 이 아닌 값으로 끝난다 (README §5.1).
+func TestInitReportsPullFailureOfSync(t *testing.T) {
+	w := newSyncWorkspace(t, "main")
+	w.sb.extra = append(w.sb.extra, toolDirs(t, []string{"jq"})...)
+	w.sb.copyTo(w.root, "scripts/init", "scripts/hooks")
+	w.git(w.sb.dir, "init", "-q", w.root)
+	writeFile(t, filepath.Join(w.root, "workspace.seed.json"),
+		`{"githubHost": "github.invalid", "org": "o", "workspaces": [{"name": "app"}]}`)
+	w.clone("app")
+	if err := os.RemoveAll(w.origin); err != nil { // 원격이 사라져 pull 이 실패한다
+		t.Fatal(err)
+	}
+
+	r := w.sb.bash(gitEnv, filepath.Join(w.root, "scripts", "init", "run.sh"))
+
+	if r.err == nil {
+		t.Errorf("pull 이 실패했는데 init 이 성공(exit 0)했다:\n%s", r.output())
+	}
+	for _, want := range []string{"[skip] app", "[fail] app", "[index] INDEX.md"} {
+		if !strings.Contains(r.output(), want) {
+			t.Errorf("출력에 %q 가 없다:\n%s", want, r.output())
+		}
 	}
 }

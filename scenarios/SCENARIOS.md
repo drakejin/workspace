@@ -116,7 +116,11 @@ MCP 의 `search_memory` 와 같은 핸들러를 운영 CLI 로 확인한다. `S=
 | F31 | `$S search ScnStatusCodes; $S search ScnNfdTopic` | 각각 N 하나, `docs/feature/환불정책/메모.md` 하나 — 철자만 다른 ingest 가 문서를 하나 더 만들지 않는다 |
 | F32 | `scripts/memory-daemon/run.sh once && ls "$META_REPO_ROOT/.cache/cold-store/scn-filters/chunks/docs/knowledge/"` | `removed=0`, 목록에 `status-codes-v2.md.jsonl` 이 있다 (진짜 문서의 cold store 청크가 지워지지 않는다) |
 | F33 | `printf '\x00\x01BinaryProbe' > "$META_REPO_ROOT/docs/knowledge/probe-bin.md" && $S ingest docs/knowledge/probe-bin.md` | `0개 문서 적재`, `1개 건너뜀 — 데몬과 같은 게이트: …`, `- docs/knowledge/probe-bin.md (binary content)` |
-| F34 | `scenarios/teardown.sh filters` | 정리됨 |
+| F34 | `$S search -project Alpha-API` | F11 과 같다 (A, B, I, F, H, J) — 프로젝트는 대소문자를 가리지 않는다 |
+| F35 | `$S search -from yesterday; echo "exit=$?"` | 에러 `time_range.from 값은 날짜(2026-10-01, 2026-10, 2026), 시각(…), epoch 밀리초, date math(now, now-30d, …) 중 하나여야 합니다: "yesterday"`, exit≠0 (원인 없는 `all shards failed` 가 아니다) |
+| F36 | `$S search -from $D2 -to $D5; echo "exit=$?"; $S search -from now-1d -to now-30d; echo "exit=$?"` | 둘 다 에러 `time_range 가 뒤집혔습니다: from(<D2> → <D2>T00:00:00.000<오프셋>)이 to(<D5> → <D5>T23:59:59.999<오프셋>)보다 늦습니다`(오프셋은 MEMORY_TIME_ZONE 의 것, 둘째는 now-1d·now-30d 를 읽은 시각), exit≠0 |
+| F37 | `$S search -team scn-nosuch memory; $S search -org scn-nosuch memory` | `team=scn-nosuch 의 hot 색인이 없습니다 — 팀 이름이 틀렸거나(…), 아직 문서를 적재하지 않았거나, 문서가 모두 60일이 지나 cold 로 내려간 팀이다. 오래된 맥락이면 list_cold(CLI: list-cold) 를 확인하세요.`, `org=scn-nosuch 의 hot 색인이 없습니다 — org 이름이 틀렸거나(…MEMORY_TEAM_ORGS)…` (0건 안내 `맞는 문서가 없습니다` 가 아니다) |
+| F38 | `scenarios/teardown.sh filters` | 정리됨 |
 
 ## G3. Claude Code + drakejin-workspace-memory-mcp — 이름 `claude` (최종 목표)
 
@@ -207,9 +211,9 @@ printf -- '---\ndate: %s\n---\n# 배송비 정책\n\n## 결정\n\nShippingFeePol
 | W5 | `make sync` | `[index] INDEX.md: all repos listed` (W4 가 행을 더했다) 와 pull 결과 — 기본 브랜치(origin/HEAD)에 있으면 `[sync] books-guitar: pulled '<기본 브랜치>'` |
 | W6 | `scripts/run-issues/run.sh SCN-TEST books-guitar` 후 `git -C main/books-guitar worktree list` | `worktree 'SCN-TEST' created`, 목록에 `main/books-guitar/.worktrees/SCN-TEST` |
 | W7 | `scripts/done-issue/run.sh SCN-TEST books-guitar` 후 `git -C main/books-guitar worktree list` 와 `git -C main/books-guitar branch -D SCN-TEST` | `worktree 'SCN-TEST' removed`, 목록에서 사라짐 |
-| W8 | `mkdir -p docs/specs/scn-x && echo x > docs/specs/scn-x/a.md && scripts/docs-cleaner/run.sh < /dev/null; echo "exit=$?"; ls docs/specs` | `[docs-cleaner] 취소`, exit=1, `scn-x` 가 남아 있다 |
+| W8 | `mkdir -p docs/specs/scn-x && echo x > docs/specs/scn-x/a.md && scripts/docs-cleaner/run.sh < /dev/null; echo "exit=$?"; ls docs/specs` | 먼저 경고(하위 디렉토리만 지우고 INDEX.md 는 남긴다, 지운 문서는 cold 로 가지 않고 색인에서도 빠진다, 오래된 문서는 `scripts/memory/run.sh tier`), 이어서 `[docs-cleaner] 취소`, exit=1, `scn-x` 가 남아 있다 |
 | W9 | `CONFIRM=yes scripts/docs-cleaner/run.sh; ls docs/specs` | `[clean] docs/specs/scn-x`, `docs/specs` 에 INDEX.md 만 |
-| W10 | `scripts/schedule/run.sh install --dry-run \| grep -E 'Label\|tier-tick'` | `com.drakejin.workspace.tier` 와 `tier-tick` — 설치는 하지 않는다 |
+| W10 | `scripts/schedule/run.sh install --dry-run \| grep -E 'Label\|tier-tick\|META_REPO_ROOT'` | `com.drakejin.memory.<workspace>.tier`(workspace 는 `MEMORY_WORKSPACE` 또는 사본 디렉토리 이름), `tier-tick`, 이 사본(또는 `.env` 의 `META_REPO_ROOT`)을 가리키는 `META_REPO_ROOT` — 설치는 하지 않는다 |
 | W11 | `scripts/memory/run.sh help` 와 `scripts/memory/run.sh bench -h; echo "exit=$?"` | 명령 목록에 `search … [-project P] [-topic T] [-date YYYY-MM-DD] [-from D] [-to D]`, `filters`, `tier`, `archive`, `graph`, `bench … [-max-turns N] [-mcp-script P]` 등. `bench -h` 는 플래그 표(`-max-turns int … 질문당 최대 턴 (기본 15)`, `-mcp-script string …`)를 보이고 `exit=0` |
 | W12 | `rm -rf "$W"` | 사본 삭제 (실제 워크스페이스의 `main/` 은 건드리지 않았다) |
 
@@ -220,7 +224,7 @@ printf -- '---\ndate: %s\n---\n# 배송비 정책\n\n## 결정\n\nShippingFeePol
 | M1 | 공통 준비 후 `export MEMORY_DISTILL_ENABLED=true MEMORY_LLM_MODEL=haiku` 그리고 G4 의 **배송비 쌍** 블록을 실행한 뒤 `scripts/memory-daemon/run.sh once` | 1~4분. `[judge] superseded …shipping-fee-a.md ↔ …shipping-fee-b.md (llm: …)` (LLM 이 모순·신판으로 판정) 또는 확신이 낮으면 `question` — 둘 중 하나면 PASS, 어느 쪽인지 적는다. 배송비 쌍과 F1 의 두 판정 말고 다른 문서의 superseded 줄이 있으면 FAIL. `[distill] …: summary N자, entities M` 줄이 문서 수만큼, 끝에 `trigger=settle` 사이클과 `[graph] … entities=` 1 이상 |
 | M2 | `scripts/memory/run.sh search ScnAlphaLedgerLock` | 결과에 `요약:` 줄 |
 | M3 | `scripts/memory/run.sh graph stats` | `Entity=` 1 이상, `MENTIONS=` 1 이상 |
-| M4 | `scripts/memory/run.sh graph entity alpha-api` | 한 줄 이상 `<type>:<name> — <경로들>` |
+| M4 | `scripts/memory/run.sh graph entity alpha-api` | 한 줄 이상 `<type>:<name> — <경로들>`. 밀린 문서(`docs/knowledge/status-codes.md` 등)가 끼면 그 경로 뒤에 `(superseded)` |
 | M5 | Claude 로: `scenarios/claude-mcp.sh "docs_by_entity 로 alpha-api 를 찾아 결과를 그대로 보여 줘."` | `tool_use docs_by_entity`, 결과가 M4 와 같은 내용 |
 | M6 | `scenarios/teardown.sh llm` | 정리됨 |
 

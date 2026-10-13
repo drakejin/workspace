@@ -54,7 +54,7 @@ func TestClientDoAndErrors(t *testing.T) {
 		t.Fatalf("Do = %v %+v", err, out)
 	}
 	err := c.Do(ctx, http.MethodPut, "/typed", nil, nil, nil)
-	if !HasType(err, "resource_already_exists_exception") || !IsStatus(err, 400) || !strings.Contains(err.Error(), "exists") {
+	if !hasType(err, "resource_already_exists_exception") || !IsStatus(err, 400) || !strings.Contains(err.Error(), "exists") {
 		t.Errorf("typed err = %v", err)
 	}
 	err = c.Do(ctx, http.MethodGet, "/plain", nil, nil, nil)
@@ -105,12 +105,13 @@ func TestBootstrapToleratesConcurrentPolicyWrite(t *testing.T) {
 			return map[string]int{"_seq_no": 1, "_primary_term": 1}, nil
 		case method == http.MethodPut && strings.Contains(path, HotColdPolicy):
 			return nil, &Error{Status: http.StatusConflict, Op: "PUT", Reason: "version conflict"}
-		case method == http.MethodGet && strings.Contains(path, KeepPolicy):
+		case method == http.MethodGet && strings.Contains(path, keepPolicy):
 			return nil, &Error{Status: http.StatusNotFound}
 		}
 		return map[string]any{}, nil
 	}}
-	if err := Bootstrap(context.Background(), os, cfg); err != nil {
+	// 다른 내용의 정책을 바꾸는 것은 bootstrap 명령뿐이다 (RUN-9) — 그 PUT 이 다른 프로세스와 겹친 경우
+	if err := bootstrap(context.Background(), os, cfg, claimCluster, func(string, ...any) {}); err != nil {
 		t.Fatalf("409 는 성공으로 본다: %v", err)
 	}
 	want := []string{
@@ -174,7 +175,7 @@ func TestEnsureIndexIgnoresExisting(t *testing.T) {
 }
 
 func TestSchemaShape(t *testing.T) {
-	tpl := IndexTemplate()
+	tpl := indexTemplate()
 	if tpl["index_patterns"].([]string)[0] != "mem-*" {
 		t.Error("pattern")
 	}
@@ -184,7 +185,7 @@ func TestSchemaShape(t *testing.T) {
 			t.Errorf("필드 %s 없음", f)
 		}
 	}
-	keep := KeepPolicyBody()["policy"].(map[string]any)["ism_template"].([]any)[0].(map[string]any)
+	keep := keepPolicyBody()["policy"].(map[string]any)["ism_template"].([]any)[0].(map[string]any)
 	if keep["priority"].(int) <= 100 {
 		t.Error("keep 정책이 hot-cold 를 이겨야 한다")
 	}
@@ -226,7 +227,7 @@ func TestSyncOrgAliases(t *testing.T) {
 		}, nil
 	}}
 	cfg := config.Config{Workspace: "ws", TeamOrgs: map[string]string{"a": "ads", "b": "ads"}}
-	if err := SyncOrgAliases(context.Background(), os, cfg); err != nil {
+	if err := syncOrgAliases(context.Background(), os, cfg); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := json.Marshal(actions)
@@ -242,7 +243,7 @@ func TestScanPagesAndUpdateDocAllowlist(t *testing.T) {
 		b := body.(map[string]any)
 		if b["search_after"] == nil {
 			pages++
-			hits := make([]any, ScanPageSize)
+			hits := make([]any, scanPageSize)
 			for i := range hits {
 				hits[i] = map[string]any{"_id": fmt.Sprint(i), "_source": map[string]any{}, "sort": []any{i}}
 			}
@@ -253,7 +254,7 @@ func TestScanPagesAndUpdateDocAllowlist(t *testing.T) {
 	}}
 	n := 0
 	err := Scan(context.Background(), os, "mem-*", map[string]any{}, nil, ChunkSort, func(Hit[map[string]any]) error { n++; return nil })
-	if err != nil || n != ScanPageSize+1 || pages != 2 {
+	if err != nil || n != scanPageSize+1 || pages != 2 {
 		t.Errorf("scan n=%d pages=%d err=%v", n, pages, err)
 	}
 	if err := UpdateDoc(context.Background(), os, []string{"i"}, "ws", "p", map[string]any{"evil'];": 1}); err == nil {
@@ -272,18 +273,22 @@ func TestSnapshotRepositoryIsLeftAloneWhenUnchanged(t *testing.T) {
 		}
 		return nil, &Error{Status: 500, Reason: "should not PUT"}
 	}}
-	if err := ensureSnapshotRepository(context.Background(), same, cfg); err != nil || strings.Join(same.calls, "|") != "GET /_snapshot/mem-cold" {
+	quiet := func(string, ...any) {}
+	if err := ensureSnapshotRepository(context.Background(), same, cfg, claimCluster, quiet); err != nil || strings.Join(same.calls, "|") != "GET /_snapshot/mem-cold" {
 		t.Errorf("같으면 다시 쓰지 않는다: %v %v", same.calls, err)
 	}
-	// 스냅샷·복원이 도는 동안 OpenSearch 는 repository 를 바꾸지 못하게 한다 — 이미 있으면 그대로 쓴다
+	// 스냅샷·복원이 도는 동안 OpenSearch 는 repository 를 바꾸지 못하게 한다 — bootstrap 명령은 바꾸지 못했다고 알린다
 	busy := &fakeOS{reply: func(method, path string, _ any) (any, error) {
 		if method == http.MethodGet {
 			return map[string]any{"mem-cold": map[string]any{"type": "fs", "settings": map[string]any{"location": "/old"}}}, nil
 		}
 		return nil, &Error{Status: 500, Reason: "trying to modify or unregister repository that is currently used"}
 	}}
-	if err := ensureSnapshotRepository(context.Background(), busy, cfg); err != nil {
-		t.Errorf("쓰는 중인 repository 는 다음 bootstrap 에 맞춘다: %v", err)
+	if err := ensureSnapshotRepository(context.Background(), busy, cfg, claimCluster, quiet); err == nil || !strings.Contains(err.Error(), "다시") {
+		t.Errorf("쓰는 중인 repository 는 끝난 뒤 다시 하라고 한다: %v", err)
+	}
+	if err := ensureSnapshotRepository(context.Background(), busy, cfg, leaveCluster, quiet); err != nil {
+		t.Errorf("다른 프로세스의 bootstrap 은 바꾸려 하지 않는다: %v", err)
 	}
 	missing := &fakeOS{reply: func(method, path string, _ any) (any, error) {
 		if method == http.MethodGet {
@@ -291,7 +296,65 @@ func TestSnapshotRepositoryIsLeftAloneWhenUnchanged(t *testing.T) {
 		}
 		return map[string]any{}, nil
 	}}
-	if err := ensureSnapshotRepository(context.Background(), missing, cfg); err != nil || strings.Join(missing.calls, "|") != "GET /_snapshot/mem-cold|PUT /_snapshot/mem-cold" {
+	if err := ensureSnapshotRepository(context.Background(), missing, cfg, leaveCluster, quiet); err != nil || strings.Join(missing.calls, "|") != "GET /_snapshot/mem-cold|PUT /_snapshot/mem-cold" {
 		t.Errorf("없으면 만든다: %v %v", missing.calls, err)
+	}
+}
+
+// RUN-10 / API-3: 400 의 원인은 error.root_cause 에만 있다 — 최상위 reason 은 "all shards failed" 뿐이라, 그것만 보이면
+// 에이전트는 무엇을 고칠지 모른다. 원인(type: reason)을 붙이고, 최상위 type 은 그대로 둔다 (hasType 이 그것으로 판단한다).
+func TestErrorCarriesRootCause(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload string
+		typ     string
+		want    []string
+		notWant string
+	}{
+		{"search_phase 의 root_cause", `{"error":{"root_cause":[{"type":"parse_exception","reason":"failed to parse date field [yesterday]"}],` +
+			`"type":"search_phase_execution_exception","reason":"all shards failed"},"status":400}`,
+			"search_phase_execution_exception", []string{"all shards failed", "parse_exception", "failed to parse date field [yesterday]"}, ""},
+		{"root_cause 가 없으면 failed_shards", `{"error":{"type":"search_phase_execution_exception","reason":"all shards failed",` +
+			`"failed_shards":[{"shard":0,"reason":{"type":"too_complex_to_determinize_exception","reason":"Exceeded maximum recursion level"}}]}}`,
+			"search_phase_execution_exception", []string{"all shards failed", "Exceeded maximum recursion level"}, ""},
+		{"원인이 최상위와 같으면 한 번만", `{"error":{"root_cause":[{"type":"resource_already_exists_exception","reason":"exists"}],` +
+			`"type":"resource_already_exists_exception","reason":"exists"}}`,
+			"resource_already_exists_exception", []string{"exists"}, "exists — "},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := parseError("POST /mem-a-hot/_search", http.StatusBadRequest, []byte(c.payload))
+
+			if !hasType(err, c.typ) || !IsStatus(err, http.StatusBadRequest) {
+				t.Errorf("type/status = %v", err)
+			}
+			for _, want := range c.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("%q 가 없다: %v", want, err)
+				}
+			}
+			if c.notWant != "" && strings.Contains(err.Error(), c.notWant) {
+				t.Errorf("원인을 되풀이한다: %v", err)
+			}
+		})
+	}
+}
+
+// API-1: 읽기 준비는 클러스터에 닿는지만 본다 — GET / 하나, 아무것도 쓰지 않는다.
+func TestPingOnlyReads(t *testing.T) {
+	var methods []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.Method+" "+r.URL.Path)
+		_, _ = w.Write([]byte(`{"version":{"number":"2.19.2"}}`))
+	}))
+	defer srv.Close()
+
+	err := Ping(context.Background(), New(srv.URL))
+
+	if err != nil || !reflect.DeepEqual(methods, []string{"GET /"}) {
+		t.Errorf("Ping = %v, 요청 %v", err, methods)
+	}
+	if err := Ping(context.Background(), New("http://127.0.0.1:1")); err == nil || !strings.Contains(err.Error(), "연결 불가") {
+		t.Errorf("닿지 않으면 연결 불가: %v", err)
 	}
 }

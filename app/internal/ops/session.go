@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -50,7 +51,7 @@ func runSessionContext(ctx context.Context, c *CLI, args []string) (string, erro
 	terms = append(terms, branchWords(ctx, dir)...)
 
 	var lines []string
-	if len(terms) > 0 && c.Handlers.Ready(ctx) == nil {
+	if len(terms) > 0 && c.Handlers.ReadReady(ctx) == nil {
 		res, err := search.Search(ctx, c.OS, search.Request{
 			Workspace: c.Config.Workspace, Team: c.Config.DefaultTeam, Project: repo, Query: strings.Join(terms, " "), Size: sessionHits,
 		})
@@ -80,12 +81,14 @@ func runSessionContext(ctx context.Context, c *CLI, args []string) (string, erro
 }
 
 // repoOf 는 cwd 가 가리키는 관리 대상 repository 와 그 작업 디렉토리다 (main/{repo}/... 또는 main/{repo}/.worktrees/{issue}/...).
+// 경로는 적힌 철자와 심볼릭 링크를 푼 철자를 모두 본다 — root·cwd 중 한쪽만 링크 경로여도(macOS 의 /var → /private/var),
+// main/{repo} 가 meta-repo 밖의 checkout 을 가리키는 링크여도(cwd 가 링크 철자든 푼 철자든) 같은 repo 다. dir 은 root 의 철자다.
 func repoOf(root, cwd string) (string, string) {
 	if cwd == "" {
 		return "", ""
 	}
-	rel, err := filepath.Rel(root, cwd)
-	if err != nil || strings.HasPrefix(rel, "..") {
+	rel, ok := relInRoot(root, cwd)
+	if !ok {
 		return "", cwd
 	}
 	parts := strings.Split(filepath.ToSlash(rel), "/")
@@ -97,6 +100,46 @@ func repoOf(root, cwd string) (string, string) {
 		dir = filepath.Join(dir, ".worktrees", parts[3])
 	}
 	return parts[1], dir
+}
+
+// relInRoot 는 cwd 의 root 기준 상대 경로다 — 적힌 철자끼리 먼저(링크 철자의 cwd), 다음은 링크를 푼 철자끼리, 마지막으로
+// main/ 아래 링크가 가리키는 checkout 안인지 본다 (링크를 푼 철자의 cwd 는 root 밖으로 풀린다).
+func relInRoot(root, cwd string) (string, bool) {
+	if rel, ok := relInside(root, cwd); ok {
+		return rel, true
+	}
+	realCwd := resolved(cwd)
+	if rel, ok := relInside(resolved(root), realCwd); ok {
+		return rel, true
+	}
+	return linkedRepoRel(root, realCwd)
+}
+
+// linkedRepoRel 은 realCwd(링크를 푼 철자)가 main/ 아래 심볼릭 링크가 가리키는 곳 안이면 그 링크(main/{repo}) 기준 상대 경로다.
+func linkedRepoRel(root, realCwd string) (string, bool) {
+	mainDir := filepath.Join(root, "main")
+	entries, err := os.ReadDir(mainDir)
+	if err != nil {
+		return "", false
+	}
+	for _, e := range entries {
+		if e.Type()&os.ModeSymlink == 0 {
+			continue
+		}
+		if rel, ok := relInside(resolved(filepath.Join(mainDir, e.Name())), realCwd); ok {
+			return filepath.Join("main", e.Name(), rel), true
+		}
+	}
+	return "", false
+}
+
+// relInside 는 p 가 base 안(base 자신 포함)이면 base 기준 상대 경로다.
+func relInside(base, p string) (string, bool) {
+	rel, err := filepath.Rel(base, p)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return rel, true
 }
 
 // branchWords 는 작업 브랜치 이름을 검색어로 쪼갠다 (main·master 는 뺀다).

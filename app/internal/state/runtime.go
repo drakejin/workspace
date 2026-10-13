@@ -1,9 +1,11 @@
 package state
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -21,7 +23,8 @@ type CycleSummary struct {
 	StatUpdated    int   `json:"statUpdated"`
 	Removed        int   `json:"removed"`
 	Skipped        int   `json:"skipped"`
-	ColdOwned      int   `json:"coldOwned"`
+	ColdOwned      int   `json:"coldOwned"` // cold 로 간 hot 원본 — 다음 tier 가 정리한다
+	ColdKept       int   `json:"coldKept"`  // cold 로 간 hot 원본 중 git 이 되살릴 수 없어(커밋 전·커밋 뒤 고침) tier 가 남기는 것 — 커밋하면 정리한다
 	Failed         int   `json:"failed"`
 	FlagsConverged int   `json:"flagsConverged"`
 	Refused        bool  `json:"refused"`
@@ -59,11 +62,11 @@ type Status struct {
 	DistillPending  int          `json:"distillPending"`
 }
 
-// RuntimeDir 은 데몬 런타임 파일 디렉토리다 (.cache/daemon — git 에 들어가지 않는다).
-func RuntimeDir(root string) string { return filepath.Join(CacheDir(root), "daemon") }
+// runtimeDir 은 데몬 런타임 파일 디렉토리다 (.cache/daemon — git 에 들어가지 않는다).
+func runtimeDir(root string) string { return filepath.Join(CacheDir(root), "daemon") }
 
-func statusFile(root string) string { return filepath.Join(RuntimeDir(root), "status.json") }
-func pidFile(root string) string    { return filepath.Join(RuntimeDir(root), "daemon.pid") }
+func statusFile(root string) string { return filepath.Join(runtimeDir(root), "status.json") }
+func pidFile(root string) string    { return filepath.Join(runtimeDir(root), "daemon.pid") }
 
 // writeJSON 은 rename 으로 바꿔 끼워 읽는 쪽이 반쯤 쓴 파일을 보지 않게 한다.
 func writeJSON(path string, v any) error {
@@ -104,7 +107,7 @@ func ReadStatus(root string) *Status {
 
 // lockFile 은 데몬 락이다. flock 은 커널이 쥐고 프로세스가 죽으면 풀어 주므로, 낡은 pid 파일이나 재사용된 pid 에
 // 속지 않고 잡기도 원자적이다. pid 파일은 보여 주기용이다.
-func lockFile(root string) string { return filepath.Join(RuntimeDir(root), "daemon.lock") }
+func lockFile(root string) string { return filepath.Join(runtimeDir(root), "daemon.lock") }
 
 var (
 	heldMu sync.Mutex
@@ -164,7 +167,7 @@ func AcquireLock(root string) error {
 	if held[root] != nil {
 		return nil
 	}
-	if err := os.MkdirAll(RuntimeDir(root), 0o755); err != nil {
+	if err := os.MkdirAll(runtimeDir(root), 0o755); err != nil {
 		return fmt.Errorf("daemon lock: %w", err)
 	}
 	f, err := os.OpenFile(lockFile(root), os.O_RDWR|os.O_CREATE, 0o644)
@@ -222,13 +225,71 @@ func ReleaseLock(root string) error {
 	return f.Close()
 }
 
+// 문서 쓰기 락. 파생물의 주 writer 는 데몬이지만 ingest_path·CLI ingest·audit -apply 도 같은 Write 를 부른다 — Write 는 여러 단계
+// (청크 0 무효 표시 → 옛 청크 정리 → 나머지 청크 → cold store → 청크 0)라, 두 writer 가 같은 문서를 엇갈려 쓰면 청크 0 은 새 내용
+// (최신 stat)이고 나머지는 옛 내용인 섞인 문서가 최신으로 고정된다. 그래서 문서 하나를 쓰는 동안은 그 문서의 락을 쥔다.
+const (
+	// docLockStripes 는 문서 쓰기 락 파일 수다. source_path 의 해시로 나눠 쥔다 — 서로 다른 문서는 거의 기다리지 않고, 락 파일은
+	// 이 수를 넘지 않는다 (문서마다 두면 지운 문서의 락 파일이 쌓이고, 쓰는 중에 지우면 두 writer 가 다른 파일을 쥔다).
+	docLockStripes = 64
+	// docLockPoll 은 다른 writer 가 쥔 문서 락을 다시 시도하는 간격이다.
+	docLockPoll = 5 * time.Millisecond
+)
+
+func docLockFile(root, sourcePath string) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(sourcePath)) // hash.Hash 의 Write 는 실패하지 않는다
+	return filepath.Join(runtimeDir(root), "doc-locks", fmt.Sprintf("%02d.lock", h.Sum32()%docLockStripes))
+}
+
+// LockDoc 은 문서 하나의 쓰기 락을 잡는다. flock 이라 프로세스 사이(데몬·MCP 서버·CLI)도, 한 프로세스 안의 두 호출(열 때마다 다른
+// open file 이다)도 막고, 쥔 프로세스가 죽으면 커널이 푼다. 다른 writer 가 쥐고 있으면 ctx 가 끝날 때까지 기다린다. 돌려준 함수로 푼다.
+// 락을 쥔 채로 다른 문서의 락을 잡지 않는다 (같은 파일을 나눠 쥐는 두 문서가 서로 기다리지 않게).
+func LockDoc(ctx context.Context, root, sourcePath string) (func(), error) {
+	if root == "" {
+		return nil, errors.New("doc lock: meta-repo 루트가 비었습니다")
+	}
+	path := docLockFile(root, sourcePath)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, fmt.Errorf("doc lock: %w", err)
+	}
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("doc lock: %w", err)
+	}
+	if err := flockWait(ctx, f); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("doc lock %s: %w", sourcePath, err)
+	}
+	return func() {
+		// 풀기 실패는 되돌릴 방법이 없다 — 파일을 닫으면 커널이 어차피 푼다
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = f.Close()
+	}, nil
+}
+
+// flockWait 는 f 의 배타 flock 을 잡을 때까지 기다린다. ctx 가 끝나면 그 오류다.
+func flockWait(ctx context.Context, f *os.File) error {
+	for {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(docLockPoll):
+		}
+	}
+}
+
 // Tick 은 주기 작업(주간 audit, 일간 tier)의 마지막 성공 시각이다. 성공 뒤에 찍는다 —
 // 먼저 찍으면 실패한 주기가 통째로 건너뛰어진다.
 type Tick struct{ path string }
 
 // NewTick 은 .cache/daemon/{name}.tick.json 이다.
 func NewTick(root, name string) Tick {
-	return Tick{path: filepath.Join(RuntimeDir(root), name+".tick.json")}
+	return Tick{path: filepath.Join(runtimeDir(root), name+".tick.json")}
 }
 
 // Due 는 마지막 성공에서 every 가 지났는가.

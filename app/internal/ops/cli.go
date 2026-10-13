@@ -40,7 +40,9 @@ type command struct {
 	usage string
 	// offline 이면 OpenSearch 가 꺼져 있어도 돈다 (bootstrap 을 건너뛴다).
 	offline bool
-	run     func(ctx context.Context, c *CLI, args []string) (string, error)
+	// reads 면 읽기 명령이다 — 쓰기 쪽 bootstrap 대신 핸들러가 읽기 준비(ReadReady)만 본다 (cold 설정이 잘못돼도 검색은 된다).
+	reads bool
+	run   func(ctx context.Context, c *CLI, args []string) (string, error)
 }
 
 // commands 는 명령 표다. 이름 순으로 Usage 에 나온다.
@@ -50,13 +52,13 @@ var commands map[string]command
 func init() {
 	commands = map[string]command{
 		"bootstrap":         {usage: "템플릿·ISM 정책·스냅샷 repository·org alias 생성/갱신", run: runBootstrap},
-		"search":            {usage: "[-project P] [-topic T] [-date YYYY-MM-DD] [-from D] [-to D] [-type K] [-team T | -org O] [-size N] [-superseded] [query]   검색 (질의어 없이 필터만 주면 최신순으로 가져온다. 플래그는 질의어 앞에)", run: runSearch},
-		"filters":           {usage: "[-project P] [-topic T] [-date D] [-from D] [-to D] [-type K] [-team T | -org O] [-superseded]   검색 필터에 쓸 수 있는 값(프로젝트·주제·문서 종류·날짜)과 문서 수", run: runFilters},
+		"search":            {usage: "[-project P] [-topic T] [-date YYYY-MM-DD] [-from D] [-to D] [-type K] [-team T | -org O] [-size N] [-superseded] [query]   검색 (질의어 없이 필터만 주면 최신순으로 가져온다. 플래그는 질의어 앞에)", reads: true, run: runSearch},
+		"filters":           {usage: "[-project P] [-topic T] [-date D] [-from D] [-to D] [-type K] [-team T | -org O] [-superseded]   검색 필터에 쓸 수 있는 값(프로젝트·주제·문서 종류·날짜)과 문서 수", reads: true, run: runFilters},
 		"ingest":            {usage: "[-team T] <path>   파일/디렉토리 적재", run: runIngest},
 		"compaction-report": {usage: "[-team T]   주간 compaction 1·2단계 리포트 (markdown)", run: runCompactionReport},
 		"tier":              {usage: "[-team T] [-dry-run] [-keep-files]   hot 기간이 지난 인덱스 → 쓰기 막기 → 스냅샷 → 삭제 → hot 원본 제거 (-team 없으면 이 workspace 의 모든 팀)", run: runTier},
 		"tier-tick":         {usage: "[-every 24h]   스케줄러용: 마지막 tier 에서 every 가 지났으면 tier + audit (보고만)", run: runTierTick},
-		"list-cold":         {usage: "[-team T]   cold 인덱스 목록", run: runListCold},
+		"list-cold":         {usage: "[-team T]   cold 인덱스 목록", reads: true, run: runListCold},
 		"restore":           {usage: "<index>   cold 인덱스 복원", run: runRestore},
 		"reload":            {usage: "[-team T]   cold store 의 청크 JSONL 을 _bulk 로 재적재 (cold 로 간 달은 빼고)", run: runReload},
 		"status":            {usage: "데몬 상태 (scripts/memory-daemon/run.sh status)", offline: true, run: runStatus},
@@ -92,7 +94,7 @@ func (c *CLI) Run(ctx context.Context, name string, args []string) error {
 		return fmt.Errorf("%w: 모르는 명령 %q", ErrUsage, name)
 	}
 	// 도움말은 OpenSearch 없이도 보인다
-	if !cmd.offline && name != "bootstrap" && !asksHelp(args) {
+	if !cmd.offline && !cmd.reads && name != "bootstrap" && !asksHelp(args) {
 		if err := c.Handlers.Ready(ctx); err != nil {
 			return err
 		}
@@ -130,27 +132,62 @@ func (f flags) parse(args []string) ([]string, error) {
 	case errors.Is(err, flag.ErrHelp):
 		return nil, &helpRequest{text: f.help()}
 	case err != nil:
-		return nil, fmt.Errorf("%w: %s: %v\n%s", ErrUsage, f.name, err, f.help())
+		return nil, f.invalid(err)
 	}
-	return f.Args(), nil
+	rest := f.Args()
+	if misplaced := f.misplacedFlag(args, rest); misplaced != "" {
+		return nil, f.invalid(fmt.Errorf("플래그 %s 는 질의어·경로보다 앞에 두세요 — 뒤에 오면 플래그가 아니라 질의어·경로로 읽힙니다 (그 글자를 그대로 넘기려면 -- 뒤에)", misplaced))
+	}
+	return rest, nil
 }
 
-// sub 는 하위 명령(archive deprecate, graph neighbors)과 나머지 인자다. 없거나 플래그가 먼저 오면 사용법이다 ('-h' 면 도움말).
-func (f flags) sub(args []string) (string, []string, error) {
-	if len(args) == 0 {
-		return "", nil, f.usageErr()
+// misplacedFlag 는 플래그가 아닌 인자 뒤에 온 이 명령의 플래그다 (없으면 ""). flag 패키지는 첫 비플래그 인자에서 읽기를 멈춰,
+// 'search 질의어 -topic T' 의 -topic T 가 말없이 질의어가 된다. '--' 뒤의 인자는 사용자가 일부러 넘긴 글자라 보지 않는다
+// (flag 패키지가 먹은 맨 앞의 '--' 도, 질의어 사이의 '--' 도).
+func (f flags) misplacedFlag(args, rest []string) string {
+	if start := len(args) - len(rest); start > 0 && args[start-1] == "--" {
+		return ""
 	}
-	if strings.HasPrefix(args[0], "-") {
-		if _, err := f.parse(args[:1]); err != nil {
-			return "", nil, err
+	for _, a := range rest {
+		if a == "--" {
+			return ""
 		}
+		if !strings.HasPrefix(a, "-") {
+			continue
+		}
+		name, _, _ := strings.Cut(strings.TrimLeft(a, "-"), "=")
+		if name != "" && f.Lookup(name) != nil {
+			return a
+		}
+	}
+	return ""
+}
+
+// sub 는 하위 명령(archive deprecate, graph neighbors)과 나머지 인자다. 없거나 플래그가 먼저 오면 사용 오류다 ('-h' 면 도움말).
+// 앞의 플래그를 따로 읽지 않는다 — 값을 받는 플래그(-depth 3)를 혼자 읽으면 값이 있는데도 "값이 없다" 고 잘못 알린다.
+func (f flags) sub(args []string) (string, []string, error) {
+	switch {
+	case len(args) == 0:
 		return "", nil, f.usageErr()
+	case helpArgs[args[0]]:
+		return "", nil, &helpRequest{text: f.help()}
+	case strings.HasPrefix(args[0], "-"):
+		return "", nil, f.invalid(fmt.Errorf("하위 명령을 플래그(%s)보다 먼저 쓰세요", args[0]))
 	}
 	return args[0], args[1:], nil
 }
 
 func (f flags) usageErr() error {
 	return fmt.Errorf("%w: %s", ErrUsage, f.help())
+}
+
+// invalid 는 이 명령의 인자가 틀렸다는 사용 오류다 — 무엇이 틀렸는지와 사용법·플래그 표를 함께 보인다. 원인이 이미 명령
+// 이름으로 시작하면(bench.Options.Validate 의 "bench: …") 이름을 다시 붙이지 않는다.
+func (f flags) invalid(err error) error {
+	if strings.HasPrefix(err.Error(), f.name+": ") {
+		return fmt.Errorf("%w: %w\n%s", ErrUsage, err, f.help())
+	}
+	return fmt.Errorf("%w: %s: %w\n%s", ErrUsage, f.name, err, f.help())
 }
 
 // help 는 명령의 사용법 줄과 플래그 표(이름·값 종류·설명·기본값)다.

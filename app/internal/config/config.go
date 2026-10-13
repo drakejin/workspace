@@ -101,15 +101,6 @@ func (c Config) HotWindow() time.Duration {
 	return time.Duration(c.HotDays) * 24 * time.Hour
 }
 
-// QueryTimeZone 은 at 시각의 Location 오프셋(+09:00)이다 — OpenSearch 질의의 time_zone 에 넘긴다.
-func (c Config) QueryTimeZone(at time.Time) string {
-	loc := c.Location
-	if loc == nil {
-		loc = time.UTC
-	}
-	return at.In(loc).Format("-07:00")
-}
-
 // FromEnv 는 프로세스 환경변수로 Load 한다.
 func FromEnv() (Config, error) { return Load(os.Getenv) }
 
@@ -179,9 +170,22 @@ func Load(getenv func(string) string) (Config, error) {
 	if strings.EqualFold(cfg.Graph.URI, "off") {
 		cfg.Graph.URI = ""
 	}
+	p.validate(cfg)
+	if len(p.errs) > 0 {
+		return Config{}, fmt.Errorf("memory 설정이 잘못됐습니다 — %w", errors.Join(p.errs...))
+	}
+	return cfg, nil
+}
 
+// validate 는 값끼리·형식을 보는 검사다. 잘못된 값은 p 에 모아 Load 가 한 번에 알린다.
+func (p *parser) validate(cfg Config) {
 	if u, err := url.Parse(cfg.OpenSearchURL); err != nil || u.Scheme == "" || u.Host == "" {
 		p.fail("OPENSEARCH_URL: URL 이 아닙니다: %q", cfg.OpenSearchURL)
+	}
+	if cfg.Graph.URI != "" {
+		if problem := graphURIProblem(cfg.Graph.URI); problem != "" {
+			p.fail("MEMORY_GRAPH_URI: %s: %q", problem, cfg.Graph.URI)
+		}
 	}
 	if !naming.ValidName(cfg.Workspace) {
 		p.fail("MEMORY_WORKSPACE: 소문자/숫자/하이픈만: %q", cfg.Workspace)
@@ -198,10 +202,49 @@ func Load(getenv func(string) string) (Config, error) {
 	default:
 		p.fail("COLD_SNAPSHOT_TYPE: fs 또는 s3: %q", cfg.Snapshot.Type)
 	}
-	if len(p.errs) > 0 {
-		return Config{}, fmt.Errorf("memory 설정이 잘못됐습니다 — %w", errors.Join(p.errs...))
+}
+
+// graphSchemes 는 Neo4j 드라이버가 받는 URI scheme 이다. 값은 routing 여부다 — routing 이 없는 bolt 계열은 주소의
+// query(routing context)를 드라이버가 거부한다.
+var graphSchemes = map[string]bool{"bolt": false, "bolt+s": false, "bolt+ssc": false, "bolt+unix": false, "neo4j": true, "neo4j+s": true, "neo4j+ssc": true}
+
+// unixGraphScheme 은 unix 소켓 주소다 — host 없이 소켓 경로만 둔다 (bolt+unix:///var/run/neo4j.sock).
+const unixGraphScheme = "bolt+unix"
+
+// graphURIForms 는 MEMORY_GRAPH_URI 로 받는 꼴이다. scheme·host 가 틀린 주소를 거부할 때 그대로 알린다.
+const graphURIForms = "bolt://, bolt+s://, bolt+ssc://, neo4j://, neo4j+s://, neo4j+ssc:// 주소, bolt+unix:///소켓경로 또는 off 여야 합니다"
+
+// graphURIProblem 은 Neo4j 드라이버가 거부할 주소의 까닭이다 (받는 주소면 "") — scheme 오타(http://, host:port)를 graph.New
+// 까지 미루지 않고 다른 설정 오류와 함께 알리려고 Load 에서 본다. 드라이버(NewDriverWithContext)의 주소 검사를 따르고, 연결은
+// 하지 않는다 (Neo4j 가 꺼져 있어도 색인·검색은 돈다). scheme 은 맞는데 routing 이 없는 bolt 계열에 query 가 붙었으면 scheme
+// 목록이 아니라 query 가 문제라고 알린다.
+func graphURIProblem(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return graphURIForms
 	}
-	return cfg, nil
+	routing, known := graphSchemes[u.Scheme]
+	switch {
+	case !known:
+		return graphURIForms
+	case !routing && u.RawQuery != "":
+		return graphQueryProblem(u)
+	case u.Scheme == unixGraphScheme && (u.Host != "" || u.Path == ""):
+		return graphURIForms
+	case u.Scheme != unixGraphScheme && u.Host == "":
+		return graphURIForms
+	}
+	return ""
+}
+
+// graphQueryProblem 은 routing 이 없는 주소에 붙은 query 의 까닭이다. TCP 주소(bolt 계열)는 neo4j:// 로 바꿔도 되지만, unix 소켓
+// 주소는 neo4j:// 로 바꿀 수 없으므로(소켓은 routing 주소가 아니다) query 를 빼라고만 알린다.
+func graphQueryProblem(u *url.URL) string {
+	why := "routing context 는 neo4j:// 계열 주소만 받는다 (query 를 빼거나 neo4j:// 로)"
+	if u.Scheme == unixGraphScheme {
+		why = "unix 소켓 주소는 routing context 를 받지 않는다 (query 를 빼세요)"
+	}
+	return fmt.Sprintf("%s:// 주소에는 query(?%s)를 붙일 수 없습니다 — %s", u.Scheme, u.RawQuery, why)
 }
 
 var nonName = regexp.MustCompile(`[^a-z0-9-]+`)
@@ -238,11 +281,11 @@ func (p *parser) str(key, def string) string {
 	return def
 }
 
-// location 은 IANA 시간대 이름(Asia/Seoul)이다. 없으면 이 머신의 시간대.
+// location 은 IANA 시간대 이름(Asia/Seoul)이다. 없으면 이 머신의 시간대 (이름을 찾으면 이름이 붙은 Location).
 func (p *parser) location(key string) *time.Location {
 	v := p.str(key, "")
 	if v == "" {
-		return time.Local
+		return machineLocation(p.getenv, os.Readlink, time.Local)
 	}
 	loc, err := time.LoadLocation(v)
 	if err != nil {

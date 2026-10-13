@@ -72,6 +72,10 @@ func TestISMMovesIndexToColdAndTierPrunesHot(t *testing.T) {
 	if _, err := os.Stat(abs); err != nil {
 		t.Fatal("ISM 은 파일을 모른다 — hot 원본은 아직 남아 있다")
 	}
+	// ISM 스냅샷(목록 없음)은 그 스냅샷보다 시계 차이 여유(5분) 넘게 앞서 적재된 내용만 가진 것으로 본다 (GUIDE §7 cold 소유).
+	// 실제 ISM 은 인덱스를 만든 지 hot 기간(기본 60일)이 지나서 스냅샷을 뜨지만, 이 테스트는 hot 0일이라 적재 몇 분 뒤에 뜬다 —
+	// 여유 안이라 tier 가 원본을 남긴다. 적재 시각을 하루 앞당겨 실제 순서를 흉내 낸다.
+	backdateIngest(t, m, doc, 24*time.Hour)
 	decisions, err := cold.Tier(ctx, m.os, m.store, m.cfg, cold.TierOptions{Team: m.cfg.DefaultTeam})
 	if err != nil {
 		t.Fatal(err)

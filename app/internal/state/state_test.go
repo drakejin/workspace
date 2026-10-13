@@ -13,7 +13,7 @@ import (
 
 func TestLedgerSkipsCorruptLines(t *testing.T) {
 	dir := t.TempDir()
-	l := NewLedger[map[string]int](dir)
+	l := newLedger[map[string]int](dir)
 	var bad []int
 	l.OnCorrupt = func(_ string, line int) { bad = append(bad, line) }
 	if got, err := l.ReadAll("t"); err != nil || got != nil {
@@ -32,7 +32,7 @@ func TestLedgerSkipsCorruptLines(t *testing.T) {
 	if teams, _ := l.Teams(); !reflect.DeepEqual(teams, []string{"t"}) {
 		t.Errorf("teams = %v", teams)
 	}
-	if teams, _ := NewLedger[int](filepath.Join(dir, "none")).Teams(); teams != nil {
+	if teams, _ := newLedger[int](filepath.Join(dir, "none")).Teams(); teams != nil {
 		t.Error("없는 디렉토리")
 	}
 }
@@ -41,7 +41,7 @@ func TestLedgerSkipsCorruptLines(t *testing.T) {
 // 이어 붙이지 않는다 — 이어 붙이면 새 기록(판정·사람의 답)까지 깨진 줄로 버려진다.
 func TestLedgerAppendAfterTruncatedLine(t *testing.T) {
 	dir := t.TempDir()
-	l := NewLedger[JudgeRecord](dir)
+	l := newLedger[JudgeRecord](dir)
 	var bad []int
 	l.OnCorrupt = func(_ string, line int) { bad = append(bad, line) }
 	if err := l.Append("t", JudgeRecord{PairKey: "a", Decision: DecisionKeep}); err != nil {
@@ -74,7 +74,7 @@ func TestLedgerAppendAfterTruncatedLine(t *testing.T) {
 // 줄바꿈으로 끝나는 원장(빈 파일 포함)에는 빈 줄을 끼우지 않는다.
 func TestLedgerAppendKeepsOneRecordPerLine(t *testing.T) {
 	dir := t.TempDir()
-	l := NewLedger[JudgeRecord](dir)
+	l := newLedger[JudgeRecord](dir)
 	if err := os.WriteFile(filepath.Join(dir, "t.jsonl"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestLockStatusAndTick(t *testing.T) {
 		t.Error("처음엔 없음")
 	}
 	// 낡은 pid 파일(재사용된 pid 1 포함)은 락이 아니다 — 락은 커널이 쥐는 flock 이다
-	if err := os.MkdirAll(RuntimeDir(root), 0o755); err != nil {
+	if err := os.MkdirAll(runtimeDir(root), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	_ = os.WriteFile(pidFile(root), []byte("1"), 0o644)

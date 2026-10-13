@@ -3,6 +3,8 @@ package state
 import (
 	"path/filepath"
 	"sort"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // Decision 은 판정 결론이다.
@@ -54,12 +56,30 @@ type JudgeState struct{ Ledger *Ledger[JudgeRecord] }
 
 // NewJudgeState 는 root 의 판정 원장이다.
 func NewJudgeState(root string) *JudgeState {
-	return &JudgeState{Ledger: NewLedger[JudgeRecord](filepath.Join(CacheDir(root), "judge"))}
+	return &JudgeState{Ledger: newLedger[JudgeRecord](filepath.Join(CacheDir(root), "judge"))}
 }
+
+// records 는 팀 원장 전체다. 경로는 NFC 로 맞춰 읽는다 — 문서의 정체(source_path)가 NFC 로 바뀌기 전에 NFD 경로
+// (Finder 가 만든 한글 이름)로 남은 기록도 계속 적용된다.
+func (s *JudgeState) records(team string) ([]JudgeRecord, error) {
+	records, err := s.Ledger.ReadAll(team)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]JudgeRecord, len(records))
+	for i, r := range records {
+		r.Old.Path, r.New.Path = canonicalPath(r.Old.Path), canonicalPath(r.New.Path)
+		out[i] = r
+	}
+	return out, nil
+}
+
+// canonicalPath 는 원장에 적힌 문서 경로를 source_path 꼴(유니코드 NFC — document.CanonicalPath 와 같다)로 맞춘다.
+func canonicalPath(p string) string { return norm.NFC.String(p) }
 
 // Latest 는 pairKey → 마지막 기록이다.
 func (s *JudgeState) Latest(team string) (map[string]JudgeRecord, error) {
-	records, err := s.Ledger.ReadAll(team)
+	records, err := s.records(team)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +125,7 @@ func (s *JudgeState) SupersededMap(team string, docs map[string]JudgedDoc) (map[
 
 // latestInOrder 는 쌍마다 마지막 기록을, 그 기록이 원장에 붙은 순서대로 돌려준다.
 func (s *JudgeState) latestInOrder(team string) ([]JudgeRecord, error) {
-	records, err := s.Ledger.ReadAll(team)
+	records, err := s.records(team)
 	if err != nil {
 		return nil, err
 	}

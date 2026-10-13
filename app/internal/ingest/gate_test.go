@@ -78,9 +78,9 @@ func TestGate(t *testing.T) {
 		{filepath.Join(root, "none.md"), 1, 100, "", true},
 	}
 	for _, c := range cases {
-		got, err := Gate(c.abs, c.size, c.max)
+		got, err := gate(c.abs, c.size, c.max)
 		if got != c.want || (err != nil) != c.wantErr {
-			t.Errorf("Gate(%s, %d, %d) = %q %v", filepath.Base(c.abs), c.size, c.max, got, err)
+			t.Errorf("gate(%s, %d, %d) = %q %v", filepath.Base(c.abs), c.size, c.max, got, err)
 		}
 	}
 }

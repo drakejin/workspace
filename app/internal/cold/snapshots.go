@@ -23,6 +23,7 @@ type Index struct {
 	Snapshots    []string // 이 인덱스를 담은 성공 스냅샷 전부 (오래된 것부터)
 	SnapshotTime string   // 가장 최근 스냅샷 시각
 	Restored     bool     // 복원본(auto_manage=false)이 열려 있다
+	Searchable   bool     // 복원본에 검색 alias 가 붙어 있다 (false 면 합치다 멈춘 복원 — restore 를 다시 해야 검색에 나온다)
 	Reopened     bool     // 같은 이름의 hot 인덱스가 다시 생겼다 (다음 tier 전까지 복원·archive 를 하지 않는다)
 }
 
@@ -84,6 +85,10 @@ func ListCold(ctx context.Context, c opensearch.Client, cfg config.Config, team 
 	if err != nil {
 		return nil, fmt.Errorf("list indices %s: %w", team, err)
 	}
+	searchable, err := searchAliased(ctx, c, team)
+	if err != nil {
+		return nil, err
+	}
 	sort.SliceStable(snaps, func(i, j int) bool { return snaps[i].StartTime < snaps[j].StartTime })
 	byName := map[string]Index{}
 	for _, s := range snaps {
@@ -97,7 +102,7 @@ func ListCold(ctx context.Context, c opensearch.Client, cfg config.Config, team 
 			if !seen {
 				settings, live := open[name]
 				unmanaged := opensearch.IsUnmanaged(settings)
-				entry = Index{Name: name, Restored: live && unmanaged, Reopened: live && !unmanaged}
+				entry = Index{Name: name, Restored: live && unmanaged, Searchable: live && unmanaged && searchable[name], Reopened: live && !unmanaged}
 			}
 			entry.Snapshots = append(entry.Snapshots, s.Name)
 			entry.SnapshotTime = s.StartTime
@@ -112,6 +117,27 @@ func ListCold(ctx context.Context, c opensearch.Client, cfg config.Config, team 
 	return out, nil
 }
 
+// searchAliased 는 팀 인덱스 중 검색 alias(팀 hot alias)가 붙은 것이다. restore_cold 는 다 합친 뒤에야 alias 를 붙이므로,
+// alias 없는 복원본은 합치다 멈춘 것이다.
+func searchAliased(ctx context.Context, c opensearch.Client, team string) (map[string]bool, error) {
+	var current map[string]struct {
+		Aliases map[string]any `json:"aliases"`
+	}
+	err := c.Do(ctx, http.MethodGet, "/"+naming.TeamPattern(team)+"/_alias", nil, url.Values{"allow_no_indices": {"true"}}, &current)
+	if opensearch.IsStatus(err, http.StatusNotFound) {
+		return map[string]bool{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("aliases %s: %w", team, err)
+	}
+	out := make(map[string]bool, len(current))
+	for index, v := range current {
+		_, aliased := v.Aliases[naming.HotAlias(team)]
+		out[index] = aliased
+	}
+	return out, nil
+}
+
 // TeamInWorkspace 는 team 이 이 workspace 의 팀인가다 — 이 workspace 가 문서를 둔 팀이거나(opensearch.WorkspaceTeams),
 // 이 workspace 의 cold store 에 그 팀의 보관본이 있다 (모든 달이 cold 로 가 열린 인덱스가 없는 팀). 스냅샷 repository 는
 // 클러스터의 모든 meta-repo 가 같이 쓰지만 cold store 는 workspace 마다 따로다 (로컬은 meta-repo 아래, S3 는 {prefix}/{workspace}/).
@@ -123,15 +149,15 @@ func TeamInWorkspace(ctx context.Context, c opensearch.Client, store Store, work
 	if owned[team] {
 		return true, nil
 	}
-	keys, err := store.List(ctx, TeamPrefix(team))
+	keys, err := store.List(ctx, teamPrefix(team))
 	if err != nil {
 		return false, fmt.Errorf("cold store %s: %w", team, err)
 	}
 	return len(keys) > 0, nil
 }
 
-// Archive 는 cold 로 간(스냅샷에 들어간) 월별 인덱스와 그 인덱스를 담은 성공 스냅샷 이름들이다 (복원 여부 무관).
-type Archive map[string][]string
+// Archive 는 cold 로 간(스냅샷에 들어간) 월별 인덱스와 그 인덱스를 담은 성공 스냅샷들이다 (복원 여부 무관).
+type Archive map[string][]Snapshot
 
 // Has 는 index 가 스냅샷에 있는가다.
 func (a Archive) Has(index string) bool { return len(a[index]) > 0 }
@@ -146,7 +172,7 @@ func ArchivedMonths(ctx context.Context, c opensearch.Client, cfg config.Config)
 	for _, s := range snaps {
 		for _, name := range s.Indices {
 			if naming.IsMonthly(name) {
-				out[name] = append(out[name], s.Name)
+				out[name] = append(out[name], s)
 			}
 		}
 	}
@@ -215,10 +241,10 @@ func DeleteSnapshot(ctx context.Context, c opensearch.Client, cfg config.Config,
 	return nil
 }
 
-// RestoreIndex 는 스냅샷에서 인덱스를 되살린다. 복원본은 ISM 자동 관리에서 뺀다 — 원래 생성일을 유지하므로
+// restoreIndex 는 스냅샷에서 인덱스를 되살린다. 복원본은 ISM 자동 관리에서 뺀다 — 원래 생성일을 유지하므로
 // 그대로 두면 ISM 이 바로 다시 cold 로 보낸다. 검색 alias 없이 되살린다 — restore_cold 는 다 합치고 deprecate 표시를
 // 입힌 뒤에 alias 를 붙이고(Restore), archive 는 alias 없이 잠깐 열어 고친다.
-func RestoreIndex(ctx context.Context, c opensearch.Client, cfg config.Config, index, snapshot string) error {
+func restoreIndex(ctx context.Context, c opensearch.Client, cfg config.Config, index, snapshot string) error {
 	if err := restoreSnapshot(ctx, c, cfg, snapshot, restoreBody(index)); err != nil {
 		return fmt.Errorf("restore %s from %s: %w", index, snapshot, err)
 	}
@@ -258,22 +284,25 @@ func Restore(ctx context.Context, c opensearch.Client, cfg config.Config, name s
 			continue
 		}
 		if target.Reopened {
-			return Index{}, Reopened(name)
+			return Index{}, Reopened(ctx, c, cfg, name)
 		}
 		if err := restoreSearchable(ctx, c, cfg, target, idx.Team); err != nil {
 			return Index{}, err
 		}
-		target.Restored = true
+		target.Restored, target.Searchable = true, true
 		return target, nil
 	}
 	return Index{}, fmt.Errorf("cold 에 %s 가 없습니다. list_cold 로 먼저 확인하세요", name)
 }
 
-// restoreSearchable 은 target 의 스냅샷 전부를 합치고 deprecate 표시를 다시 입힌 뒤에 검색 alias 를 붙인다 — 그 전까지
-// 새로 연 복원본은 검색에 나오지 않아, 합치다 멈춰도 표시가 빠진 문서가 기본 검색에 나오지 않는다.
+// restoreSearchable 은 target 의 스냅샷 전부를 합치고 예전 판의 빈 text 를 지우고 deprecate 표시를 다시 입힌 뒤에 검색 alias 를
+// 붙인다 — 그 전까지 새로 연 복원본은 검색에 나오지 않아, 합치다 멈춰도 표시가 빠진 문서가 기본 검색에 나오지 않는다.
 func restoreSearchable(ctx context.Context, c opensearch.Client, cfg config.Config, target Index, team string) error {
 	if err := RestoreAll(ctx, c, cfg, target.Name, target.Snapshots); err != nil {
 		return partialRestore(ctx, c, cfg, team, target.Name, err)
+	}
+	if err := dropEmptyText(ctx, c, target.Name); err != nil {
+		return fmt.Errorf("%s: 스냅샷은 다 합쳤지만 본문이 없는 문서의 빈 text 를 지우지 못해 검색에 붙이지 않았습니다 — restore 를 다시 하세요: %w", target.Name, err)
 	}
 	if err := applyDeprecations(ctx, c, cfg, team, target.Name); err != nil {
 		return fmt.Errorf("%s: 스냅샷은 다 합쳤지만 deprecate 표시를 다시 입히지 못해 검색에 붙이지 않았습니다 — restore 를 다시 하세요: %w", target.Name, err)
@@ -283,21 +312,22 @@ func restoreSearchable(ctx context.Context, c opensearch.Client, cfg config.Conf
 	return attachAliases(ctx, c, target.Name, team, cfg.OrgOf(team))
 }
 
-// partialRestore 는 스냅샷을 합치다 멈춘 복원의 오류다. 복원본이 열려 있으면 deprecate 표시를 다시 입힌다 — 예전 판의
-// 복원본은 이미 검색 alias 가 붙어 있어, 합치며 더한 문서가 표시 없이 기본 검색에 나온다.
+// partialRestore 는 스냅샷을 합치다 멈춘 복원의 오류다. 복원본이 열려 있으면 예전 판의 빈 text 를 지우고 deprecate 표시를
+// 다시 입힌다 — 예전 판의 복원본은 이미 검색 alias 가 붙어 있어, 합치며 더한 문서가 그대로(빈 결과로, 표시 없이) 검색에 나온다.
 func partialRestore(ctx context.Context, c opensearch.Client, cfg config.Config, team, index string, cause error) error {
 	restored, _, err := OpenState(ctx, c, index)
 	if err != nil {
-		return fmt.Errorf("%s 를 일부만 복원했을 수 있습니다 — 복원본 상태를 읽지 못해 deprecate 표시를 다시 입히지 못했습니다. restore 를 다시 하세요: %w",
+		return fmt.Errorf("%s 를 일부만 복원했을 수 있습니다 — 복원본 상태를 읽지 못해 빈 text 를 지우거나 deprecate 표시를 다시 입히지 못했습니다. restore 를 다시 하세요: %w",
 			index, errors.Join(cause, err))
 	}
 	if !restored {
 		return cause // 아무것도 열지 못했다 (가장 최근 스냅샷부터 실패했거나, hot 에 다시 열렸다)
 	}
-	if err := applyDeprecations(ctx, c, cfg, team, index); err != nil {
-		return fmt.Errorf("%s 를 일부만 복원했고 deprecate 표시도 다시 입히지 못했습니다 — restore 를 다시 하세요: %w", index, errors.Join(cause, err))
+	// 하나가 실패해도 다른 하나는 한다 — 둘 다 이미 검색에 붙은 복원본이 보이는 모습을 고친다
+	if err := errors.Join(dropEmptyText(ctx, c, index), applyDeprecations(ctx, c, cfg, team, index)); err != nil {
+		return fmt.Errorf("%s 를 일부만 복원했고 빈 text 를 지우거나 deprecate 표시를 다시 입히지 못했습니다 — restore 를 다시 하세요: %w", index, errors.Join(cause, err))
 	}
-	return fmt.Errorf("%s 를 일부만 복원했습니다 — 스냅샷을 합치다 멈췄습니다(deprecate 표시는 다시 입혔다). "+
+	return fmt.Errorf("%s 를 일부만 복원했습니다 — 스냅샷을 합치다 멈췄습니다(빈 text 는 지우고 deprecate 표시는 다시 입혔다). "+
 		"새로 연 복원본은 다 합칠 때까지 검색에 나오지 않습니다. restore 를 다시 하면 빠진 문서만 더해 마무리합니다: %w", index, cause)
 }
 
@@ -308,6 +338,26 @@ func attachAliases(ctx context.Context, c opensearch.Client, index, team, org st
 	}
 	if err := c.Do(ctx, http.MethodPost, "/_aliases", map[string]any{"actions": actions}, nil, nil); err != nil {
 		return fmt.Errorf("aliases %s: %w", index, err)
+	}
+	return nil
+}
+
+// dropEmptyTextScript 는 빈 text 를 필드째 지우는 스크립트다. 다른 문서는 건드리지 않는다(noop).
+const dropEmptyTextScript = "if (ctx._source.text instanceof String && ctx._source.text.isEmpty()) { ctx._source.remove('text') } else { ctx.op = 'noop' }"
+
+// dropEmptyText 는 복원본에서 본문이 없는 문서의 청크 0 에 남은 "text": "" 를 지운다. 예전 판은 빈 text 를 빈 문자열로 썼고
+// exists 는 빈 문자열도 있다고 보아, 그대로 검색에 붙이면 그 문서가 목록·검색에 빈 결과로 나온다 (지금 판은 필드째 쓰지 않는다).
+func dropEmptyText(ctx context.Context, c opensearch.Client, index string) error {
+	body := map[string]any{
+		"query": map[string]any{"bool": map[string]any{"filter": []any{
+			map[string]any{"term": map[string]any{"chunk_index": 0}},
+			map[string]any{"exists": map[string]any{"field": "text"}},
+		}}},
+		"script": map[string]any{"lang": "painless", "source": dropEmptyTextScript},
+	}
+	q := url.Values{"refresh": {"true"}, "conflicts": {"proceed"}}
+	if err := c.Do(ctx, http.MethodPost, "/"+index+"/_update_by_query", body, q, nil); err != nil {
+		return fmt.Errorf("empty text %s: %w", index, err)
 	}
 	return nil
 }

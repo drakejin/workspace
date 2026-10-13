@@ -44,17 +44,17 @@ var typeHints = []typeHint{
 	{regexp.MustCompile(`(?i)(^|/)specs?(/|$)|(^|/)spec[-_]|[-_]spec\.md$`), model.DocSpec},
 }
 
-// PathFacts 는 경로에서 추론한 값이다.
-type PathFacts struct {
+// pathFacts 는 경로에서 추론한 값이다.
+type pathFacts struct {
 	Repo    string
 	Topic   string
 	DocType model.DocType
 }
 
-// FactsFromPath 는 meta-repository 기준 상대 경로에서 repo 와 문서 종류를 추론한다.
-func FactsFromPath(rel string) PathFacts {
+// factsFromPath 는 meta-repository 기준 상대 경로에서 repo 와 문서 종류를 추론한다.
+func factsFromPath(rel string) pathFacts {
 	rel = strings.ReplaceAll(rel, "\\", "/")
-	facts := PathFacts{DocType: model.DocNote}
+	facts := pathFacts{DocType: model.DocNote}
 	if m := repoDocs.FindStringSubmatch(rel); m != nil {
 		facts.Repo = NormalizeProject(m[1])
 	} else if m := ManagedRepoDocs.FindStringSubmatch(rel); m != nil {
@@ -76,10 +76,10 @@ func FactsFromPath(rel string) PathFacts {
 	return facts
 }
 
-// KindOf 는 기억의 성질이다. knowledge·guide 문서, 그리고 관리 대상 repository(main/{repo}/docs)의 문서는
+// kindOf 는 기억의 성질이다. knowledge·guide 문서, 그리고 관리 대상 repository(main/{repo}/docs)의 문서는
 // 누가 바꾸기 전까지 유효한 사실이라 knowledge — 유사도로 판정하지 않고 노화하지 않는다.
 // 나머지(meta-repo 의 spec·adr·prd·plan·note)는 시간순으로 쌓이는 기록이라 episodic.
-func KindOf(docType model.DocType, rel string) model.Kind {
+func kindOf(docType model.DocType, rel string) model.Kind {
 	if docType == model.DocKnowledge || docType == model.DocGuide || strings.HasPrefix(rel, "main/") {
 		return model.KindKnowledge
 	}
@@ -101,13 +101,13 @@ type Metadata struct {
 
 // ResolveMetadata 는 frontmatter 와 경로로 메타를 정한다.
 func ResolveMetadata(fm markdown.Frontmatter, rel, defaultTeam string) (Metadata, error) {
-	facts := FactsFromPath(rel)
+	facts := factsFromPath(rel)
 	team := strings.ToLower(firstString(fm, "team"))
 	if team == "" {
 		team = defaultTeam
 	}
 	if err := naming.ValidateTeam(team); err != nil {
-		return Metadata{}, err
+		return Metadata{}, &markdown.FrontmatterError{Err: err} // frontmatter 값 문제 — audit 가 bad-frontmatter 로 보고한다
 	}
 	docType := facts.DocType
 	if t, ok := model.ParseDocType(strings.ToLower(firstString(fm, "doc_type", "type"))); ok {
@@ -126,7 +126,7 @@ func ResolveMetadata(fm markdown.Frontmatter, rel, defaultTeam string) (Metadata
 		Repo:         repo,
 		Topic:        topic,
 		DocType:      docType,
-		Kind:         KindOf(docType, rel),
+		Kind:         kindOf(docType, rel),
 		DeclaredTime: firstTime(fm, "event_time", "date"),
 		DeclaredDay:  firstDay(fm, "event_time", "date"),
 		Supersedes:   CanonicalPath(firstString(fm, "supersedes")),

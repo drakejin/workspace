@@ -58,52 +58,10 @@ make memory-daemon-start             # 4) 데몬 상주. macOS 는 launchd 가 �
 scripts/memory-daemon/run.sh status  # 5) 확인 — 무엇이 꺼져 있으면 마지막 줄에 '할 일' 이 나온다
 ```
 
-`make memory-init` 출력:
-
-```
-[memory-init] docker: ok
-[memory-init] tools: go1.25.6
-[memory-init] build: .cache/bin/memory-mcp, .cache/bin/memory-daemon
-[memory-init] stack: started
-[memory-init] opensearch: waiting http://localhost:9202/_cluster/health
-[memory-init] opensearch: ready
-[memory-init] neo4j: waiting http://localhost:7476
-[memory-init] neo4j: ready
-[reconcile] scanned=11 indexed=11 stat_updated=0 removed=0 skipped=0 failed=0 cold_owned=0 flags=0 trigger=boot took=365ms
-[graph] docs=14 entities=0 edges=29
-[memory-init] reconcile: done
-
-[memory-init] 다음: 'make memory-daemon-start' 로 데몬을 상주시키고, 'scripts/memory-daemon/run.sh status' 로 확인하세요
-```
-
-`make memory-daemon-start` 출력 (macOS), 그리고 한 번 더 불렀을 때:
-
-```
-[memory-daemon] launchd: com.drakejin.memory.workspace.daemon (workspace=workspace, root=/Users/jin/Workspace/drakejin/workspace — 로그인 때 다시 켜고, 죽으면 다시 띄운다)
-[memory-daemon] started (pid 39975) — 로그 /Users/jin/Workspace/drakejin/workspace/.cache/daemon/daemon.log, 상태 'scripts/memory-daemon/run.sh status'
-
-[memory-daemon] already running (pid 39975) — 로그 /Users/jin/Workspace/drakejin/workspace/.cache/daemon/daemon.log
-```
-
-`scripts/memory-daemon/run.sh status` 출력 (데몬이 떠 있을 때. 첫 줄은 macOS 에서만 나오는 launchd 적재 여부):
-
-```
-[memory-daemon] launchd: loaded (com.drakejin.memory.workspace.daemon)
-[status] container opensearch: running
-[status] container neo4j: running
-[status] opensearch: yellow (http://localhost:9202)
-[status] index: workspace=workspace 11 docs, 97 chunks (memory indices 6)
-[status] last indexed: 2026-10-13T00:32:11.795Z
-[status] graph: 14 docs, 0 entities, 29 edges (bolt://localhost:7689)
-[status] daemon: running pid=39975 since 2026-10-13T00:32:29.33219Z, cycles=1
-[status] heartbeat: 1s ago (interval 60s)
-[status] last cycle: 2026-10-13T00:32:29.422157Z trigger=boot scanned=11 indexed=0 stat_updated=0 removed=0 skipped=0 failed=0 cold_owned=0 took=11ms
-[status] last graph: docs=14 entities=0 edges=29
-[status] judge: on, 답을 기다리는 질문 0건
-[status] distill: off, cache 0건, 대기 0건
-```
-
-`memory indices` 는 클러스터 전체(다른 meta-repo·샘플 포함)의 메모리 인덱스 수다. 단일 노드라 `yellow` 가 정상이다. 포트는 같은 머신의 다른 메모리 스택(9200·9201, 7687·7688)과 겹치지 않게 잡았다:
+단계마다 무엇을 하고 무엇을 찍는지(실제 출력 예)는 GUIDE §2 에 한 번만 적는다 — [`make memory-init`](./GUIDE.md#21-make-memory-init--인프라-올리기-멱등) ·
+[`make memory-daemon-start`](./GUIDE.md#22-make-memory-daemon-start--상주) · [`status`](./GUIDE.md#23-scriptsmemory-daemonrunsh-status).
+`make memory-init` 은 `[memory-init] reconcile: done` 과 다음에 할 명령으로 끝나고, status 는 꺼진 것이 있으면 마지막 `[status] 할 일:` 줄에 무엇을 실행할지 적는다.
+단일 노드라 OpenSearch 는 `yellow` 가 정상이다. 포트는 같은 머신의 다른 메모리 스택(9200·9201, 7687·7688)과 겹치지 않게 잡았다:
 OpenSearch `localhost:9202`, Neo4j bolt `7689` · 브라우저 `7476`, (선택) Dashboards `5603`.
 
 ### 1.3 상주·정기 실행 (macOS launchd)
@@ -112,10 +70,10 @@ OpenSearch `localhost:9202`, Neo4j bolt `7689` · 브라우저 `7476`, (선택) 
 | --- | --- |
 | `make memory-daemon-start` | 데몬을 로그인 때 띄우고 죽으면 다시 띄운다 (launchd `com.drakejin.memory.<workspace>.daemon`, RunAtLoad + KeepAlive — meta-repo 마다 따로라 `META_REPO_ROOT=… make memory-daemon-start` 로 다른 meta-repo 의 데몬도 따로 띄운다. start 때의 메모리 설정을 잡에 담는다(비밀은 빼고 — 표 아래 참고)). launchd 가 없으면 nohup 백그라운드 — 머신을 다시 켜면 다시 start 한다. 이미 돌고 있으면 그대로 둔다 |
 | `make memory-daemon-stop` | launchd 에서 내리고(plist 삭제) 떠 있는 데몬에 SIGTERM — 끝날 때까지 최대 60초 기다린다 |
-| `scripts/memory-daemon/run.sh run` | 데몬을 포그라운드로 (로그를 터미널에서 볼 때. launchd 가 부르는 진입점이기도 하다) |
-| `scripts/schedule/run.sh install` / `uninstall` | 6시간마다 깨워 하루 한 번 tier(60일 지난 episodic → cold) + 감사 보고 (`com.drakejin.workspace.tier`) |
+| `scripts/memory-daemon/run.sh run` | 데몬을 포그라운드로 (로그를 터미널에서 볼 때. launchd 가 부르는 진입점이기도 하다 — 이 레포의 Go 코드가 컴파일되지 않으면 경고를 남기고 기존 `.cache/bin` 바이너리로 뜬다) |
+| `scripts/schedule/run.sh install` / `uninstall` | 6시간마다 깨워 하루 한 번 tier(60일 지난 episodic → cold) + 감사 보고 (launchd `com.drakejin.memory.<workspace>.tier` — 데몬처럼 meta-repo 마다 따로라 `META_REPO_ROOT=… scripts/schedule/run.sh install` 로 다른 meta-repo 의 tier 도 따로 건다. install 때의 메모리 설정을 데몬과 같은 규칙으로 잡에 담는다. 예전 고정 이름 `com.drakejin.workspace.tier` 는 그 잡이 돌던 meta-repo — 그 plist 가 부르는 checkout 의 `.env` 로 정한다 — 에 install·uninstall 할 때 내리고, 다른 meta-repo 의 것이면 그대로 두고 그 meta-repo 를 알린다. 그 checkout 이 없어졌으면 돌 수 없는 잡이라 어느 install·uninstall 에서든 내린다 — 볼륨이 빠졌거나 읽을 권한이 없어 닿지 못할 뿐이면 그대로 두고 직접 내리는 명령을 알린다) |
 
-로그는 데몬 `.cache/daemon/daemon.log`, tier `.cache/schedule/tier.log`. 데몬은 하나만 돈다 — start 는 떠 있으면 그대로 두고, 두 번째 `run` 은 `데몬이 이미 돌고 있습니다 (pid …)` 로 거부되며, `once`(와 `make memory-init` 의 최초 색인)는 `[reconcile] 데몬(pid …)이 돌고 있어 1회 색인을 건너뜁니다` 를 찍고 넘어간다.
+로그는 대상 meta-repo 의 데몬 `.cache/daemon/daemon.log`, tier `.cache/schedule/tier.log`. 데몬은 하나만 돈다 — start 는 떠 있으면 그대로 두고, 두 번째 `run` 은 `데몬이 이미 돌고 있습니다 (pid …)` 로 거부되며, `once`(와 `make memory-init` 의 최초 색인)는 `[reconcile] 데몬(pid …)이 돌고 있어 1회 색인을 건너뜁니다` 를 찍고 넘어간다.
 데몬은 start 때의 메모리 설정(`.env` 와 명령줄의 `META_REPO_ROOT`·`OPENSEARCH_URL`·`OS_PORT`·`MEMORY_*`·`COLD_*`·`AWS_REGION`·`AWS_PROFILE`·`AWS_ENDPOINT_URL_S3`, `NEO4J_*` 는 포트만)을 launchd 잡에 담아 돈다.
 이름에 `PASSWORD`·`SECRET`·`TOKEN` 이 든 값은 plist 에 쓰지 않는다 — 잡이 `.env`·AWS 기본 체인에서 다시 읽는다. 설정을 바꾸면 `make memory-daemon-stop && make memory-daemon-start`.
 
@@ -146,13 +104,13 @@ claude mcp add drakejin-workspace-memory-mcp -s user -- bash ~/Workspace/drakeji
 
 | 도구 | 하는 일 |
 | --- | --- |
-| `search_memory(query?, project?, topic?, date?, time_range?, doc_type?, team?, org?, size?, include_superseded?)` | hot 영역 BM25 검색, 또는 필터로 가져오기. 필터: **프로젝트**(`project`), **주제**(`topic`), **날짜**(`date`, 그날 하루 — 문서의 날: frontmatter `date`, 없으면 커밋 시각을 `MEMORY_TIME_ZONE` 에서 본 날), **범위**(`time_range` from~to), 문서 종류. `query` 를 비우고 필터만 주면 맞는 문서를 최신순으로(문서 하나에 한 건, 머리 `문서 N건`) 가져온다. 질의어 검색은 청크 단위라 한 문서의 여러 절이 따로 나올 수 있다(머리 `청크 N건 · 문서 M건 (BM25)` — 맞은 청크 수와 그 청크들의 문서 수). 결과는 `source_path › header_path (종류, project=, topic=, 날짜)`, 청크, (증류가 켜져 있으면) 요약 |
-| `search_filters(project?, topic?, date?, time_range?, doc_type?, …)` | 필터에 쓸 수 있는 값과 문서 수 — 프로젝트·주제·문서 종류·날짜 범위·날짜별 수 |
-| `related_docs(path, depth?)` | knowledge graph 에서 이어진 문서 — supersedes·derived_from·relates·링크·같은 entity·같은 repo |
-| `docs_by_entity(entity)` | 증류가 뽑은 entity(`service:order-api` 등)를 다루는 문서 |
-| `ingest_path(path, team?)` | 데몬이 아직 잡지 못한 파일·디렉토리를 바로 색인. 경로는 디스크의 철자(대소문자·NFC)로 맞추고, 데몬과 같은 게이트로 바이너리·`MEMORY_MAX_FILE_BYTES` 초과는 건너뛴다고 알린다. 적재한 문서는 다음 데몬 사이클이 판정·증류·그래프로 넘긴다 |
+| `search_memory(query?, project?, topic?, date?, time_range?, doc_type?, team?, org?, size?, include_superseded?)` | hot 영역 BM25 검색, 또는 필터로 가져오기. 필터: **프로젝트**(`project`), **주제**(`topic`), **날짜**(`date`, 그날 하루 — 문서의 날: frontmatter `date`, 없으면 커밋 시각을 `MEMORY_TIME_ZONE` 에서 본 날), **범위**(`time_range` from~to — OpenSearch 가 읽는 꼴 중 흔한 것만 받는다: 날짜(`2026-10-01`, `2026-10`), 시각(`2026-10-01T09:00`), epoch 밀리초(시간대를 입히지 않은 그 시각 — 네 자리 수는 연도), date math(`now-30d`, `now-7d/d`). 그 밖의 값(OpenSearch 가 읽는 드문 꼴·없는 날 포함)과 뒤집힌 범위(날짜·시각·date math 가 섞여도, 서머타임이 바뀌는 날도 OpenSearch 처럼 계산 — 이 머신의 tzdata 로 계산하므로 JDK 와 tzdata 가 다른 드문 시간대는 전환 시각 근처에서 다를 수 있다, GUIDE §4.2)는 거부), 문서 종류. 프로젝트는 대소문자를 가리지 않는다. 팀·org 의 hot 색인이 없으면(이름 오타, 적재 전, 모두 cold 로 내려감 — org 는 `MEMORY_TEAM_ORGS` 를 바꾼 뒤 `bootstrap`·데몬 재시작 전도) 0건이 아니라 `hot 색인이 없습니다` 와 `list_cold` 안내로 알린다. `query` 를 비우고 필터만 주면 맞는 문서를 최신순으로(문서 하나에 한 건, 머리 `문서 N건`) 가져온다. 질의어 검색은 청크 단위라 한 문서의 여러 절이 따로 나올 수 있다(머리 `청크 N건 · 문서 M건 (BM25)` — 맞은 청크 수와 그 청크들의 문서 수). 결과는 `source_path › header_path (종류, project=, topic=, 날짜)`, 청크, (증류가 켜져 있으면) 요약 |
+| `search_filters(project?, topic?, date?, time_range?, doc_type?, …)` | 필터에 쓸 수 있는 값과 문서 수 — 프로젝트·주제·문서 종류·날짜 범위·날짜별 수 (값이 100개를 넘으면 잘린 값들의 문서 수를 `외 문서 N건` 으로 알린다) |
+| `related_docs(path, depth?)` | knowledge graph 에서 이어진 문서 — supersedes·derived_from·relates·링크·같은 entity·같은 repo. `path` 는 `ingest_path` 처럼 맞춘다(`./docs/…`·meta-repo 안의 절대 경로·디스크의 철자 — `META_REPO_ROOT` 가 링크 경로면 링크를 푼 철자도). meta-repo 밖의 경로는 `meta-repository 밖의 경로입니다` 로 거부한다. 그래프에 없는 문서면 `그래프에 없는 문서입니다`, 있지만 이어진 것이 없으면 `그래프에 있지만 이어진 문서가 없습니다` 로 가른다 |
+| `docs_by_entity(entity)` | 증류가 뽑은 entity(`service:order-api` 등)를 다루는 문서. 기본 검색에서 숨는 문서에는 `related_docs` 처럼 `(superseded)`·`(deprecated)` 를 붙인다 |
+| `ingest_path(path, team?)` | 데몬이 아직 잡지 못한 파일·디렉토리를 바로 색인. 경로는 디스크의 철자(대소문자·NFC)로 맞추고, 데몬과 같은 게이트로 바이너리·`MEMORY_MAX_FILE_BYTES` 초과는 건너뛴다고 알린다. 적재한 문서는 다음 데몬 사이클이 판정·증류·그래프로 넘긴다. `team` 은 이번 적재에만 쓴다 — 파일이 바뀌면 데몬이 frontmatter team(없으면 기본 팀)으로 다시 쓰므로, 계속 둘 팀은 frontmatter 에 적는다 |
 | `list_cold(team?)` | 60일이 지나 cold 로 간 인덱스 목록 (인덱스마다 그 인덱스를 담은 스냅샷 전부). `team` 은 팀 이름만 받는다(org 는 받지 않는다). 이 meta-repo 의 팀만 — 다른 workspace 의 팀이면 거부한다 |
-| `restore_cold(index, confirmed?)` | cold 인덱스 복원 (그 인덱스를 담은 스냅샷 전부를 합친다). `confirmed=true` 가 없으면 "사용자에게 먼저 물으라" 고 돌려준다 |
+| `restore_cold(index, confirmed?)` | cold 인덱스 복원 (그 인덱스를 담은 스냅샷 전부를 합친다). 이 workspace 팀의 cold 에 없는 인덱스면 `confirmed` 와 상관없이 실패한다 (`list_cold` 로 확인). 있으면 `confirmed=true` 가 없을 때 "사용자에게 먼저 물으라" 고 돌려준다 — 이미 복원돼 검색에 나오는 인덱스(`[현재 복원됨]`)는 물을 것이 없다고, hot 에 다시 열린 인덱스는 지금 복원할 수 없다고 알린다 |
 
 발표의 넷(`search_memory`·`ingest_path`·`list_cold`·`restore_cold`)은 발표 그대로이고, `search_filters` 는 필터 값을 고르려고, 그래프 둘(`related_docs`·`docs_by_entity`)은 Neo4j 를 붙이며 더했다. 그래프를 끄면(`MEMORY_GRAPH_URI=off`) 그래프 도구는 "꺼져 있다" 를,
 Neo4j 에 붙지 못하면 연결 오류를 돌려준다. 어느 쪽이든 나머지 다섯은 그대로 돈다.
@@ -339,12 +297,17 @@ MATCH (e:Entity {workspace: 'workspace'})<-[:MENTIONS]-(d:Doc) RETURN e.type, e.
 ├── judge/{team}.jsonl      # 판정 원장 — 결정·질문·사람의 답 (지우면 다시 묻는다)
 ├── distill/{team}.jsonl    # 증류 캐시 — 본문 sha → 요약·entity (지우면 다시 증류한다)
 ├── archive/{team}.jsonl    # cold 문서 조치 감사 기록 (누가·왜) — deprecate 표시의 정본
-├── daemon/                 # 락·pid·daemon.log·status.json(마지막 사이클)·*.tick.json(주간 감사·tier 시각)
+├── daemon/                 # 락·pid·daemon.log·status.json(마지막 사이클)·*.tick.json(주간 감사·tier 시각)·launchd.label(start 가 올린 잡 이름)
+├── schedule/               # tier.log(tier launchd 로그)·launchd.label(install 이 깐 tier 잡 이름 — workspace 이름을 바꾼 뒤에도
+│                           #   uninstall·status 가 이것으로 그 잡을 찾는다. 잡이 깔려 있으면 지우지 않는다)
 ├── bin/                    # memory-mcp, memory-daemon (scripts 가 부를 때 빌드, make -C app build) — 지워도 된다
-├── schedule/ · bench/ · coverage.out   # tier launchd 로그, bench 리포트, 커버리지 — 지워도 된다
+├── bench/ · coverage.out   # bench 리포트, 커버리지 — 지워도 된다
 ```
 
-**`cold-store/` 와 `snapshots/` 는 지우면 안 된다.** tier 가 git 에서 지운 원본이 여기에만 있다. 오래 보관하려면 S3 로 둔다
+**`cold-store/` 와 `snapshots/` 는 지우면 안 된다.** cold 층의 정본(스냅샷, archive 로 고친 본문)이 여기에만 있다. tier 가 hot 에서 뺀 원본이
+git 히스토리에도 남는 것은 git 이 meta-repo 아래 파일을 다룰 때(meta-repo 가 git 레포의 꼭대기이거나, 바깥 레포가 그 아래 파일을 추적할 때)뿐이다 —
+그때 tier 는 커밋된 그대로인 원본만 `git rm` 한다. git 이 다루지 않는 meta-repo(git 레포가 아니거나, 바깥 레포가 그 아래를 하나도 추적하지 않는다)에서는
+cold store 에 같은 내용이 있으면 원본을 지우므로 그 원본은 여기에만 남는다 (GUIDE §4.6). 오래 보관하려면 S3 로 둔다
 (`COLD_STORE_S3_BUCKET`, `COLD_SNAPSHOT_TYPE=s3` — GUIDE §7).
 
 ```bash
@@ -362,9 +325,9 @@ cat .cache/daemon/status.json | jq .lastCycle         # 마지막 사이클
 
 | 명령어 | 설명 |
 | --- | --- |
-| `make init` | `workspace.seed.json` 의 repo 를 `main/` 에 clone (`docsOnly: true` 면 `docs/` 만) + pre-commit hook + `make sync`. 멱등 |
-| `make sync` | 기본 브랜치(origin/HEAD)나 main/master 에 있는 repo 만 pull (다른 브랜치에서 작업 중이면 건너뜀), `INDEX.md` 에 없는 repo 행 추가 (로컬 claude, 읽기 도구만) |
-| **`make memory-init`** | 메모리 층 올리기 — 도구·빌드·OpenSearch·Neo4j·템플릿·ISM·스냅샷 repository·최초 색인 (멱등) |
+| `make init` | `workspace.seed.json` 의 repo 를 `main/` 에 clone (`docsOnly: true` 면 `docs/` 만) + pre-commit hook + `make sync`. 멱등. clone 에 실패한 repo 가 있으면 요약을 찍고 exit 1 (sync 는 돌지 않는다), pull 에 실패한 repo 가 있으면 `make sync` 처럼 끝까지 돈 뒤 exit 1 |
+| `make sync` | 기본 브랜치(origin/HEAD)나 main/master 에 있는 repo 만 pull (다른 브랜치에서 작업 중이거나 커밋이 없거나 detached HEAD 면 건너뜀), `INDEX.md` 에 없는 repo 행 추가 (로컬 claude, 읽기 도구만). pull 에 실패한 repo 가 있으면 끝까지 돈 뒤 요약과 함께 알리고 exit 1 |
+| **`make memory-init`** | 메모리 층 올리기 — 도구·빌드·OpenSearch·Neo4j·템플릿·ISM·스냅샷 repository·최초 색인 (멱등). `MEMORY_GRAPH_URI=off` 면 Neo4j 는 띄우지 않는다 |
 | **`make memory-daemon-start`** | reconcile 데몬(색인·판정·증류·그래프·주간 감사) 상주 — macOS 는 launchd, 없으면 nohup. 이미 돌고 있으면 그대로 둔다 |
 | **`make memory-daemon-stop`** | 데몬 상주 해제 — launchd 에서 내리고 SIGTERM, 최대 60초 기다린다 |
 
@@ -378,19 +341,19 @@ cat .cache/daemon/status.json | jq .lastCycle         # 마지막 사이클
 | `scripts/memory-daemon/run.sh run` | 데몬 포그라운드 실행 (launchd 가 부르는 진입점) |
 | `scripts/memory-daemon/run.sh once` | 1회 색인 (데몬이 켜져 있으면 건너뜀) |
 | `scripts/memory-down/run.sh` | 스택 종료 (hot 볼륨은 남는다). 데몬은 멈추지 않으니 상주 데몬이 있으면 먼저 `make memory-daemon-stop` |
-| `scripts/schedule/run.sh install` / `uninstall` / `status` | tier 정기 실행 launchd 등록 / 해제 / 확인 (tier 만 맡는다 — 데몬 상주는 `make memory-daemon-start`) |
-| `scripts/run-issues/run.sh <issue> <repo>` / `scripts/done-issue/run.sh [--force] <issue> <repo>` | 이슈 worktree 생성(`main/{repo}/.worktrees/{issue}`) / 제거. 커밋하지 않은 변경·untracked 파일이 있으면 잃게 될 파일을 보여 주고 남긴다(exit 1) — `--force` 면 버리고 지운 뒤 버린 파일을 보여 준다(git 이 지우기를 거부하면 변경이 그대로 남았다고 알린다). lock 건 worktree 와 worktree 가 아닌 디렉토리는 `--force` 여도 지우지 않는다 |
-| `scripts/docs-cleaner/run.sh` | `docs/issues`, `docs/specs` 문서 전체 삭제 (파괴적 — 확인을 묻는다. `CONFIRM=yes` 면 묻지 않는다) |
-| `scripts/mcp/run.sh` | MCP 서버 (stdio) 수동 실행 (`.mcp.json` 이 부르는 진입점) |
-| `scripts/memory/run.sh search [-project P] [-topic T] [-date YYYY-MM-DD] [-from D] [-to D] [-type K] [-team T \| -org O] [-size N] [-superseded] [query]` | 검색 — 질의어 없이 필터만 주면 최신순으로 가져온다 (플래그는 질의어 앞에) |
+| `scripts/schedule/run.sh install` / `uninstall` / `status` | tier 정기 실행 launchd 등록 / 해제 / 확인 — 대상 meta-repo 마다 `com.drakejin.memory.<workspace>.tier` (tier 만 맡는다 — 데몬 상주는 `make memory-daemon-start`) |
+| `scripts/run-issues/run.sh <issue> <repo>` / `scripts/done-issue/run.sh [--force] <issue> <repo>` | 이슈 worktree 생성(`main/{repo}/.worktrees/{issue}`) / 제거. 커밋하지 않은 변경·untracked 파일이 있으면 잃게 될 파일을 보여 주고 남긴다(exit 1) — `--force` 면 버리고 지운 뒤 버린 파일을 보여 준다(git 이 지우기를 거부하면 변경이 그대로 남았다고 알리고, 지우다가 실패하면 남은 것과 이미 지워진 것을 나눠 알린다). gitignored 파일(`.env`, 빌드 산출물)은 git 이 변경으로 보지 않아 멈추지 않고 함께 지운다 — 지운 뒤(멈출 때는 잃게 될 것에 `!!` 로) 보여 준다. lock 건 worktree 와 worktree 가 아닌 디렉토리는 `--force` 여도 지우지 않는다 |
+| `scripts/docs-cleaner/run.sh` | `docs/issues/*/`, `docs/specs/*/` 하위 디렉토리를 모두 지운다 — 바로 아래 파일(`INDEX.md` 등)은 남긴다 (파괴적 — 확인을 묻는다. `CONFIRM=yes` 면 묻지 않는다). 지운 문서는 cold 로 가지 않고 데몬이 메모리 색인·cold 청크에서도 빼서 검색에서 사라진다 — 오래된 문서를 메모리에 남기려면 지우지 말고 `scripts/memory/run.sh tier` 로 cold 에 보낸다 |
+| `scripts/mcp/run.sh` | MCP 서버 (stdio) 수동 실행 (`.mcp.json` 이 부르는 진입점. 이 레포의 Go 코드가 컴파일되지 않으면 stderr 에 경고를 남기고 기존 `.cache/bin/memory-mcp` 로 뜬다) |
+| `scripts/memory/run.sh search [-project P] [-topic T] [-date YYYY-MM-DD] [-from D] [-to D] [-type K] [-team T \| -org O] [-size N] [-superseded] [query]` | 검색 — 질의어 없이 필터만 주면 최신순으로 가져온다 (플래그는 질의어 앞에 — 질의어 뒤에 둔 `-topic` 같은 플래그는 사용 오류) |
 | `scripts/memory/run.sh filters [-project P] [-topic T] [-date D] [-from D] [-to D] [-type K] [-team T \| -org O] [-superseded]` | 검색 필터에 쓸 수 있는 값과 문서 수 (MCP `search_filters` 와 같다) |
 | `scripts/memory/run.sh questions` / `answer <pairKey> latest\|old\|keep` | 판정 질문 보기 / 답하기 |
 | `scripts/memory/run.sh compaction-report [-team T]` | 주간 compaction 1·2단계 리포트 (수명 확인·충돌 후보) |
-| `scripts/memory/run.sh tier [-team T] [-dry-run] [-keep-files]` | 60일 지난 episodic(과 밀린 knowledge) → 쓰기 막기 → 스냅샷 → 인덱스 삭제 → hot 원본 제거(`git rm`). `-team` 이 없으면 이 workspace 의 모든 팀 |
+| `scripts/memory/run.sh tier [-team T] [-dry-run] [-keep-files]` | 60일 지난 episodic(과 밀린 knowledge) → 쓰기 막기 → 스냅샷 → 인덱스 삭제 → hot 원본 제거(cold store 에 같은 내용이 있을 때만 — git 이 다루는 meta-repo 면 커밋된 그대로인 원본만 `git rm`). `-team` 이 없으면 이 workspace 의 모든 팀 |
 | `scripts/memory/run.sh audit [-apply]` | 정합성 감사 (고칠 수 있는 것: 고아 색인·미색인·내용 불일치·고아 청크) |
 | `scripts/memory/run.sh archive <deprecate\|undeprecate\|purge\|edit> [-team T] -by B -reason R [-superseded-by P] [-file F] <path>` | cold 문서 조치 |
 | `scripts/memory/run.sh graph <neighbors [-depth N] <path> \| entity <name> \| stats \| rebuild>` | knowledge graph 조회 / 재구축 (LLM 0회) |
-| `scripts/memory/run.sh bench -questions F [-model M] [-modes with,without] [-runs N] [-max-turns N] [-mcp-script P]` | memory-mcp 유무 비교 측정 → `.cache/bench/*.md` (F 는 meta-repo 밖). `-max-turns` 는 질문당 최대 턴(기본 15), `-mcp-script` 는 with 조건이 부를 `scripts/mcp/run.sh` 절대 경로(기본: 이 레포의 것) |
+| `scripts/memory/run.sh bench -questions F [-model M] [-modes with,without] [-runs N] [-max-turns N] [-mcp-script P]` | memory-mcp 유무 비교 측정 → `.cache/bench/*.md` (F 는 meta-repo 밖). `-max-turns` 는 질문당 최대 턴(기본 15), `-mcp-script` 는 with 조건이 부를 `scripts/mcp/run.sh` 절대 경로(기본: 이 레포의 것). `-modes` 는 `with`·`without` 만 받고, with 조건이 있는데 `-mcp-script` 가 없으면 claude 를 부르기 전에 거부한다 |
 
 전체 목록은 `scripts/memory/run.sh help` — 위 표에 없는 명령(`list-cold`, `restore`, `reload`, `ingest`, `bootstrap`, `tier-tick` …)도
 이 진입점으로 부른다 (`.env` 를 읽고, 바뀐 게 있으면 빌드한다. `.cache/bin/memory-mcp` 를 직접 부르면 `.env` 가 빠진다).
@@ -477,7 +440,7 @@ repo 를 추가하면 `make init` 을 다시 실행한다 — 이미 있는 repo
 ### 7.2 .env
 
 메모리 층 설정. `.env.example` 에 전 항목과 기본값이 있다. 명령줄에서 준 값(`META_REPO_ROOT=... scripts/memory-daemon/run.sh once`)이 `.env` 보다 우선한다.
-자주 바꾸는 것: `MEMORY_DEFAULT_TEAM`, `MEMORY_TEAM_ORGS`(org alias), `MEMORY_DISTILL_ENABLED`(본문이 LLM 으로 간다), `MEMORY_GRAPH_URI=off`(그래프 끄기),
+자주 바꾸는 것: `MEMORY_DEFAULT_TEAM`, `MEMORY_TEAM_ORGS`(org alias), `MEMORY_DISTILL_ENABLED`(본문이 LLM 으로 간다), `MEMORY_GRAPH_URI=off`(그래프 끄기 — `make memory-init` 도 Neo4j 를 띄우지 않는다),
 `COLD_STORE_S3_BUCKET` · `COLD_SNAPSHOT_TYPE=s3`(cold 층을 S3 로). 전체 표는 [GUIDE.md §8](./GUIDE.md#8-설정-레퍼런스).
 
 ---
@@ -486,6 +449,7 @@ repo 를 추가하면 `make init` 을 다시 실행한다 — 이미 있는 repo
 
 - Go 1.25 (`app/mise.toml`). 모든 Go 코드는 `app/` 아래 한 모듈. `gofmt`, `go vet` 통과
 - 외부 세계(OpenSearch, Neo4j, S3, 파일, LLM)에 닿는 컴포넌트는 작은 인터페이스 + unexported 구현, 생성자 주입
+- `internal/` 의 exported 식별자(패키지 수준 func·const·var·type)는 다른 패키지(테스트·e2e 포함)가 쓰는 것만 둔다 — 자기 패키지 안에서만 쓰면 비공개로. 다른 패키지가 이름으로 쓰지 않아도 그 패키지가 쓰는 exported API(함수의 인자·반환, 구조체 필드)에 나오는 type 은 쓰이는 것으로 본다 (`app/test/code` 가 `make -C app test` 에서 확인한다)
 - Go 개발 명령은 `app/Makefile` 에 있다 (`make -C app <타겟>`, §5.3). 테스트 타겟은 `app/test/run.sh` 를 부른다
 - `make -C app test` = `go test -race ./...` (스택 없이). `make -C app test-e2e`·`test-e2e-slow` 는 루트의 `make memory-init` 으로 스택이 떠 있어야 하고, test-e2e 는 `.cache/coverage.out` 에 커버리지를 남긴다
 - e2e 는 고유 팀·workspace 로 돌고 끝나면 자기 인덱스·스냅샷·그래프만 지운다 — 실제 메모리와 같은 스택을 써도 섞이지 않는다

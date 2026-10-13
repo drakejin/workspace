@@ -13,9 +13,7 @@ import (
 func TestInputValidationBeforeIO(t *testing.T) {
 	h := NewHandlers(Deps{Config: config.Config{DefaultTeam: "ads"}})
 	ctx := context.Background()
-	if out, err := h.Restore(ctx, RestoreInput{Index: "mem-ads-2026.06"}); err != nil || !strings.Contains(out, "복원할까요") {
-		t.Errorf("confirmed 없이는 복원하지 않는다: %q %v", out, err)
-	}
+	// confirmed 없는 restore_cold 는 cold 목록을 읽어 존재를 확인한다 (RUN-14) — TestRestoreWithoutConfirmationChecksTheIndexIsInCold
 	for _, bad := range []string{"mem-ads-hot", "../x", "mem-ads-knowledge"} {
 		if _, err := h.Restore(ctx, RestoreInput{Index: bad, Confirmed: true}); err == nil {
 			t.Errorf("%s 는 거부", bad)
@@ -48,12 +46,12 @@ func TestInputValidationBeforeIO(t *testing.T) {
 }
 
 func TestFormatIngest(t *testing.T) {
-	out := FormatIngest([]ingest.Result{{SourcePath: "docs/a.md", Index: "mem-a-2026.10", Chunks: 3}})
+	out := formatIngest([]ingest.Result{{SourcePath: "docs/a.md", Index: "mem-a-2026.10", Chunks: 3}})
 	if out != "1개 문서 적재\n- docs/a.md → mem-a-2026.10 (3 chunks)" {
 		t.Errorf("= %q", out)
 	}
 	// RUN-7: 게이트에 걸린 파일은 적재한 수에 넣지 않고 건너뛴 사유와 함께 따로 적는다
-	out = FormatIngest([]ingest.Result{
+	out = formatIngest([]ingest.Result{
 		{SourcePath: "docs/a.md", Index: "mem-a-2026.10", Chunks: 3},
 		{SourcePath: "docs/bin.md", Skipped: "binary content"},
 		{SourcePath: "docs/big.md", Skipped: "size 2300271 > 2097152"},
@@ -80,7 +78,7 @@ func TestSearchHeaderNamesItsUnit(t *testing.T) {
 	}{
 		{"질의어 검색 — 청크와 문서", false, 3, threeChunksTwoDocs, "team=a · 청크 3건 · 문서 2건 (BM25)"},
 		{"필터 가져오기 — 문서 단위", true, 2, twoDocs, "team=a · 문서 2건 (필터, 최신순)"},
-		{"잘린 가져오기 — 전체 문서 수", true, 5, twoDocs, "team=a · 문서 5건 중 최신 2건 (필터, 최신순 — 더 보려면 size 를 늘리거나 필터를 좁히세요)"},
+		{"잘린 가져오기 — 전체 문서 수", true, 5, twoDocs, "team=a · 문서 5건 중 최신 2건 (필터, 최신순 — 더 보려면 size 를 늘리거나(최대 50) 필터를 좁히세요)"},
 	}
 	for _, c := range cases {
 		if got := searchHeader("team=a", c.listing, c.total, c.hits); got != c.want {

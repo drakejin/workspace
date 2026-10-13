@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -21,14 +20,14 @@ import (
 	"github.com/drakejin/workspace/app/internal/search"
 )
 
-// Version 은 서버 버전이다.
-const Version = "0.2.0"
+// version 은 서버 버전이다.
+const version = "0.2.0"
 
 // 안내문은 MCP 도구와 CLI 명령(scripts/memory/run.sh <command>)이 같은 Handlers 로 보므로, 도구 이름 옆에 CLI 명령을 함께 적는다.
 const (
 	listColdHint = "list_cold(CLI: list-cold)"
 	restoreHint  = "restore_cold(index, confirmed=true) (CLI: restore <index>)"
-	searchHint   = "search_memory, CLI: search"
+	searchHint   = "search_memory(CLI: search)"
 )
 
 // Deps 는 서버 의존이다.
@@ -45,14 +44,16 @@ type Deps struct {
 // Handlers 는 도구 구현이다. 전송(MCP)과 분리해 CLI 도 같은 함수를 쓴다.
 type Handlers struct {
 	Deps
-	readyMu sync.Mutex
-	ready   bool
+	readyMu   sync.Mutex
+	ready     bool // 쓰기 쪽 Bootstrap 을 마쳤다
+	reachable bool // 클러스터에 닿았다 (읽기 준비)
 }
 
 // NewHandlers 는 Handlers 다.
 func NewHandlers(d Deps) *Handlers { return &Handlers{Deps: d} }
 
-// Ready 는 템플릿·ISM·스냅샷 repository 를 한 번 맞춘다. 실패하면 다음 호출에서 다시 시도한다.
+// Ready 는 쓰기 쪽 준비다 — 템플릿·매핑·스냅샷 repository·ISM 정책·org alias 를 한 번 맞춘다 (opensearch.Bootstrap).
+// 적재·복원(ingest_path·restore_cold)과 쓰기 CLI 명령이 부른다. 실패하면 다음 호출에서 다시 시도한다.
 func (h *Handlers) Ready(ctx context.Context) error {
 	h.readyMu.Lock()
 	defer h.readyMu.Unlock()
@@ -66,14 +67,30 @@ func (h *Handlers) Ready(ctx context.Context) error {
 	return nil
 }
 
+// ReadReady 는 읽기 도구(search_memory·search_filters·list_cold, CLI search·filters·list-cold, SessionStart 훅)의 준비다 —
+// 클러스터에 닿는지만 본다. 쓰기 쪽 Bootstrap 에 묶지 않아 cold·스냅샷 설정이 잘못돼도 이미 색인된 문서는 검색되고, 읽기
+// 호출은 클러스터에 아무것도 쓰지 않는다. 팀 alias 가 아직 없으면 검색이 "색인이 없다" 고 답한다.
+func (h *Handlers) ReadReady(ctx context.Context) error {
+	h.readyMu.Lock()
+	defer h.readyMu.Unlock()
+	if h.ready || h.reachable {
+		return nil
+	}
+	if err := opensearch.Ping(ctx, h.OS); err != nil {
+		return err
+	}
+	h.reachable = true
+	return nil
+}
+
 // SearchInput 은 search_memory 입력이다. 질의어(query)와 필터(날짜·범위·주제·프로젝트·문서 종류)는 함께 써도 되고,
 // 질의어 없이 필터만 주면 맞는 문서를 최신순으로 가져온다.
 type SearchInput struct {
 	Query             string          `json:"query,omitempty" jsonschema:"자연어 문장 또는 식별자(서비스·함수 이름, 에러 코드). 비우면 필터에 맞는 문서를 최신순으로 가져온다"`
-	Project           string          `json:"project,omitempty" jsonschema:"프로젝트(관리 대상 repository) 이름으로 좁히기. 예: order-api. 쓸 수 있는 값은 search_filters"`
+	Project           string          `json:"project,omitempty" jsonschema:"프로젝트(관리 대상 repository) 이름으로 좁히기 (대소문자 무시). 예: order-api. 쓸 수 있는 값은 search_filters"`
 	Topic             string          `json:"topic,omitempty" jsonschema:"주제로 좁히기 — docs/feature|specs|issues/{주제}/ 디렉토리 또는 frontmatter topic. 예: payment-retry. 쓸 수 있는 값은 search_filters"`
 	Date              string          `json:"date,omitempty" jsonschema:"날짜(YYYY-MM-DD) — 그날의 문서만. 문서의 날은 frontmatter date 그대로, 없으면 커밋 시각을 MEMORY_TIME_ZONE(기본: 이 머신의 시간대)에서 본 날"`
-	TimeRange         model.TimeRange `json:"time_range,omitempty" jsonschema:"기간 범위 — from~to. 날짜(YYYY-MM-DD)는 문서의 날로 비교하고 그날 전체를 포함한다. date math(now-30d)·시각은 유효 시각을 MEMORY_TIME_ZONE 으로 비교한다"`
+	TimeRange         model.TimeRange `json:"time_range,omitempty" jsonschema:"기간 범위 — from~to. 날짜(YYYY-MM-DD)는 문서의 날로 비교하고 그날 전체를 포함한다. date math(now-30d, now-7d/d)·시각(2026-10-01T09:00)은 유효 시각을 MEMORY_TIME_ZONE 으로 비교한다"`
 	DocType           string          `json:"doc_type,omitempty" jsonschema:"spec | adr | prd | plan | knowledge | guide | note"`
 	Team              string          `json:"team,omitempty" jsonschema:"팀 이름. 생략하면 기본 팀"`
 	Org               string          `json:"org,omitempty" jsonschema:"org(실) 이름. 주면 그 org 에 속한 모든 팀을 함께 검색한다 (team 무시)"`
@@ -82,132 +99,34 @@ type SearchInput struct {
 }
 
 // Filters 는 사람이 읽는 필터 요약이다 (결과 머리에 붙여, 어떤 조건으로 가져왔는지 보이게).
-func (in SearchInput) Filters() string {
-	var parts []string
-	add := func(k, v string) {
-		if v != "" {
-			parts = append(parts, k+"="+v)
-		}
-	}
-	add("project", in.Project)
-	add("topic", in.Topic)
-	add("date", in.Date)
-	if in.TimeRange.From != "" || in.TimeRange.To != "" {
-		parts = append(parts, "time_range="+in.TimeRange.From+"~"+in.TimeRange.To)
-	}
-	add("doc_type", in.DocType)
-	if in.IncludeSuperseded {
-		parts = append(parts, "include_superseded")
-	}
-	return strings.Join(parts, ", ")
-}
+func (in SearchInput) Filters() string { return in.filters().summary() }
 
 // Search 는 search_memory 다.
 func (h *Handlers) Search(ctx context.Context, in SearchInput) (string, error) {
-	team, err := h.team(in.Team)
+	f := in.filters()
+	req, err := h.request(f, in.Query, in.Size)
 	if err != nil {
 		return "", err
 	}
-	req := search.Request{
-		Workspace: h.Config.Workspace, Team: team, Org: in.Org, Query: in.Query, Date: in.Date, TimeRange: in.TimeRange,
-		TimeZone: h.Config.QueryTimeZone(time.Now()), Project: in.Project, Topic: in.Topic, Size: in.Size, IncludeSuperseded: in.IncludeSuperseded,
+	listing := strings.TrimSpace(in.Query) == ""
+	if listing && !search.HasFilter(req) {
+		return "", errEmptyQuery
 	}
-	if in.DocType != "" {
-		t, ok := model.ParseDocType(in.DocType)
-		if !ok {
-			return "", fmt.Errorf("doc_type 이 잘못됐습니다: %q", in.DocType)
-		}
-		req.DocType = t
-	}
-	if err := search.Validate(req); err != nil {
-		return "", err
-	}
-	if strings.TrimSpace(in.Query) == "" && !search.HasFilter(req) {
-		return "", search.ErrEmptyQuery
-	}
-	if err := h.Ready(ctx); err != nil {
+	if err := h.ReadReady(ctx); err != nil {
 		return "", err
 	}
 	res, err := search.Search(ctx, h.OS, req)
 	if err != nil {
 		return "", err
 	}
-	hits := res.Hits
-	scope := "team=" + team
-	if in.Org != "" {
-		scope = "org=" + in.Org
-	}
-	if f := in.Filters(); f != "" {
-		scope += " · " + f
-	}
-	listing := strings.TrimSpace(in.Query) == ""
-	if len(hits) == 0 {
-		if listing {
-			return fmt.Sprintf("%s · 필터에 맞는 문서가 없습니다. %s 로 쓸 수 있는 프로젝트·주제·날짜를 확인하세요.", scope, search.FiltersHint), nil
-		}
-		return fmt.Sprintf("%s hot 영역에서 %q 에 맞는 문서가 없습니다.\n"+
-			"단어(서비스명, 함수명, 에러 코드)를 바꿔 다시 검색하세요. %d일보다 오래된 맥락이면 %s 를 확인하세요.", scope, in.Query, h.Config.HotDays, listColdHint), nil
-	}
-	var b strings.Builder
-	b.WriteString(searchHeader(scope, listing, res.Total, hits) + "\n\n")
-	for i, hit := range hits {
-		meta := []string{string(hit.DocType)}
-		if in.Org != "" {
-			meta = append(meta, "team="+hit.Team)
-		}
-		if hit.Project != "" {
-			meta = append(meta, "project="+hit.Project)
-		}
-		if hit.Topic != "" {
-			meta = append(meta, "topic="+hit.Topic)
-		}
-		if day := hit.Day(); day != "" {
-			meta = append(meta, day)
-		}
-		if len(hit.GitSHA) >= 7 {
-			meta = append(meta, hit.GitSHA[:7])
-		}
-		score := ""
-		if !listing {
-			score = fmt.Sprintf("; score %.2f", hit.Score)
-		}
-		flag := ""
-		if hit.SupersededBy != "" {
-			flag = "  [superseded → " + hit.SupersededBy + "]"
-		}
-		if hit.Deprecated {
-			flag += "  [deprecated]"
-		}
-		fmt.Fprintf(&b, "[%d] %s › %s  (%s%s)%s\n", i+1, hit.SourcePath, hit.HeaderPath, strings.Join(meta, ", "), score, flag)
-		if hit.Summary != "" {
-			fmt.Fprintf(&b, "요약: %s\n", hit.Summary)
-		}
-		b.WriteString(hit.Text + "\n\n")
-	}
-	return strings.TrimRight(b.String(), "\n"), nil
-}
-
-// searchHeader 는 검색 결과의 머리 줄이다 — 질의어 검색은 청크 단위라 청크 수와 그 청크들의 문서 수를 함께
-// (한 문서의 여러 절이 size 를 나눠 쓴 것이 보인다), 필터 가져오기는 문서 하나에 한 건이라 문서 수 (잘렸으면 전체 수도).
-func searchHeader(scope string, listing bool, total int, hits []search.Hit) string {
-	shown := len(hits)
+	scope := scopeOf(req, f)
 	switch {
-	case listing && total > shown:
-		return fmt.Sprintf("%s · 문서 %d건 중 최신 %d건 (필터, 최신순 — 더 보려면 size 를 늘리거나 필터를 좁히세요)", scope, total, shown)
-	case listing:
-		return fmt.Sprintf("%s · 문서 %d건 (필터, 최신순)", scope, shown)
-	default:
-		return fmt.Sprintf("%s · 청크 %d건 · 문서 %d건 (BM25)", scope, shown, distinctDocs(hits))
+	case res.NoIndex:
+		return h.noIndex(req), nil
+	case len(res.Hits) == 0:
+		return h.noHits(scope, in.Query), nil
 	}
-}
-
-// distinctDocs 는 결과 청크들이 나온 문서(source_path) 수다.
-func distinctDocs(hits []search.Hit) int {
-	seen := make(map[string]bool, len(hits))
-	for _, hit := range hits {
-		seen[hit.SourcePath] = true
-	}
-	return len(seen)
+	return renderHits(scope, listing, in.Org != "", res), nil
 }
 
 // FiltersInput 은 search_filters 입력이다.
@@ -224,72 +143,31 @@ type FiltersInput struct {
 
 // Filters 는 search_filters 다.
 func (h *Handlers) Filters(ctx context.Context, in FiltersInput) (string, error) {
-	team, err := h.team(in.Team)
+	req, err := h.request(in, "", 0)
 	if err != nil {
 		return "", err
 	}
-	req := search.Request{Workspace: h.Config.Workspace, Team: team, Org: in.Org, Project: in.Project, Topic: in.Topic, Date: in.Date,
-		TimeRange: in.TimeRange, TimeZone: h.Config.QueryTimeZone(time.Now()), IncludeSuperseded: in.IncludeSuperseded}
-	if in.DocType != "" {
-		t, ok := model.ParseDocType(in.DocType)
-		if !ok {
-			return "", fmt.Errorf("doc_type 이 잘못됐습니다: %q", in.DocType)
-		}
-		req.DocType = t
-	}
-	if err := search.Validate(req); err != nil {
-		return "", err
-	}
-	if err := h.Ready(ctx); err != nil {
+	if err := h.ReadReady(ctx); err != nil {
 		return "", err
 	}
 	f, err := search.FetchFacets(ctx, h.OS, req)
 	if err != nil {
 		return "", err
 	}
-	scope := "team=" + team
-	if in.Org != "" {
-		scope = "org=" + in.Org
+	if f.NoIndex {
+		return h.noIndex(req), nil
 	}
-	if s := (SearchInput{Project: in.Project, Topic: in.Topic, Date: in.Date, TimeRange: in.TimeRange, DocType: in.DocType, IncludeSuperseded: in.IncludeSuperseded}).Filters(); s != "" {
-		scope += " · " + s
-	}
-	hidden := " (밀린·deprecate 된 문서 제외)"
-	if in.IncludeSuperseded {
-		hidden = ""
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s · 문서 %d건%s\n", scope, f.Docs, hidden)
-	if f.Docs == 0 {
-		return strings.TrimRight(b.String(), "\n"), nil
-	}
-	fmt.Fprintf(&b, "project: %s\n", countsLine(f.Projects, f.NoProject))
-	fmt.Fprintf(&b, "topic: %s\n", countsLine(f.Topics, f.NoTopic))
-	fmt.Fprintf(&b, "doc_type: %s\n", countsLine(f.DocTypes, 0))
-	fmt.Fprintf(&b, "date: %s ~ %s\n", f.First, f.Last)
-	fmt.Fprintf(&b, "날짜별(최신 %d일): %s", len(f.Days), countsLine(f.Days, 0))
-	return b.String(), nil
-}
-
-func countsLine(cs []search.Count, none int) string {
-	parts := make([]string, 0, len(cs)+1)
-	for _, c := range cs {
-		parts = append(parts, fmt.Sprintf("%s(%d)", c.Value, c.Docs))
-	}
-	if none > 0 {
-		parts = append(parts, fmt.Sprintf("(없음)(%d)", none))
-	}
-	if len(parts) == 0 {
-		return "-"
-	}
-	return strings.Join(parts, " ")
+	return renderFacets(scopeOf(req, in), in.IncludeSuperseded, f), nil
 }
 
 // IngestInput 은 ingest_path 입력이다.
 type IngestInput struct {
 	Path string `json:"path" jsonschema:"meta-repository 기준 상대 경로 (파일 또는 디렉토리)"`
-	Team string `json:"team,omitempty" jsonschema:"frontmatter 대신 쓸 팀"`
+	Team string `json:"team,omitempty" jsonschema:"이번 적재에만 쓸 팀 (일회성). 파일의 frontmatter team 은 바꾸지 않아, 파일이 바뀌면 다음 데몬 사이클이 frontmatter team(없으면 기본 팀)으로 다시 쓴다. 계속 그 팀에 두려면 frontmatter team 을 고친다"`
 }
+
+// oneOffTeamNote 는 team 을 주고 적재했을 때 덧붙이는 안내다 — 데몬은 파일이 바뀌면 team 인자를 모른 채 다시 쓴다.
+const oneOffTeamNote = "team=%s 는 이번 적재에만 썼습니다 — 파일이 바뀌면 다음 데몬 사이클이 frontmatter team(없으면 기본 팀)으로 다시 씁니다. 계속 이 팀에 두려면 frontmatter 에 team: %s 를 적으세요."
 
 // Ingest 는 ingest_path 다.
 func (h *Handlers) Ingest(ctx context.Context, in IngestInput) (string, error) {
@@ -311,11 +189,14 @@ func (h *Handlers) Ingest(ctx context.Context, in IngestInput) (string, error) {
 	if len(results) == 0 {
 		return in.Path + ": 색인 대상 문서가 없습니다 (루트 문서, docs/, main/{repo}/docs/ 아래 .md 만 대상)", nil
 	}
-	return FormatIngest(results), nil
+	if in.Team != "" {
+		return formatIngest(results) + "\n" + fmt.Sprintf(oneOffTeamNote, in.Team, in.Team), nil
+	}
+	return formatIngest(results), nil
 }
 
-// FormatIngest 는 적재 결과 목록이다. 게이트(바이너리·MEMORY_MAX_FILE_BYTES 초과)에 걸린 파일은 건너뛴 것으로 따로 적는다.
-func FormatIngest(results []ingest.Result) string {
+// formatIngest 는 적재 결과 목록이다. 게이트(바이너리·MEMORY_MAX_FILE_BYTES 초과)에 걸린 파일은 건너뛴 것으로 따로 적는다.
+func formatIngest(results []ingest.Result) string {
 	var indexed, skipped []ingest.Result
 	for _, r := range results {
 		if r.Skipped != "" {
@@ -349,7 +230,7 @@ func (h *Handlers) ListCold(ctx context.Context, in ListColdInput) (string, erro
 	if err != nil {
 		return "", err
 	}
-	if err := h.Ready(ctx); err != nil {
+	if err := h.ReadReady(ctx); err != nil {
 		return "", err
 	}
 	list, err := h.coldList(ctx, team)
@@ -371,6 +252,8 @@ func (h *Handlers) ListCold(ctx context.Context, in ListColdInput) (string, erro
 // coldMark 는 cold 인덱스의 지금 상태 표시다.
 func coldMark(c cold.Index) string {
 	switch {
+	case c.Restored && !c.Searchable:
+		return "  [복원 중단 — restore_cold 로 다시]" // 합치다 멈춘 복원본은 검색 alias 가 없어 검색에 나오지 않는다
 	case c.Restored:
 		return "  [현재 복원됨]"
 	case c.Reopened:
@@ -403,32 +286,61 @@ type RestoreInput struct {
 	Confirmed bool   `json:"confirmed,omitempty" jsonschema:"사용자가 복원에 동의했으면 true"`
 }
 
-// Restore 는 restore_cold 다. confirmed 가 없으면 복원하지 않고 "먼저 물으라"고 돌려준다.
+// Restore 는 restore_cold 다. 인덱스가 이 workspace 팀의 cold 에 있는지 먼저 보고, confirmed 가 없으면 복원하지 않고
+// "먼저 물으라"고 돌려준다 — list_cold 의 표시처럼, 이미 복원돼 검색에 나오는 인덱스는 물을 것이 없다고, hot 에 다시 열린
+// 인덱스는 지금 복원할 수 없다고 알린다.
 func (h *Handlers) Restore(ctx context.Context, in RestoreInput) (string, error) {
 	if !naming.IsMonthly(in.Index) {
 		return "", fmt.Errorf("index 이름이 잘못됐습니다: %q", in.Index)
 	}
-	if !in.Confirmed {
-		return fmt.Sprintf("복원하지 않았습니다. 사용자에게 \"cold 인덱스 %s가 있는데 복원할까요\"라고 먼저 묻고, 동의하면 confirmed=true 로 다시 호출하세요.", in.Index), nil
-	}
 	if err := h.Ready(ctx); err != nil {
 		return "", err
 	}
-	idx, _ := naming.ParseIndex(in.Index)
-	if _, err := h.coldList(ctx, idx.Team); err != nil {
+	target, err := h.coldIndex(ctx, in.Index)
+	if err != nil {
 		return "", err
+	}
+	if target.Reopened {
+		return "", cold.Reopened(ctx, h.OS, h.Config, in.Index)
+	}
+	if !in.Confirmed {
+		return askBeforeRestore(target), nil
 	}
 	restored, err := cold.Restore(ctx, h.OS, h.Config, in.Index)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%s 을(를) snapshot %s 에서 hot 으로 복원했습니다. 이제 검색(%s)에 포함됩니다 (ISM 자동 관리 제외).",
+	return fmt.Sprintf("%s 을(를) snapshot %s 에서 hot 으로 복원했습니다. 이제 %s 결과에 포함됩니다 (ISM 자동 관리 제외).",
 		restored.Name, strings.Join(restored.Snapshots, ","), searchHint), nil
+}
+
+// askBeforeRestore 는 confirmed 없는 restore_cold 의 답이다. 이미 복원돼 검색에 나오는 인덱스([현재 복원됨])는 사용자에게
+// 물을 것이 없다 — 합치다 멈춘 복원본은 다시 복원해야 검색에 나오므로 예전처럼 먼저 묻게 한다.
+func askBeforeRestore(target cold.Index) string {
+	if target.Restored && target.Searchable {
+		return fmt.Sprintf("%s 는 이미 복원돼 있어 %s 결과에 나옵니다 — 복원하지 않았고, 사용자에게 복원을 물을 필요도 없습니다.", target.Name, searchHint)
+	}
+	return fmt.Sprintf("복원하지 않았습니다. 사용자에게 \"cold 인덱스 %s가 있는데 복원할까요\"라고 먼저 묻고, 동의하면 confirmed=true 로 다시 호출하세요.", target.Name)
+}
+
+// coldIndex 는 index 의 이 workspace 팀 cold 목록 항목이다 — 없는 인덱스를 두고 사용자에게 "복원할까요" 를 묻게 시키지 않는다.
+func (h *Handlers) coldIndex(ctx context.Context, index string) (cold.Index, error) {
+	idx, _ := naming.ParseIndex(index)
+	list, err := h.coldList(ctx, idx.Team)
+	if err != nil {
+		return cold.Index{}, err
+	}
+	for _, c := range list {
+		if c.Name == index {
+			return c, nil
+		}
+	}
+	return cold.Index{}, fmt.Errorf("team=%s 의 cold 에 %s 가 없습니다 — %s 로 복원할 수 있는 인덱스를 확인하세요", idx.Team, index, listColdHint)
 }
 
 // RelatedInput 은 related_docs 입력이다.
 type RelatedInput struct {
-	Path  string `json:"path" jsonschema:"meta-repository 기준 문서 경로 (search_memory 결과의 source_path)"`
+	Path  string `json:"path" jsonschema:"문서 경로 — search_memory 결과의 source_path. ingest_path 처럼 ./docs/… 나 meta-repository 안의 절대 경로도 받는다"`
 	Depth int    `json:"depth,omitempty" jsonschema:"몇 걸음까지 (1~3, 기본 2). 2 면 같은 entity 를 다루는 문서도 나온다"`
 }
 
@@ -437,20 +349,20 @@ func (h *Handlers) Related(ctx context.Context, in RelatedInput) (string, error)
 	if h.Graph == nil {
 		return "", graph.ErrDisabled
 	}
-	if strings.TrimSpace(in.Path) == "" {
-		return "", fmt.Errorf("path 가 비어 있습니다")
+	path, err := h.graphPath(in.Path)
+	if err != nil {
+		return "", err
 	}
 	depth := in.Depth
 	if depth == 0 {
 		depth = 2
 	}
-	path := ingest.CanonicalRel(strings.TrimSpace(in.Path)) // 그래프의 문서 경로는 source_path 와 같은 NFC 다
 	ns, err := h.Graph.Neighbors(ctx, h.Config.Workspace, path, depth)
 	if err != nil {
 		return "", err
 	}
 	if len(ns) == 0 {
-		return path + ": 그래프에서 이어진 문서가 없습니다 (그래프에 없는 문서이거나 링크·entity 가 없다)", nil
+		return h.noNeighbors(ctx, path)
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s 와 이어진 문서 %d건 (knowledge graph)\n", path, len(ns))
@@ -458,6 +370,39 @@ func (h *Handlers) Related(ctx context.Context, in RelatedInput) (string, error)
 		fmt.Fprintf(&b, "- [%d] %s (%s) — %s\n", n.Hops, n.Path, n.Status, describePath(n))
 	}
 	return strings.TrimRight(b.String(), "\n"), nil
+}
+
+// graphPath 는 입력 경로를 그래프의 문서 경로(source_path)로 맞춘다 — ingest_path 와 같은 규칙이다: ./docs/… 와 meta-repo 안의
+// 절대 경로는 meta-repo 기준 상대 경로로, 철자는 디스크의 것(대소문자·NFC)으로. 읽기만 하므로 meta-repo 밖의 경로는 ingest_path
+// 의 "적재할 수 없다" 가 아니라 "밖의 경로" 로 거부하고, 링크를 푼 철자의 meta-repo 경로도 받는다 (inMetaRepo).
+func (h *Handlers) graphPath(input string) (string, error) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return "", fmt.Errorf("path 가 비어 있습니다")
+	}
+	inside, ok := inMetaRepo(h.Config.MetaRepoRoot, input)
+	if !ok {
+		return "", fmt.Errorf("related_docs: meta-repository 밖의 경로입니다 — 그래프는 meta-repository 안의 문서만 담습니다 "+
+			"(경로는 %s 결과의 source_path): %s", searchHint, input)
+	}
+	_, rel, err := ingest.ResolveOnDisk(h.Config.MetaRepoRoot, inside)
+	if err != nil {
+		return "", fmt.Errorf("related_docs: %w", err)
+	}
+	return rel, nil
+}
+
+// noNeighbors 는 이어진 문서가 없을 때의 답이다 — 그래프에 없는 문서(경로 오타, 아직 그래프를 만들지 않은 새 문서)와
+// 그래프에 있지만 이어진 것이 없는 문서를 가른다.
+func (h *Handlers) noNeighbors(ctx context.Context, path string) (string, error) {
+	found, err := h.Graph.HasDoc(ctx, h.Config.Workspace, path)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return path + ": 그래프에 없는 문서입니다 — 경로는 search_memory(CLI: search) 결과의 source_path 를 쓰세요 (막 적재한 문서는 다음 데몬 사이클 뒤에 그래프에 생긴다)", nil
+	}
+	return path + ": 그래프에 있지만 이어진 문서가 없습니다 (링크·supersedes·derived_from·relates·entity 가 없다)", nil
 }
 
 func describePath(n graph.Neighbor) string {
@@ -497,9 +442,23 @@ func (h *Handlers) Entities(ctx context.Context, in EntityInput) (string, error)
 	}
 	var b strings.Builder
 	for _, e := range es {
-		fmt.Fprintf(&b, "%s:%s — %s\n", e.Type, e.Name, strings.Join(e.Docs, ", "))
+		fmt.Fprintf(&b, "%s:%s — %s\n", e.Type, e.Name, entityDocList(e.Docs))
 	}
 	return strings.TrimRight(b.String(), "\n"), nil
+}
+
+// entityDocList 는 entity 를 다루는 문서 목록이다. 현행(hot)이 아닌 문서에는 related_docs 와 같은 상태 이름을 붙인다 —
+// 기본 검색에서 숨는 밀린·deprecate 된 문서를 현행으로 읽지 않게.
+func entityDocList(docs []graph.DocRef) string {
+	parts := make([]string, 0, len(docs))
+	for _, d := range docs {
+		if d.Status == "" || d.Status == graph.StatusHot {
+			parts = append(parts, d.Path)
+			continue
+		}
+		parts = append(parts, d.Path+" ("+d.Status+")")
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (h *Handlers) team(t string) (string, error) {
@@ -509,12 +468,12 @@ func (h *Handlers) team(t string) (string, error) {
 	return t, naming.ValidateTeam(t)
 }
 
-// ServerName 은 MCP 서버 이름이다. .mcp.json 에도 같은 이름으로 등록한다 (도구는 mcp__drakejin-workspace-memory-mcp__*).
-const ServerName = "drakejin-workspace-memory-mcp"
+// serverName 은 MCP 서버 이름이다. .mcp.json 에도 같은 이름으로 등록한다 (도구는 mcp__drakejin-workspace-memory-mcp__*).
+const serverName = "drakejin-workspace-memory-mcp"
 
 // NewServer 는 도구 일곱 개를 단 MCP 서버다.
 func NewServer(h *Handlers) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: ServerName, Version: Version}, nil)
+	server := mcp.NewServer(&mcp.Implementation{Name: serverName, Version: version}, nil)
 	readOnly := &mcp.ToolAnnotations{ReadOnlyHint: true}
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -540,7 +499,8 @@ func NewServer(h *Handlers) *mcp.Server {
 		Name:  "ingest_path",
 		Title: "문서 수동 적재",
 		Description: "데몬이 아직 잡지 못한 문서나 디렉토리를 바로 색인한다. 경로는 meta-repository 기준 상대 경로. " +
-			"바이너리·크기 초과 파일은 데몬처럼 색인하지 않고 건너뛴 것으로 알린다. 적재한 문서는 다음 데몬 사이클이 판정·증류·그래프로 넘긴다.",
+			"바이너리·크기 초과 파일은 데몬처럼 색인하지 않고 건너뛴 것으로 알린다. 적재한 문서는 다음 데몬 사이클이 판정·증류·그래프로 넘긴다. " +
+			"team 은 이번 적재에만 쓰인다 — 파일이 바뀌면 데몬이 frontmatter team(없으면 기본 팀)으로 다시 쓴다.",
 	}, wrap(h.Log, h.Ingest))
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -553,22 +513,24 @@ func NewServer(h *Handlers) *mcp.Server {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:  "restore_cold",
 		Title: "cold 인덱스 복원",
-		Description: "스냅샷에서 cold 인덱스 하나를 hot 으로 복원한다. 반드시 사용자에게 \"cold 인덱스 X가 있는데 복원할까요\"를 먼저 묻고, " +
-			"동의를 받은 경우에만 confirmed=true 로 호출한다.",
+		Description: "스냅샷에서 cold 인덱스 하나를 hot 으로 복원한다. 이 workspace 팀의 cold 에 없는 인덱스면 confirmed 와 상관없이 실패한다 (list_cold 로 확인). " +
+			"반드시 사용자에게 \"cold 인덱스 X가 있는데 복원할까요\"를 먼저 묻고, 동의를 받은 경우에만 confirmed=true 로 호출한다.",
 	}, wrap(h.Log, h.Restore))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:  "related_docs",
 		Title: "이어진 문서 (knowledge graph)",
 		Description: "knowledge graph 에서 문서와 이어진 문서를 찾는다 — 개정 관계(SUPERSEDES), 근거(DERIVED_FROM), 관련(RELATES), " +
-			"본문 링크(LINKS_TO), 같은 entity 를 다루는 문서. search_memory 로 찾은 문서의 배경을 넓힐 때 쓴다.",
+			"본문 링크(LINKS_TO), 같은 entity 를 다루는 문서. search_memory 로 찾은 문서의 배경을 넓힐 때 쓴다. " +
+			"path 는 source_path 그대로 (./docs/… 나 meta-repo 안의 절대 경로도 된다). 그래프에 없는 문서면 그렇다고 따로 답한다.",
 		Annotations: readOnly,
 	}, wrap(h.Log, h.Related))
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "docs_by_entity",
-		Title:       "entity 로 문서 찾기",
-		Description: "서비스·테이블·API·개념 같은 entity 이름으로 그것을 다루는 문서를 찾는다 (증류가 뽑은 entity, knowledge graph).",
+		Name:  "docs_by_entity",
+		Title: "entity 로 문서 찾기",
+		Description: "서비스·테이블·API·개념 같은 entity 이름으로 그것을 다루는 문서를 찾는다 (증류가 뽑은 entity, knowledge graph). " +
+			"기본 검색에서 숨는 문서에는 related_docs 처럼 (superseded)·(deprecated) 를 붙인다.",
 		Annotations: readOnly,
 	}, wrap(h.Log, h.Entities))
 

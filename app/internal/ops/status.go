@@ -16,9 +16,9 @@ import (
 	"github.com/drakejin/workspace/app/internal/state"
 )
 
-// ComposeProject 는 docker-compose.yml 의 name 이다. META_REPO_ROOT 가 다른 meta-repo 를 가리켜도
+// composeProject 는 docker-compose.yml 의 name 이다. META_REPO_ROOT 가 다른 meta-repo 를 가리켜도
 // 스택을 이 이름으로 찾는다.
-const ComposeProject = "drakejin-workspace-memory"
+const composeProject = "drakejin-workspace-memory"
 
 // heartbeatStaleFactor 는 heartbeat 가 interval 의 몇 배를 넘으면 멈춘 것으로 볼지다.
 const heartbeatStaleFactor = 3
@@ -55,7 +55,7 @@ func NewProbe(cfg config.Config, os opensearch.Client, g graph.Store) Probe {
 func (p *liveProbe) Containers(ctx context.Context) (map[string]string, bool) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "docker", "compose", "-p", ComposeProject, "ps", "--format", "{{.Service}} {{.State}}").Output()
+	out, err := exec.CommandContext(ctx, "docker", "compose", "-p", composeProject, "ps", "--format", "{{.Service}} {{.State}}").Output()
 	if err != nil {
 		return nil, false
 	}
@@ -79,8 +79,8 @@ func (p *liveProbe) ClusterHealth(ctx context.Context) (string, bool) {
 }
 
 func (p *liveProbe) IndexStats(ctx context.Context) (IndexStats, bool) {
-	var rows []struct{} // 인덱스 수만 센다
-	if err := p.os.Do(ctx, http.MethodGet, "/_cat/indices/"+naming.AllPattern, nil, url.Values{"format": {"json"}, "h": {"index"}}, &rows); err != nil {
+	indices, err := p.workspaceIndices(ctx)
+	if err != nil {
 		return IndexStats{}, false
 	}
 	ws := map[string]any{"term": map[string]any{"workspace": p.cfg.Workspace}}
@@ -95,7 +95,29 @@ func (p *liveProbe) IndexStats(ctx context.Context) (IndexStats, bool) {
 	}
 	_ = p.os.Do(ctx, http.MethodPost, "/"+naming.AllPattern+"/_search",
 		map[string]any{"size": 0, "query": ws, "aggs": map[string]any{"last": map[string]any{"max": map[string]any{"field": "ingested_at"}}}}, opensearch.Lenient(), &last)
-	return IndexStats{Indices: len(rows), Documents: docs, Chunks: chunks, LastIndexed: last.Aggregations.Last.ValueAsString}, true
+	return IndexStats{Indices: indices, Documents: docs, Chunks: chunks, LastIndexed: last.Aggregations.Last.ValueAsString}, true
+}
+
+// workspaceIndices 는 이 workspace 의 팀(문서를 둔 팀)이 가진 메모리 인덱스 수다 — 같은 클러스터의 다른 meta-repo·샘플
+// 인덱스는 세지 않는다.
+func (p *liveProbe) workspaceIndices(ctx context.Context) (int, error) {
+	var rows []struct {
+		Index string `json:"index"`
+	}
+	if err := p.os.Do(ctx, http.MethodGet, "/_cat/indices/"+naming.AllPattern, nil, url.Values{"format": {"json"}, "h": {"index"}}, &rows); err != nil {
+		return 0, fmt.Errorf("list indices: %w", err)
+	}
+	teams, err := opensearch.WorkspaceTeams(ctx, p.os, p.cfg.Workspace)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, r := range rows {
+		if idx, ok := naming.ParseIndex(r.Index); ok && teams[idx.Team] {
+			n++
+		}
+	}
+	return n, nil
 }
 
 func (p *liveProbe) Graph(ctx context.Context) (graph.Stats, bool, error) {
@@ -224,13 +246,16 @@ func statusDaemon(s *screen, cfg config.Config, status *state.Status, now time.T
 		if c.Partial {
 			flags += " PARTIAL-SCAN"
 		}
-		s.add("last cycle: %s trigger=%s scanned=%d indexed=%d stat_updated=%d removed=%d skipped=%d failed=%d cold_owned=%d took=%dms%s",
-			last.At, last.Trigger, c.Scanned, c.Indexed, c.StatUpdated, c.Removed, c.Skipped, c.Failed, c.ColdOwned, c.TookMs, flags)
+		s.add("last cycle: %s trigger=%s scanned=%d indexed=%d stat_updated=%d removed=%d skipped=%d failed=%d cold_owned=%d cold_kept=%d took=%dms%s",
+			last.At, last.Trigger, c.Scanned, c.Indexed, c.StatUpdated, c.Removed, c.Skipped, c.Failed, c.ColdOwned, c.ColdKept, c.TookMs, flags)
 		if c.Failed > 0 {
 			s.hint(fmt.Sprintf("색인에 실패한 파일 %d개 — 데몬 로그의 '[reconcile] fail' 줄을 보세요 (다음 사이클이 다시 시도한다)", c.Failed))
 		}
 		if c.ColdOwned > 0 {
 			s.hint(fmt.Sprintf("cold 로 넘어간 hot 원본 %d개 — 'scripts/memory/run.sh tier' 가 정리한다", c.ColdOwned))
+		}
+		if c.ColdKept > 0 {
+			s.hint(fmt.Sprintf("git 에 커밋된 내용이 아니라 tier 가 hot 에 남긴 cold 원본 %d개 — 커밋하면 다음 tier 가 정리한다", c.ColdKept))
 		}
 	}
 	if last.Graph != "" {

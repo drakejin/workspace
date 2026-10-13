@@ -14,7 +14,6 @@ import (
 	"github.com/drakejin/workspace/app/internal/ingest"
 	"github.com/drakejin/workspace/app/internal/mcpserver"
 	"github.com/drakejin/workspace/app/internal/model"
-	"github.com/drakejin/workspace/app/internal/naming"
 	"github.com/drakejin/workspace/app/internal/opensearch"
 	"github.com/drakejin/workspace/app/internal/state"
 )
@@ -23,32 +22,48 @@ func runBootstrap(ctx context.Context, c *CLI, args []string) (string, error) {
 	if _, err := newFlags("bootstrap").parse(args); err != nil {
 		return "", err
 	}
-	if err := opensearch.Bootstrap(ctx, c.OS, c.Config); err != nil {
+	// 명시적인 bootstrap 명령만 클러스터 전역 객체(ISM 정책·스냅샷 repository)를 이 설정으로 바꾼다
+	if err := opensearch.BootstrapClaim(ctx, c.OS, c.Config); err != nil {
 		return "", err
 	}
 	return "bootstrap 완료", nil
 }
 
+// filterFlags 는 search·filters 가 같이 받는 필터 플래그다 (MCP 의 search_filters 입력과 같은 값).
+type filterFlags struct {
+	team, org, project, topic, date, from, to, docType *string
+	superseded                                         *bool
+}
+
+// addFilterFlags 는 필터 플래그를 f 에 정의한다 — search 와 filters 가 같은 이름·설명을 쓰게 한 곳에서.
+func addFilterFlags(f flags, defaultTeam string) filterFlags {
+	return filterFlags{
+		team:       f.String("team", defaultTeam, "팀"),
+		org:        f.String("org", "", "org(실) — 그 org 의 모든 팀을 함께 본다 (-team 무시)"),
+		project:    f.String("project", "", "프로젝트(관리 대상 repository, 대소문자 무시)"),
+		topic:      f.String("topic", "", "주제"),
+		date:       f.String("date", "", "날짜 YYYY-MM-DD"),
+		from:       f.String("from", "", "범위 시작 (YYYY-MM-DD, 2026-10-01T09:00, now-30d)"),
+		to:         f.String("to", "", "범위 끝 (YYYY-MM-DD, 2026-10-01T18:00, now)"),
+		docType:    f.String("type", "", "문서 종류 (spec|adr|prd|plan|knowledge|guide|note)"),
+		superseded: f.Bool("superseded", false, "밀린·deprecate 된 문서도 본다"),
+	}
+}
+
+func (ff filterFlags) input() mcpserver.FiltersInput {
+	return mcpserver.FiltersInput{Team: *ff.team, Org: *ff.org, Project: *ff.project, Topic: *ff.topic, Date: *ff.date,
+		TimeRange: model.TimeRange{From: *ff.from, To: *ff.to}, DocType: *ff.docType, IncludeSuperseded: *ff.superseded}
+}
+
 func runSearch(ctx context.Context, c *CLI, args []string) (string, error) {
 	f := newFlags("search")
-	team := f.String("team", c.Config.DefaultTeam, "팀")
-	org := f.String("org", "", "org(실) — 그 org 의 모든 팀을 함께 검색 (-team 무시)")
-	project := f.String("project", "", "프로젝트(관리 대상 repository)")
-	topic := f.String("topic", "", "주제")
-	date := f.String("date", "", "날짜 YYYY-MM-DD")
-	from := f.String("from", "", "범위 시작 (YYYY-MM-DD 또는 now-30d)")
-	to := f.String("to", "", "범위 끝 (YYYY-MM-DD 또는 now)")
-	docType := f.String("type", "", "문서 종류 (spec|adr|prd|plan|knowledge|guide|note)")
+	filters := addFilterFlags(f, c.Config.DefaultTeam)
 	size := f.Int("size", 0, "결과 수 (1~50, 기본 8)")
-	superseded := f.Bool("superseded", false, "밀린·deprecate 된 문서도 본다")
 	rest, err := f.parse(args)
 	if err != nil {
 		return "", err
 	}
-	in := mcpserver.SearchInput{
-		Team: *team, Org: *org, Query: strings.Join(rest, " "), Project: *project, Topic: *topic, Date: *date,
-		TimeRange: model.TimeRange{From: *from, To: *to}, DocType: *docType, Size: *size, IncludeSuperseded: *superseded,
-	}
+	in := filters.input().WithQuery(strings.Join(rest, " "), *size)
 	if strings.TrimSpace(in.Query) == "" && in.Filters() == "" {
 		return "", f.usageErr()
 	}
@@ -57,15 +72,7 @@ func runSearch(ctx context.Context, c *CLI, args []string) (string, error) {
 
 func runFilters(ctx context.Context, c *CLI, args []string) (string, error) {
 	f := newFlags("filters")
-	team := f.String("team", c.Config.DefaultTeam, "팀")
-	org := f.String("org", "", "org(실) — 그 org 의 모든 팀을 함께 센다 (-team 무시)")
-	project := f.String("project", "", "프로젝트")
-	topic := f.String("topic", "", "주제")
-	date := f.String("date", "", "날짜 YYYY-MM-DD")
-	from := f.String("from", "", "범위 시작")
-	to := f.String("to", "", "범위 끝")
-	docType := f.String("type", "", "문서 종류 (spec|adr|prd|plan|knowledge|guide|note)")
-	superseded := f.Bool("superseded", false, "밀린·deprecate 된 문서도 센다")
+	filters := addFilterFlags(f, c.Config.DefaultTeam)
 	rest, err := f.parse(args)
 	if err != nil {
 		return "", err
@@ -73,13 +80,12 @@ func runFilters(ctx context.Context, c *CLI, args []string) (string, error) {
 	if len(rest) != 0 {
 		return "", f.usageErr()
 	}
-	return c.Handlers.Filters(ctx, mcpserver.FiltersInput{Team: *team, Org: *org, Project: *project, Topic: *topic, Date: *date,
-		TimeRange: model.TimeRange{From: *from, To: *to}, DocType: *docType, IncludeSuperseded: *superseded})
+	return c.Handlers.Filters(ctx, filters.input())
 }
 
 func runIngest(ctx context.Context, c *CLI, args []string) (string, error) {
 	f := newFlags("ingest")
-	team := f.String("team", "", "frontmatter 대신 쓸 팀")
+	team := f.String("team", "", "이번 적재에만 쓸 팀 (frontmatter 는 그대로 — 파일이 바뀌면 데몬이 frontmatter team 으로 다시 쓴다)")
 	rest, err := f.parse(args)
 	if err != nil {
 		return "", err
@@ -182,15 +188,15 @@ func runReload(ctx context.Context, c *CLI, args []string) (string, error) {
 	if _, err := f.parse(args); err != nil {
 		return "", err
 	}
-	// cold 로 간 달은 되살리지 않는다 (필요하면 restore)
+	// cold 로 간 달은 되살리지 않는다 (필요하면 restore). 어느 스냅샷에도 없는 갇힌 문서는 hot 파일이 있을 때만 싣는다
+	// (없으면 데몬이 파일 없는 문서로 보고 cold store 청크까지 지운다 — 감사가 stranded-cold 로 알린다)
 	archived, err := cold.ArchivedMonths(ctx, c.OS, c.Config)
 	if err != nil {
 		return "", err
 	}
 	own := cold.NewOwnership(archived, c.Cold)
 	report, err := ingest.Reload(ctx, c.Cold, c.Indexer, *team, func(ch model.Chunk) bool {
-		owned, err := own.Owns(ctx, ch.Team, naming.IndexFor(ch), ch.SourcePath, ch.ContentSHA)
-		return err != nil || !owned // 모르면 싣는다 — 빠뜨리는 쪽보다 낫다
+		return own.Reloadable(ctx, c.Config.MetaRepoRoot, ch)
 	})
 	if err != nil {
 		return "", err
@@ -213,7 +219,7 @@ func runQuestions(_ context.Context, c *CLI, args []string) (string, error) {
 	if _, err := newFlags("questions").parse(args); err != nil {
 		return "", err
 	}
-	return RenderQuestions(c.Config.MetaRepoRoot)
+	return renderQuestions(c.Config.MetaRepoRoot)
 }
 
 func runAnswer(_ context.Context, c *CLI, args []string) (string, error) {
@@ -225,7 +231,7 @@ func runAnswer(_ context.Context, c *CLI, args []string) (string, error) {
 	if len(rest) != 2 {
 		return "", f.usageErr()
 	}
-	a, ok := ParseAnswer(rest[1])
+	a, ok := parseAnswer(rest[1])
 	if !ok {
 		return "", f.usageErr()
 	}
@@ -297,46 +303,45 @@ func runGraph(ctx context.Context, c *CLI, args []string) (string, error) {
 	if c.Graph == nil {
 		return "", graph.ErrDisabled
 	}
-	switch sub {
-	case "neighbors":
-		if len(args) != 1 {
-			return "", f.usageErr()
-		}
+	switch {
+	case sub == "neighbors" && len(args) == 1:
 		return c.Handlers.Related(ctx, mcpserver.RelatedInput{Path: args[0], Depth: *depth})
-	case "entity":
-		if len(args) != 1 {
-			return "", f.usageErr()
-		}
+	case sub == "entity" && len(args) == 1:
 		return c.Handlers.Entities(ctx, mcpserver.EntityInput{Entity: args[0]})
-	case "stats":
+	case sub == "stats":
 		st, err := c.Graph.Stats(ctx, c.Config.Workspace)
 		if err != nil {
 			return "", err
 		}
 		return renderGraphStats(c.Config.Workspace, st), nil
-	case "rebuild":
-		if err := c.Handlers.Ready(ctx); err != nil {
-			return "", err
-		}
-		indices, err := ingest.ManagedIndices(ctx, c.OS)
-		if err != nil {
-			return "", err
-		}
-		docs, err := ingest.FetchIndexedDocs(ctx, c.OS, indices, c.Config.Workspace)
-		if err != nil {
-			return "", err
-		}
-		if err := c.Graph.Ping(ctx); err != nil {
-			return "", err
-		}
-		g, err := graph.Rebuild(ctx, c.Graph, c.Config.MetaRepoRoot, c.Config.Workspace, docs)
-		if err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("[graph] rebuild: docs=%d entities=%d repos=%d edges=%d (LLM 0회 — 색인·파일·원장에서)", len(g.Docs), len(g.Entities), len(g.Repos), len(g.Edges)), nil
+	case sub == "rebuild":
+		return rebuildGraph(ctx, c)
 	default:
 		return "", f.usageErr()
 	}
+}
+
+// rebuildGraph 는 색인·파일·원장만으로 workspace 그래프를 다시 만든다 (LLM 없이).
+func rebuildGraph(ctx context.Context, c *CLI) (string, error) {
+	if err := c.Handlers.Ready(ctx); err != nil {
+		return "", err
+	}
+	indices, err := ingest.ManagedIndices(ctx, c.OS)
+	if err != nil {
+		return "", err
+	}
+	docs, err := ingest.FetchIndexedDocs(ctx, c.OS, indices, c.Config.Workspace)
+	if err != nil {
+		return "", err
+	}
+	if err := c.Graph.Ping(ctx); err != nil {
+		return "", err
+	}
+	g, err := graph.Rebuild(ctx, c.Graph, c.Config.MetaRepoRoot, c.Config.Workspace, docs)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("[graph] rebuild: docs=%d entities=%d repos=%d edges=%d (LLM 0회 — 색인·파일·원장에서)", len(g.Docs), len(g.Entities), len(g.Repos), len(g.Edges)), nil
 }
 
 func renderGraphStats(workspace string, st graph.Stats) string {
@@ -357,16 +362,30 @@ func renderTier(decisions []cold.TierDecision) string {
 		return "대상 인덱스 없음"
 	}
 	var b strings.Builder
-	removed := 0
+	gitRemoved, fileRemoved, kept := 0, 0, 0
 	for _, d := range decisions {
 		fmt.Fprintf(&b, "%-16s %s  newest=%s\n", d.Action, d.Index, orDash(d.NewestEvent))
 		for _, f := range d.RemovedFiles {
 			fmt.Fprintf(&b, "  - hot 에서 뺌: %s\n", f)
-			removed++
+		}
+		if d.GitRemoved {
+			gitRemoved += len(d.RemovedFiles)
+		} else {
+			fileRemoved += len(d.RemovedFiles)
+		}
+		for _, f := range d.KeptFiles {
+			fmt.Fprintf(&b, "  - hot 에 남김: %s (git 에 커밋된 내용이 아니다)\n", f)
+			kept++
 		}
 	}
-	if removed > 0 {
-		fmt.Fprintf(&b, "\nhot 원본 %d개를 cold 로 넘겼습니다 (git rm). 원본은 cold store raw 와 스냅샷에 있습니다 — 'git commit' 하세요.", removed)
+	if gitRemoved > 0 {
+		fmt.Fprintf(&b, "\nhot 원본 %d개를 cold 로 넘겼습니다 (git rm). 원본은 cold store raw 와 스냅샷에 있습니다 — 'git commit' 하세요.", gitRemoved)
+	}
+	if fileRemoved > 0 {
+		fmt.Fprintf(&b, "\nhot 원본 %d개를 cold 로 넘겼습니다 (파일 삭제 — git 이 다루지 않는 meta-repo). 원본은 이제 cold store raw 와 스냅샷에만 있습니다.", fileRemoved)
+	}
+	if kept > 0 {
+		fmt.Fprintf(&b, "\nhot 원본 %d개는 git 이 되살릴 수 없어(커밋하지 않았거나 커밋 뒤 고쳤다) 남겼습니다 — 커밋하면 다음 tier 가 hot 에서 뺍니다.", kept)
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

@@ -29,10 +29,11 @@ type ArchiveState struct{ Ledger *Ledger[ArchiveRecord] }
 
 // NewArchiveState 는 root 의 cold 문서 감사 원장이다.
 func NewArchiveState(root string) *ArchiveState {
-	return &ArchiveState{Ledger: NewLedger[ArchiveRecord](filepath.Join(CacheDir(root), "archive"))}
+	return &ArchiveState{Ledger: newLedger[ArchiveRecord](filepath.Join(CacheDir(root), "archive"))}
 }
 
-// Deprecated 는 지금 deprecated 인 경로 집합이다 (마지막 기록 기준).
+// Deprecated 는 지금 deprecated 인 경로 집합이다 (마지막 기록 기준). 경로는 NFC 로 맞춰 읽는다 — NFD 경로로 남은
+// 옛 기록도 지금의 source_path(NFC)에 적용된다.
 func (s *ArchiveState) Deprecated(team string) (map[string]bool, error) {
 	records, err := s.Ledger.ReadAll(team)
 	if err != nil {
@@ -40,11 +41,11 @@ func (s *ArchiveState) Deprecated(team string) (map[string]bool, error) {
 	}
 	out := map[string]bool{}
 	for _, r := range records {
-		switch r.Action {
+		switch path := canonicalPath(r.Path); r.Action {
 		case ArchiveDeprecate:
-			out[r.Path] = true
+			out[path] = true
 		case ArchiveRestore, ArchivePurge:
-			delete(out, r.Path)
+			delete(out, path)
 		}
 	}
 	return out, nil

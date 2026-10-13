@@ -52,21 +52,34 @@ func ManagedIndices(ctx context.Context, c opensearch.Client) ([]string, error) 
 	return indices, nil
 }
 
-// RestoredIndices 는 restore_cold 로 복원해 열려 있는 월별 인덱스다 (auto_manage=false). 데몬은 고치지 않지만,
-// 그 달의 hot 파일이 이미 거기 그대로 들어 있는지는 본다.
-func RestoredIndices(ctx context.Context, c opensearch.Client) ([]string, error) {
+// WorkspaceIndices 는 이 workspace 팀의 인덱스를 데몬이 맞추는 것(managed)과 restore_cold 로 복원해 열려 있는 것(restored,
+// auto_manage=false — 데몬은 고치지 않지만 그 달의 hot 파일이 이미 거기 그대로 들어 있는지는 본다)으로 나눈다. 팀은 이 workspace 가
+// 문서를 둔 팀과 기본 팀이다. 다른 workspace 의 팀 인덱스는 뺀다 — 그쪽 인덱스가 잠깐 열리지 않아도(샤드 503) 이 workspace 의
+// 사이클이 실패하지 않게 (팀 하나는 workspace 하나에만 속한다).
+func WorkspaceIndices(ctx context.Context, c opensearch.Client, workspace, defaultTeam string) (managed, restored []string, err error) {
+	teams, err := opensearch.WorkspaceTeams(ctx, c, workspace)
+	if err != nil {
+		return nil, nil, err
+	}
 	settings, err := opensearch.Settings(ctx, c, naming.AllPattern)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	indices := []string{}
+	managed, restored = []string{}, []string{}
 	for index, s := range settings {
-		if _, ok := naming.ParseIndex(index); ok && opensearch.IsUnmanaged(s) {
-			indices = append(indices, index)
+		idx, ok := naming.ParseIndex(index)
+		if !ok || (!teams[idx.Team] && idx.Team != defaultTeam) {
+			continue
+		}
+		if opensearch.IsUnmanaged(s) {
+			restored = append(restored, index)
+		} else {
+			managed = append(managed, index)
 		}
 	}
-	sort.Strings(indices)
-	return indices, nil
+	sort.Strings(managed)
+	sort.Strings(restored)
+	return managed, restored, nil
 }
 
 // FetchIndexedDocs 는 indices 에서 이 workspace 의 문서별 대표값이다 (건수 상한 없이 페이지로 읽는다).

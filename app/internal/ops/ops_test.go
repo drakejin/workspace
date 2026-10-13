@@ -79,16 +79,33 @@ func TestRenderStatusRunning(t *testing.T) {
 	}
 }
 
+// R5-final-daemon-1: status 의 마지막 사이클 줄은 cold_kept(cold 로 갔지만 git 에 커밋된 내용이 아니라 tier 가 hot 에 남긴 원본)도
+// 보이고, 있으면 커밋하라고 안내한다 — cold_owned 는 그런 원본을 세지 않으므로 status 만 보면 cold_owned=0 이 전부로 보였다.
+func TestRenderStatusShowsColdKept(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{MetaRepoRoot: root, Workspace: "ws"}
+	sum := state.CycleSummary{Scanned: 3, ColdKept: 3}
+	_ = state.WriteStatus(root, state.Status{LastCycle: &state.CycleRecord{Trigger: "timer", At: "a", Summary: &sum}})
+
+	out := RenderStatus(context.Background(), cfg, fakeProbe{}, time.Now())
+
+	for _, want := range []string{"cold_owned=0 cold_kept=3 ", "hot 에 남긴 cold 원본 3개", "커밋하면 다음 tier 가"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("%q 없음:\n%s", want, out)
+		}
+	}
+}
+
 func TestQuestionsAndAnswer(t *testing.T) {
 	root := t.TempDir()
-	if out, _ := RenderQuestions(root); !strings.Contains(out, "없습니다") {
+	if out, _ := renderQuestions(root); !strings.Contains(out, "없습니다") {
 		t.Error("빈 질문")
 	}
 	s := state.NewJudgeState(root)
 	old := state.Side{Path: "a.md", BodySHA: "a", EventTime: "2026-10-01T00:00:00Z"}
 	neu := state.Side{Path: "b.md", BodySHA: "b", EventTime: "2026-10-02T00:00:00Z"}
 	_ = s.Ledger.Append("t", state.JudgeRecord{PairKey: "k", Decision: state.DecisionQuestion, Old: old, New: neu, Reason: "?"})
-	out, _ := RenderQuestions(root)
+	out, _ := renderQuestions(root)
 	if !strings.Contains(out, "old: a.md (2026-10-01)") {
 		t.Errorf("questions = %s", out)
 	}
@@ -96,7 +113,7 @@ func TestQuestionsAndAnswer(t *testing.T) {
 		answer   Answer
 		decision state.Decision
 		loser    string
-	}{{AnswerLatest, state.DecisionSuperseded, "a.md"}, {AnswerOld, state.DecisionSuperseded, "b.md"}, {AnswerKeep, state.DecisionKeep, "a.md"}}
+	}{{AnswerLatest, state.DecisionSuperseded, "a.md"}, {answerOld, state.DecisionSuperseded, "b.md"}, {answerKeep, state.DecisionKeep, "a.md"}}
 	for _, c := range cases {
 		if _, err := AnswerQuestion(root, "k", c.answer, time.Now()); err != nil {
 			t.Fatal(err)
@@ -108,7 +125,7 @@ func TestQuestionsAndAnswer(t *testing.T) {
 		_ = s.Ledger.Append("t", state.JudgeRecord{PairKey: "k", Decision: state.DecisionQuestion, Old: old, New: neu})
 	}
 	// 답을 바꿔도(old → latest) 어느 쪽이 구판인지는 기록 순서가 아니라 유효 시각으로 정한다
-	for _, a := range []Answer{AnswerOld, AnswerLatest} {
+	for _, a := range []Answer{answerOld, AnswerLatest} {
 		if _, err := AnswerQuestion(root, "k", a, time.Now()); err != nil {
 			t.Fatal(err)
 		}
@@ -120,7 +137,7 @@ func TestQuestionsAndAnswer(t *testing.T) {
 	same := "2026-10-05T00:00:00Z"
 	_ = s.Ledger.Append("t", state.JudgeRecord{PairKey: "tie", Decision: state.DecisionQuestion,
 		Old: state.Side{Path: "c.md", BodySHA: "c", EventTime: same}, New: state.Side{Path: "d.md", BodySHA: "d", EventTime: same}})
-	for _, a := range []Answer{AnswerOld, AnswerLatest} {
+	for _, a := range []Answer{answerOld, AnswerLatest} {
 		if _, err := AnswerQuestion(root, "tie", a, time.Now()); err != nil {
 			t.Fatal(err)
 		}
@@ -128,10 +145,10 @@ func TestQuestionsAndAnswer(t *testing.T) {
 	if latest, _ := s.Latest("t"); latest["tie"].Old.Path != "c.md" {
 		t.Errorf("같은 시각 쌍을 다시 답한 latest → %+v", latest["tie"])
 	}
-	if _, err := AnswerQuestion(root, "missing", AnswerKeep, time.Now()); err == nil {
+	if _, err := AnswerQuestion(root, "missing", answerKeep, time.Now()); err == nil {
 		t.Error("없는 질문")
 	}
-	if _, ok := ParseAnswer("maybe"); ok {
+	if _, ok := parseAnswer("maybe"); ok {
 		t.Error("잘못된 답")
 	}
 }
@@ -156,16 +173,49 @@ func TestCLIUsage(t *testing.T) {
 
 func TestRenderTier(t *testing.T) {
 	out := renderTier([]cold.TierDecision{
-		{Index: "mem-a-2026.06", Action: cold.TierMoved, NewestEvent: "2026-06-15", RemovedFiles: []string{"docs/a.md"}},
+		{Index: "mem-a-2026.06", Action: cold.TierMoved, NewestEvent: "2026-06-15", RemovedFiles: []string{"docs/a.md"}, GitRemoved: true},
 		{Index: "mem-a-2026.10", Action: cold.TierKept},
 	})
-	for _, want := range []string{"tiered           mem-a-2026.06", "hot 에서 뺌: docs/a.md", "newest=-", "git commit"} {
+	for _, want := range []string{"tiered           mem-a-2026.06", "hot 에서 뺌: docs/a.md", "newest=-", "(git rm)", "git commit"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("%q 없음:\n%s", want, out)
 		}
 	}
 	if renderTier(nil) != "대상 인덱스 없음" {
 		t.Error("빈 결과")
+	}
+}
+
+// R5-final-docs-4: git 이 다루지 않는 meta-repo 에서는 tier 가 원본 파일을 그냥 지운다 — git rm·git commit 을 말하지 않고,
+// 원본이 cold store 와 스냅샷에만 남는다고 알린다.
+func TestRenderTierOutsideGitDoesNotAskForACommit(t *testing.T) {
+	out := renderTier([]cold.TierDecision{
+		{Index: "mem-a-2026.06", Action: cold.TierMoved, NewestEvent: "2026-06-15", RemovedFiles: []string{"docs/a.md"}},
+	})
+
+	if strings.Contains(out, "git rm") || strings.Contains(out, "git commit") {
+		t.Errorf("git 이 다루지 않는 meta-repo 에 git rm·commit 을 말한다:\n%s", out)
+	}
+	for _, want := range []string{"hot 원본 1개를 cold 로 넘겼습니다", "git 이 다루지 않는 meta-repo", "cold store raw 와 스냅샷에만"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("%q 없음:\n%s", want, out)
+		}
+	}
+}
+
+// OPS-3: git 이 되살릴 수 없어 hot 에 남긴 원본은 지운 원본과 따로, 무엇을 하면 되는지와 함께 보인다.
+func TestRenderTierShowsOriginalsKeptForGit(t *testing.T) {
+	out := renderTier([]cold.TierDecision{
+		{Index: "mem-a-2026.06", Action: cold.TierMoved, NewestEvent: "2026-06-15", RemovedFiles: []string{"docs/a.md"}, KeptFiles: []string{"docs/new.md"}},
+		{Index: "mem-a-2026.05", Action: cold.TierKeptUncommitted, KeptFiles: []string{"docs/old.md"}},
+	})
+	for _, want := range []string{"hot 에서 뺌: docs/a.md", "hot 에 남김: docs/new.md", "hot 에 남김: docs/old.md", "kept-uncommitted", "커밋"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("%q 없음:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "hot 에서 뺌: docs/new.md") {
+		t.Errorf("남긴 원본을 뺐다고 하지 않는다:\n%s", out)
 	}
 }
 

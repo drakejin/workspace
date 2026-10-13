@@ -2,6 +2,7 @@ package cold
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -127,5 +128,83 @@ func TestRestoreMarksDeprecationsBeforeSearch(t *testing.T) {
 	searchable := callIndex(fake, http.MethodPost, "/_aliases")
 	if marked < 0 || searchable < 0 || marked > searchable {
 		t.Errorf("표시(%d)가 alias(%d)보다 먼저여야 한다 — 요청 = %+v", marked, searchable, fake.calls)
+	}
+}
+
+// R4-daemon-a-2: 예전 판이 뜬 스냅샷에는 본문이 없는 문서의 청크 0 이 "text": "" 로 들어 있다 — exists 는 빈 문자열도 있다고
+// 보아 복원한 달의 목록·검색에 빈 결과로 나온다. 복원은 검색 alias 를 붙이기 전에 그 빈 text 를 지운다 (지금 판은 필드째 쓰지 않는다).
+func TestRestoreDropsEmptyTextBeforeSearch(t *testing.T) {
+	fake, err := runRestore(t, &restoreCluster{})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	dropped, searchable := dropEmptyTextCall(fake), callIndex(fake, http.MethodPost, "/_aliases")
+	if dropped < 0 || searchable < 0 || dropped > searchable {
+		t.Errorf("빈 text 지우기(%d)가 alias(%d)보다 먼저여야 한다 — 요청 = %+v", dropped, searchable, fake.calls)
+	}
+}
+
+// dropEmptyTextCall 은 restoreMonth 의 빈 text 를 지우는 요청의 순번이다 (없으면 -1).
+func dropEmptyTextCall(f *fakeOS) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, c := range f.calls {
+		if c.Method != http.MethodPost || c.Path != "/"+restoreMonth+"/_update_by_query" {
+			continue
+		}
+		if b, _ := json.Marshal(c.Body); strings.Contains(string(b), `remove('text')`) {
+			return i
+		}
+	}
+	return -1
+}
+
+// R5-final-daemon-2: 이미 alias 가 붙은 복원본(예전 판의 복원본)에 합치다 멈춰도, 합치며 더한 예전 판 문서의 빈 text 를 지운다 —
+// 그 복원본은 이미 검색에 붙어 있어, 지우지 않으면 restore 를 다시 할 때까지 그 문서가 목록에 빈 결과로 나온다.
+func TestRestoreDropsEmptyTextWhenMergeFails(t *testing.T) {
+	boom := &opensearch.Error{Status: http.StatusInternalServerError, Reason: "boom", Op: "POST"}
+	cl := &restoreCluster{mergeErr: boom}
+	cl.open.Store(true)
+
+	fake, err := runRestore(t, cl)
+
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v", err)
+	}
+	if dropEmptyTextCall(fake) < 0 {
+		t.Errorf("합치다 멈춘 복원본의 빈 text 를 지우지 않았다 — 요청 = %+v", fake.calls)
+	}
+	if !strings.Contains(err.Error(), "빈 text") {
+		t.Errorf("오류가 빈 text 를 지웠는지 말하지 않는다: %v", err)
+	}
+}
+
+// R2-handoff-3: 예전 판이 뜬 스냅샷의 인덱스는 strict 매핑에 지금 판의 필드(pending_cycle 등)가 없다. 복원본에 지금 매핑을
+// 더해야 같은 세션의 ingest_path 가 그 달에 쓸 때 strict_dynamic_mapping_exception 이 나지 않는다 — 새로 열 때도, 이미 열려 있을 때도.
+func TestRestoreAllPutsTheCurrentMappingOnTheRestoredIndex(t *testing.T) {
+	for _, alreadyOpen := range []bool{false, true} {
+		cl := &restoreCluster{}
+		cl.open.Store(alreadyOpen)
+		fake := cl.fake()
+
+		err := RestoreAll(context.Background(), fake, tierConfig(t), restoreMonth, []string{restoreOlder, restoreNewest})
+
+		if err != nil {
+			t.Fatalf("open=%v: %v", alreadyOpen, err)
+		}
+		puts := fake.called(http.MethodPut, "/"+restoreMonth+"/_mapping")
+		if len(puts) != 1 {
+			t.Fatalf("open=%v: 복원본에 지금 매핑을 더한다 — 요청 = %+v", alreadyOpen, fake.calls)
+		}
+		body, _ := puts[0].Body.(map[string]any)
+		props, _ := body["properties"].(map[string]any)
+		if _, ok := props["pending_cycle"]; !ok {
+			t.Errorf("open=%v: 매핑에 pending_cycle 이 없다: %+v", alreadyOpen, body)
+		}
+		merged := callIndex(fake, http.MethodPost, "/_snapshot/mem-cold/"+restoreOlder+"/_restore")
+		if mapped := callIndex(fake, http.MethodPut, "/"+restoreMonth+"/_mapping"); mapped > merged {
+			t.Errorf("open=%v: 옛 스냅샷 문서를 옮기기 전에 매핑을 맞춘다 (mapping=%d merge=%d)", alreadyOpen, mapped, merged)
+		}
 	}
 }

@@ -41,8 +41,8 @@ func ChunksKey(team, sourcePath string) string { return team + "/chunks/" + sour
 // ChunksPrefix 는 팀 청크 JSONL 전체 접두어다.
 func ChunksPrefix(team string) string { return team + "/chunks/" }
 
-// TeamPrefix 는 팀의 보관본(raw·청크·목록) 전체 접두어다.
-func TeamPrefix(team string) string { return team + "/" }
+// teamPrefix 는 팀의 보관본(raw·청크·목록) 전체 접두어다.
+func teamPrefix(team string) string { return team + "/" }
 
 func safeKey(key string) (string, error) {
 	clean := path.Clean(key)
@@ -195,8 +195,8 @@ func (s *localStore) Remove(_ context.Context, key string) error {
 	return nil
 }
 
-// S3API 는 이 패키지가 쓰는 S3 호출만이다 (소비자 측 narrow interface).
-type S3API interface {
+// s3API 는 이 패키지가 쓰는 S3 호출만이다 (소비자 측 narrow interface).
+type s3API interface {
 	PutObject(ctx context.Context, in *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error)
 	GetObject(ctx context.Context, in *s3.GetObjectInput, opts ...func(*s3.Options)) (*s3.GetObjectOutput, error)
 	ListObjectsV2(ctx context.Context, in *s3.ListObjectsV2Input, opts ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
@@ -204,16 +204,14 @@ type S3API interface {
 }
 
 type s3Store struct {
-	api    S3API
+	api    s3API
 	bucket string
 	prefix string
 	locks  keyLocks
 }
 
-// NewS3Store 는 S3 보관소다. 키는 {prefix}/{key}.
-func NewS3Store(api S3API, bucket, prefix string) Store { return newS3Store(api, bucket, prefix) }
-
-func newS3Store(api S3API, bucket, prefix string) *s3Store {
+// newS3Store 는 S3 보관소다. 키는 {prefix}/{key}.
+func newS3Store(api s3API, bucket, prefix string) *s3Store {
 	return &s3Store{api: api, bucket: bucket, prefix: strings.Trim(prefix, "/")}
 }
 

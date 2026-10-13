@@ -14,8 +14,6 @@ import (
 	"github.com/drakejin/workspace/app/internal/model"
 )
 
-var titleLine = regexp.MustCompile(`(?m)^#\s+(.+)$`)
-
 // Input 은 파일 하나를 청크로 만들 재료다.
 type Input struct {
 	Workspace    string // meta-repository 이름 (격리 축)
@@ -42,6 +40,9 @@ type Built struct {
 	Title      string
 	Body       string
 	Chunks     []model.Chunk
+	// FrontmatterErr 는 frontmatter YAML 이 깨졌다는 경고다 (*markdown.FrontmatterError). 쓴 글은 버리지 않고 메타데이터 없이
+	// 원문 전체를 본문으로 색인한다 — 데몬은 경고를 남기고 audit 는 bad-frontmatter 로 보고한다
+	FrontmatterErr error
 }
 
 // SHA256 은 hex sha256 이다.
@@ -52,7 +53,7 @@ func SHA256(s string) string {
 
 // Build 는 파일 하나를 청크 목록으로 바꾼다. 같은 입력이면 같은 id 가 나온다(재색인은 덮어쓰기).
 func Build(in Input) (Built, error) {
-	fm, body := markdown.SplitFrontmatter(in.Content)
+	fm, body, fmErr := markdown.ParseFrontmatter(in.Content)
 	if in.TeamOverride != "" {
 		fm["team"] = in.TeamOverride
 	}
@@ -70,7 +71,7 @@ func Build(in Input) (Built, error) {
 	}
 	rootTitle := strings.TrimSuffix(path.Base(in.SourcePath), path.Ext(in.SourcePath))
 	title := Title(body, in.SourcePath)
-	meta.Links = append(meta.Links, MarkdownLinks(body, in.SourcePath)...)
+	meta.Links = append(meta.Links, markdownLinks(body, in.SourcePath)...)
 	built := Built{
 		Meta:       meta,
 		EventTime:  eventTime,
@@ -78,6 +79,8 @@ func Build(in Input) (Built, error) {
 		BodySHA:    SHA256(body),
 		Title:      title,
 		Body:       body,
+		// 깨진 YAML 은 실패가 아니라 경고다 — 원문 전체가 본문이다
+		FrontmatterErr: fmErr,
 	}
 	var distilled model.Distilled
 	hasDistilled := false
@@ -138,19 +141,20 @@ func locationOrUTC(loc *time.Location) *time.Location {
 	return loc
 }
 
-// Title 은 본문의 첫 `# ` 제목이다. 없으면 확장자를 뺀 파일 이름.
+// Title 은 본문의 첫 `# ` 제목이다 — 코드 펜스 안의 `#` 줄(셸 주석)은 제목이 아니다 (청커와 같은 펜스 규칙).
+// 없으면 확장자를 뺀 파일 이름.
 func Title(body, sourcePath string) string {
-	if m := titleLine.FindStringSubmatch(body); m != nil {
-		return strings.TrimSpace(m[1])
+	if title, ok := markdown.FirstH1(body); ok {
+		return title
 	}
 	return strings.TrimSuffix(path.Base(sourcePath), path.Ext(sourcePath))
 }
 
 var markdownLink = regexp.MustCompile(`\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)`)
 
-// MarkdownLinks 는 본문의 상대 경로 마크다운 링크(.md)다. 대상은 meta-repository 기준 경로(NFC — source_path 와 같은 꼴)로 바꾼다.
+// markdownLinks 는 본문의 상대 경로 마크다운 링크(.md)다. 대상은 meta-repository 기준 경로(NFC — source_path 와 같은 꼴)로 바꾼다.
 // 외부 URL·앵커만 있는 링크·meta-repository 밖을 가리키는 링크는 버린다.
-func MarkdownLinks(body, sourcePath string) []model.Link {
+func markdownLinks(body, sourcePath string) []model.Link {
 	seen := map[string]bool{}
 	var links []model.Link
 	for _, m := range markdownLink.FindAllStringSubmatch(body, -1) {
@@ -187,5 +191,5 @@ func Links(content, sourcePath string) []model.Link {
 	if s := CanonicalPath(firstString(fm, "supersedes")); s != "" {
 		links = append(links, model.Link{Type: model.LinkSupersedes, To: s, Why: "frontmatter supersedes"})
 	}
-	return append(links, MarkdownLinks(body, sourcePath)...)
+	return append(links, markdownLinks(body, sourcePath)...)
 }

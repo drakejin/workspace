@@ -13,20 +13,20 @@ import (
 const (
 	LabelDoc    = "Doc"
 	LabelEntity = "Entity"
-	LabelRepo   = "Repo"
+	labelRepo   = "Repo"
 )
 
 // Edge 종류 — model.LinkType 에 둘을 더한다.
 const (
-	RelMentions = "MENTIONS" // 문서 → entity (증류 산출)
-	RelInRepo   = "IN_REPO"  // 문서 → 관리 대상 repository
+	relMentions = "MENTIONS" // 문서 → entity (증류 산출)
+	relInRepo   = "IN_REPO"  // 문서 → 관리 대상 repository
 )
 
 // DocStatus 는 그래프 안 문서 노드의 상태다.
 const (
 	StatusHot        = "hot"          // 지금 색인에 있다
-	StatusUnindexed  = "unindexed"    // 링크로만 알려졌다 (cold 로 갔거나, 오타거나, 범위 안인데 색인되지 않았다)
-	StatusOutOfScope = "out-of-scope" // 링크로만 알려졌지만 디스크에 있다 — 색인 범위 밖의 가이드(scenarios/·.claude/·examples/). 깨진 링크가 아니다
+	statusUnindexed  = "unindexed"    // 링크로만 알려졌다 (cold 로 갔거나, 오타거나, 범위 안인데 색인되지 않았다)
+	statusOutOfScope = "out-of-scope" // 링크로만 알려졌지만 디스크에 있다 — 색인 범위 밖의 가이드(scenarios/·.claude/·examples/). 깨진 링크가 아니다
 	StatusSuperseded = "superseded"   // 더 새 문서에 밀렸다
 	StatusDeprecated = "deprecated"   // 틀린 것으로 표시됐다
 )
@@ -84,14 +84,14 @@ type Input struct {
 	Links        []model.Link
 }
 
-// Key 는 workspace 안에서 유일한 노드 키다.
-func Key(workspace, kind, name string) string { return workspace + "|" + kind + "|" + name }
+// key 는 workspace 안에서 유일한 노드 키다.
+func key(workspace, kind, name string) string { return workspace + "|" + kind + "|" + name }
 
 // Build 는 문서 목록에서 그래프를 만든다. 순수 함수 — 같은 입력이면 같은 그래프.
 // outOfScope 는 링크로만 알려진 대상 가운데 디스크에 있는 색인 범위 밖 파일이다 (그 노드는 unindexed 가 아니라 out-of-scope).
 func Build(workspace string, inputs []Input, outOfScope map[string]bool) Graph {
 	g := Graph{Workspace: workspace}
-	docKey := func(p string) string { return Key(workspace, LabelDoc, p) }
+	docKey := func(p string) string { return key(workspace, LabelDoc, p) }
 	hot := map[string]bool{}
 	for _, in := range inputs {
 		hot[in.Path] = true
@@ -138,20 +138,20 @@ func Build(workspace string, inputs []Input, outOfScope map[string]bool) Graph {
 			if !ok {
 				typ, name = "concept", e
 			}
-			k := Key(workspace, LabelEntity, e)
+			k := key(workspace, LabelEntity, e)
 			entities[k] = Named{Key: k, Name: name, Type: typ}
-			addEdge(Edge{From: docKey(in.Path), To: k, Type: RelMentions, Source: "distill"})
+			addEdge(Edge{From: docKey(in.Path), To: k, Type: relMentions, Source: "distill"})
 		}
 		if in.Repo != "" {
-			k := Key(workspace, LabelRepo, in.Repo)
+			k := key(workspace, labelRepo, in.Repo)
 			repos[k] = Named{Key: k, Name: in.Repo, Type: "repo"}
-			addEdge(Edge{From: docKey(in.Path), To: k, Type: RelInRepo, Source: "path"})
+			addEdge(Edge{From: docKey(in.Path), To: k, Type: relInRepo, Source: "path"})
 		}
 	}
 	for p := range linkedOnly {
-		status := StatusUnindexed
+		status := statusUnindexed
 		if outOfScope[p] {
-			status = StatusOutOfScope
+			status = statusOutOfScope
 		}
 		g.Docs = append(g.Docs, Doc{Key: docKey(p), Path: p, Title: p, Status: status})
 	}

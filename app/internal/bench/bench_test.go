@@ -17,7 +17,7 @@ not json
 {"type":"result","subtype":"success","duration_ms":6929,"num_turns":3,"total_cost_usd":0.06,"result":"재시도는 5회, 근거 docs/feature/payment-retry/2026-10-06-retry-policy.md","usage":{"input_tokens":18,"cache_creation_input_tokens":100,"cache_read_input_tokens":200,"output_tokens":319}}`
 
 func TestParseStream(t *testing.T) {
-	r := ParseStream(stream)
+	r := parseStream(stream)
 	if r.TotalTools() != 3 || r.MemoryTools() != 1 || r.Turns != 3 || r.DurationMs != 6929 || r.InputTokens != 318 || r.OutputTokens != 319 || r.CostUSD != 0.06 {
 		t.Errorf("parsed = %+v", r)
 	}
@@ -36,7 +36,11 @@ func TestRunAndRender(t *testing.T) {
 		}
 		return `{"type":"result","num_turns":9,"result":"모르겠다"}`, errors.New("exit 1")
 	}
-	results, err := Run(context.Background(), suite, Options{Root: t.TempDir(), MCPScript: "/x/run.sh", Model: "haiku", Modes: []string{ModeWith, ModeWithout}, Runs: 1, MaxTurns: 5, RulesFile: "/meta/CLAUDE.md"}, runner)
+	script := filepath.Join(t.TempDir(), "run.sh") // with 조건은 MCP 스크립트가 있어야 시작한다 (API-12)
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	results, err := Run(context.Background(), suite, Options{Root: t.TempDir(), MCPScript: script, Model: "haiku", Modes: []string{ModeWith, ModeWithout}, Runs: 1, MaxTurns: 5, RulesFile: "/meta/CLAUDE.md"}, runner)
 	if err != nil || len(results) != 2 {
 		t.Fatalf("results = %+v %v", results, err)
 	}
@@ -79,5 +83,55 @@ func TestLoadSuite(t *testing.T) {
 	}
 	if _, err := LoadSuite(filepath.Join(dir, "missing.yaml")); err == nil {
 		t.Error("없는 파일")
+	}
+}
+
+// API-12: 맵에 없는 조건(wiht)이나 없는 MCP 스크립트로 Run 하면 claude 가 --mcp-config "" 로 돌아 memory 도구 없이 잰
+// 결과가 보고서에 남았다. Run 은 claude 를 한 번도 부르지 않고 실패한다.
+func TestRunRefusesUnknownModesAndAMissingScript(t *testing.T) {
+	suite := Suite{Questions: []Question{{ID: "q", Prompt: "p"}}}
+	script := filepath.Join(t.TempDir(), "run.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name   string
+		modes  []string
+		script string
+	}{
+		{"오타", []string{"wiht"}, script},
+		{"공백이 붙은 이름", []string{"with "}, script},
+		{"빈 조건", nil, script},
+		{"없는 스크립트", []string{ModeWith}, filepath.Join(t.TempDir(), "nope.sh")},
+		{"스크립트 자리에 디렉토리", []string{ModeWith}, t.TempDir()},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			calls := 0
+			runner := func(context.Context, string, []string) (string, error) { calls++; return "", nil }
+
+			_, err := Run(context.Background(), suite, Options{Root: t.TempDir(), MCPScript: c.script, Modes: c.modes, Runs: 1, MaxTurns: 1}, runner)
+
+			if err == nil || calls != 0 {
+				t.Errorf("err = %v, claude 호출 %d번 — 시작 전에 거부해야 한다", err, calls)
+			}
+		})
+	}
+}
+
+// API-12: without 만 재면 MCP 스크립트는 보지 않는다.
+func TestValidateNeedsTheScriptOnlyForWith(t *testing.T) {
+	opt := Options{MCPScript: filepath.Join(t.TempDir(), "nope.sh"), Modes: []string{ModeWithout}}
+
+	if err := opt.Validate(); err != nil {
+		t.Errorf("without 만 = %v", err)
+	}
+}
+
+func TestParseModesTrimsNames(t *testing.T) {
+	got := ParseModes(" with , without ")
+
+	if len(got) != 2 || got[0] != ModeWith || got[1] != ModeWithout {
+		t.Errorf("ParseModes = %q", got)
 	}
 }
