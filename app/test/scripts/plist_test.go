@@ -10,7 +10,11 @@ import (
 // awkward 는 sed·XML 에서 특수한 글자를 모두 담은 경로 조각이다.
 const awkward = `a&b<c>|d\e`
 
-const tierLabel = "com.drakejin.workspace.tier"
+// awkwardWorkspace 는 awkward 디렉토리의 workspace 이름이다 (memory_workspace_name: 소문자, [a-z0-9-] 밖은 하이픈).
+const awkwardWorkspace = "a-b-c-d-e"
+
+// tierLabel 은 workspace 의 tier 잡 이름이다 (데몬의 com.drakejin.memory.<workspace>.daemon 과 같은 규칙).
+func tierLabel(workspace string) string { return "com.drakejin.memory." + workspace + ".tier" }
 
 // 공용 렌더러: 값은 XML escape 해서 글자 그대로 넣고, __ENV__ 는 EnvironmentVariables 조각을 그대로 넣고, 그린 결과를 lint 한다.
 func TestRenderPlistSubstitutesLiterally(t *testing.T) {
@@ -65,8 +69,14 @@ func tierSandbox(t *testing.T, dirName string) (sb *sandbox, root, launchctlLog 
 	return sb, root, sb.stub("launchctl", "exit 0")
 }
 
-func (sb *sandbox) tierPlist() string {
-	return filepath.Join(sb.home, "Library", "LaunchAgents", tierLabel+".plist")
+// tierPlist 는 workspace 의 tier 잡 plist 경로다.
+func (sb *sandbox) tierPlist(workspace string) string {
+	return sb.agentPlist(tierLabel(workspace))
+}
+
+// agentPlist 는 가짜 HOME 의 LaunchAgents 에 놓이는 label 의 plist 경로다.
+func (sb *sandbox) agentPlist(label string) string {
+	return filepath.Join(sb.home, "Library", "LaunchAgents", label+".plist")
 }
 
 // OPS-7: --dry-run 이 그린 plist 는 경로를 글자 그대로 담는다 (sed 가 & 를 매치 문자열로 바꾸지 않는다). 설치는 하지 않는다.
@@ -77,7 +87,7 @@ func TestScheduleDryRunKeepsAwkwardPath(t *testing.T) {
 	writeFile(t, rendered, r.stdout)
 
 	p := plistJSON(t, rendered)
-	assertPlist(t, p, "Label", tierLabel)
+	assertPlist(t, p, "Label", tierLabel(awkwardWorkspace))
 	assertPlist(t, p, "WorkingDirectory", root)
 	assertPlist(t, p, "StandardOutPath", root+"/.cache/schedule/tier.log")
 	args, _ := p["ProgramArguments"].([]any)
@@ -87,7 +97,7 @@ func TestScheduleDryRunKeepsAwkwardPath(t *testing.T) {
 	if env, _ := p["EnvironmentVariables"].(map[string]any); env["PATH"] == "" || env["PATH"] == nil {
 		t.Errorf("EnvironmentVariables.PATH 가 없다: %v", p["EnvironmentVariables"])
 	}
-	if exists(sb.tierPlist()) || len(calls(t, launchctlLog)) > 0 {
+	if exists(sb.tierPlist(awkwardWorkspace)) || len(calls(t, launchctlLog)) > 0 {
 		t.Errorf("--dry-run 이 설치했다 (launchctl %v)", calls(t, launchctlLog))
 	}
 }
@@ -97,9 +107,9 @@ func TestScheduleInstallPlacesLintedPlist(t *testing.T) {
 	sb, root, launchctlLog := tierSandbox(t, awkward)
 	sb.mustBash(nil, filepath.Join(root, "scripts", "schedule", "run.sh"), "install")
 
-	assertPlist(t, plistJSON(t, sb.tierPlist()), "WorkingDirectory", root)
+	assertPlist(t, plistJSON(t, sb.tierPlist(awkwardWorkspace)), "WorkingDirectory", root)
 	got := calls(t, launchctlLog)
-	if len(got) == 0 || got[len(got)-1] != "load "+sb.tierPlist() {
+	if len(got) == 0 || got[len(got)-1] != "load "+sb.tierPlist(awkwardWorkspace) {
 		t.Errorf("launchctl 호출 = %v, 마지막이 load 여야 한다", got)
 	}
 	leftovers, _ := filepath.Glob(filepath.Join(sb.dir, "tmp", "tier.plist.*"))
@@ -123,7 +133,7 @@ func TestScheduleInstallLeavesNothingWhenLintFails(t *testing.T) {
 	if r.err == nil {
 		t.Fatalf("깨진 템플릿인데 install 이 성공했다:\n%s", r.output())
 	}
-	if exists(sb.tierPlist()) {
+	if exists(sb.tierPlist("meta")) {
 		t.Errorf("lint 에 실패한 plist 가 LaunchAgents 에 남았다")
 	}
 	for _, c := range calls(t, launchctlLog) {

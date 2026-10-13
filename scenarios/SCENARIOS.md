@@ -207,9 +207,9 @@ printf -- '---\ndate: %s\n---\n# 배송비 정책\n\n## 결정\n\nShippingFeePol
 | W5 | `make sync` | `[index] INDEX.md: all repos listed` (W4 가 행을 더했다) 와 pull 결과 — 기본 브랜치(origin/HEAD)에 있으면 `[sync] books-guitar: pulled '<기본 브랜치>'` |
 | W6 | `scripts/run-issues/run.sh SCN-TEST books-guitar` 후 `git -C main/books-guitar worktree list` | `worktree 'SCN-TEST' created`, 목록에 `main/books-guitar/.worktrees/SCN-TEST` |
 | W7 | `scripts/done-issue/run.sh SCN-TEST books-guitar` 후 `git -C main/books-guitar worktree list` 와 `git -C main/books-guitar branch -D SCN-TEST` | `worktree 'SCN-TEST' removed`, 목록에서 사라짐 |
-| W8 | `mkdir -p docs/specs/scn-x && echo x > docs/specs/scn-x/a.md && scripts/docs-cleaner/run.sh < /dev/null; echo "exit=$?"; ls docs/specs` | `[docs-cleaner] 취소`, exit=1, `scn-x` 가 남아 있다 |
+| W8 | `mkdir -p docs/specs/scn-x && echo x > docs/specs/scn-x/a.md && scripts/docs-cleaner/run.sh < /dev/null; echo "exit=$?"; ls docs/specs` | 먼저 경고(하위 디렉토리만 지우고 INDEX.md 는 남긴다, 지운 문서는 cold 로 가지 않고 색인에서도 빠진다, 오래된 문서는 `scripts/memory/run.sh tier`), 이어서 `[docs-cleaner] 취소`, exit=1, `scn-x` 가 남아 있다 |
 | W9 | `CONFIRM=yes scripts/docs-cleaner/run.sh; ls docs/specs` | `[clean] docs/specs/scn-x`, `docs/specs` 에 INDEX.md 만 |
-| W10 | `scripts/schedule/run.sh install --dry-run \| grep -E 'Label\|tier-tick'` | `com.drakejin.workspace.tier` 와 `tier-tick` — 설치는 하지 않는다 |
+| W10 | `scripts/schedule/run.sh install --dry-run \| grep -E 'Label\|tier-tick\|META_REPO_ROOT'` | `com.drakejin.memory.<workspace>.tier`(workspace 는 `MEMORY_WORKSPACE` 또는 사본 디렉토리 이름), `tier-tick`, 이 사본(또는 `.env` 의 `META_REPO_ROOT`)을 가리키는 `META_REPO_ROOT` — 설치는 하지 않는다 |
 | W11 | `scripts/memory/run.sh help` 와 `scripts/memory/run.sh bench -h; echo "exit=$?"` | 명령 목록에 `search … [-project P] [-topic T] [-date YYYY-MM-DD] [-from D] [-to D]`, `filters`, `tier`, `archive`, `graph`, `bench … [-max-turns N] [-mcp-script P]` 등. `bench -h` 는 플래그 표(`-max-turns int … 질문당 최대 턴 (기본 15)`, `-mcp-script string …`)를 보이고 `exit=0` |
 | W12 | `rm -rf "$W"` | 사본 삭제 (실제 워크스페이스의 `main/` 은 건드리지 않았다) |
 

@@ -72,14 +72,14 @@ NFC 로 친 경로를 줘도 디스크의 철자 하나로 적재하고, 주제(
 ### 2.1 `make memory-init` — 인프라 올리기 (멱등)
 
 1. Docker 확인 → 2. Go 1.25 (`app/mise.toml`, mise 가 있으면 설치) → 3. 빌드(`.cache/bin/memory-mcp`, `.cache/bin/memory-daemon`)
-→ 4. `docker compose up -d` (OpenSearch 2.19.2 + Neo4j 5.26) → 5. 둘 다 응답할 때까지 최대 5분 대기
+→ 4. `docker compose up -d opensearch neo4j` (OpenSearch 2.19.2 + Neo4j 5.26 — `MEMORY_GRAPH_URI=off` 면 OpenSearch 만) → 5. 띄운 것이 응답할 때까지 최대 5분 대기
 → 6. `memory-daemon -once`: 인덱스 템플릿·매핑·ISM 정책 둘·스냅샷 repository·org alias 를 맞추고 사이클 1회(색인 + 판정 + 그래프).
 
 ```
 [memory-init] docker: ok
 [memory-init] tools: go1.25.6
 [memory-init] build: .cache/bin/memory-mcp, .cache/bin/memory-daemon
-[memory-init] stack: started
+[memory-init] stack: started (opensearch neo4j)
 [memory-init] opensearch: waiting http://localhost:9202/_cluster/health
 [memory-init] opensearch: ready
 [memory-init] neo4j: waiting http://localhost:7476
@@ -115,6 +115,7 @@ launchd 가 없는 머신은 nohup 백그라운드라(`[memory-daemon] backgroun
 ```
 
 데몬 로그(`.cache/daemon/daemon.log`)는 이렇게 시작한다. 터미널에서 포그라운드로 보려면 `scripts/memory-daemon/run.sh run` (launchd 가 부르는 진입점도 이것이다).
+`run` 은 뜰 때마다 빌드하는데, 이 레포의 Go 코드를 고치는 중이라 컴파일되지 않으면 `[memory] build: 실패 — 기존 .cache/bin/memory-daemon 로 계속합니다` 를 남기고 기존 바이너리로 뜬다 (바이너리가 없을 때만 실패한다).
 
 ```
 [daemon] LLM 백엔드: 로컬 claude CLI (2.1.283 (Claude Code))
@@ -176,6 +177,7 @@ launchd 가 없는 머신은 nohup 백그라운드라(`[memory-daemon] backgroun
 | 다른 meta-repo (예: 샘플) | **그 디렉토리에서**: `cd ~/memory-demo && claude mcp add memory-demo -s local -e META_REPO_ROOT=$HOME/memory-demo -e MEMORY_DEFAULT_TEAM=demo -- bash ~/Workspace/drakejin/workspace/scripts/mcp/run.sh` (`-s local` 은 명령을 친 디렉토리에 묶인다) |
 
 `scripts/mcp/run.sh` 는 빌드(바뀐 게 없으면 즉시)한 뒤 `memory-mcp serve` 를 stdio 로 띄운다. 빌드 출력은 stderr 로만 가서 MCP 프로토콜을 깨지 않는다.
+빌드가 실패하면(이 레포의 Go 코드를 고치는 중) 경고만 stderr 에 남기고 기존 `.cache/bin/memory-mcp` 로 뜬다 — 바이너리가 없을 때만 실패한다.
 여러 meta-repo 가 같은 OpenSearch·Neo4j 를 써도 된다 — 모든 질의·삭제·판정·그래프가 `workspace`(기본: 루트 디렉토리 이름)로 갈린다.
 단 **팀 이름은 meta-repo 하나에만** 쓸 수 있다. 인덱스 단위로 움직이는 tier·ISM·restore 가 남의 문서를 지우지 않게 하려는 규칙이라,
 다른 meta-repo 가 쓰는 팀으로 적재하면 `다른 workspace 가 쓰는 팀입니다` 로 거부된다. 스냅샷 repository 는 클러스터가 같이 쓰지만
@@ -540,7 +542,7 @@ knowledge 는 유사도로 판정하지 않으므로 선언이 없으면 구판�
 | 매일 | 데몬이 살아 있나 | `scripts/memory-daemon/run.sh status` (상주는 `make memory-daemon-start`) |
 | 질문이 쌓이면 | 판정 질문에 답하기 | `scripts/memory/run.sh questions` → `scripts/memory/run.sh answer <pairKey> <답>` |
 | 주 1회 | compaction | Claude 에서 `/compaction [team]` |
-| 매일 (자동) | 60일 지난 episodic → cold | `scripts/schedule/run.sh install` (6시간마다 깨워 하루 한 번 tier + 감사 보고) |
+| 매일 (자동) | 60일 지난 episodic → cold | `scripts/schedule/run.sh install` (6시간마다 깨워 하루 한 번 tier + 감사 보고. 잡은 meta-repo 마다 `com.drakejin.memory.<workspace>.tier` — 다른 meta-repo 는 `META_REPO_ROOT=… scripts/schedule/run.sh install`) |
 | 주 1회 (데몬이 자동) | 정합성 감사 | 데몬 로그 `[audit]`, 직접 `scripts/memory/run.sh audit [-apply]` |
 | 필요할 때 | 틀린 cold 문서 고치기 | `scripts/memory/run.sh archive ...` (6.4) |
 | 매핑을 바꿨을 때 | 청크 JSONL 에서 전체 재적재 | `scripts/memory/run.sh reload [-team T]` |
@@ -647,6 +649,7 @@ ISM 이 먼저 옮긴 경우다. "갖고 있다" 의 판단:
 
 `.env`(복사: `cp .env.example .env`) 또는 환경변수. 명령줄에서 준 값이 `.env` 보다 우선한다.
 `make memory-daemon-start` 로 띄운 데몬(launchd)은 start 때의 설정 중 `META_REPO_ROOT`·`OPENSEARCH_URL`·`OS_PORT`·`NEO4J_BOLT_PORT`·`NEO4J_HTTP_PORT`·`COLD_*`·`MEMORY_*`·`AWS_REGION`·`AWS_PROFILE`·`AWS_ENDPOINT_URL_S3`(`.env` 와 명령줄 값. 이름에 `PASSWORD`·`SECRET`·`TOKEN` 이 든 것은 빼고 — 잡이 `.env`·AWS 기본 체인에서 다시 읽는다)를 잡에 담아 돈다 — 이 값을 바꾸면 `make memory-daemon-stop && make memory-daemon-start`. 데몬이 쓰지 않는 `OS_DASH_PORT` 는 담지 않는다.
+tier 정기 실행(`scripts/schedule/run.sh install`)도 같은 규칙으로 install 때의 설정을 잡에 담는다 — 바꾸면 다시 install 한다.
 
 | 변수 | 기본 | 뜻 |
 | --- | --- | --- |
@@ -668,7 +671,7 @@ ISM 이 먼저 옮긴 경우다. "갖고 있다" 의 판단:
 | `MEMORY_DISTILL_ENABLED` | `false` | 증류 (본문이 LLM 으로 간다) |
 | `MEMORY_DISTILL_CONCURRENCY` | `2` | 증류 동시 실행 |
 | `MEMORY_CLAUDE_BIN` / `MEMORY_LLM_MODEL` / `MEMORY_LLM_TIMEOUT_MS` | `claude` / `opus` / `120000` | 판정·증류 LLM. 격리 실행(`--setting-sources ""`, 도구 없음, JSON 스키마), 실패하면 폴백 |
-| `MEMORY_GRAPH_URI` | `bolt://localhost:${NEO4J_BOLT_PORT}` | Neo4j. `off` 면 그래프를 끈다 |
+| `MEMORY_GRAPH_URI` | `bolt://localhost:${NEO4J_BOLT_PORT}` | Neo4j. `off` 면 그래프를 끈다 (`make memory-init` 도 Neo4j 를 띄우지 않는다) |
 | `MEMORY_GRAPH_USER` / `MEMORY_GRAPH_PASSWORD` / `MEMORY_GRAPH_DATABASE` | — / — / `neo4j` | 인증을 켠 Neo4j 일 때만 |
 | `COLD_SNAPSHOT_REPOSITORY` / `COLD_SNAPSHOT_TYPE` | `mem-cold` / `fs` | 스냅샷 repository |
 | `COLD_SNAPSHOT_FS_LOCATION` | `/usr/share/opensearch/snapshots` | fs repository 경로 (컨테이너 안 — `path.repo`) |

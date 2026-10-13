@@ -161,7 +161,8 @@ status() {
 
 run() {
     setup
-    memory_build "$ROOT_DIR"
+    # launchd 가 부르는 진입점이라 빌드가 실패해도 기존 바이너리로 뜬다 (memory_build_or_reuse)
+    memory_build_or_reuse "$ROOT_DIR" memory-daemon
     local claude_bin="${MEMORY_CLAUDE_BIN:-claude}"
     if command -v "$claude_bin" >/dev/null 2>&1; then
         echo "[daemon] LLM 백엔드: 로컬 claude CLI ($("$claude_bin" --version 2>/dev/null | head -1))"
