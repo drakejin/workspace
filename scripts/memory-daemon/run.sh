@@ -13,8 +13,6 @@ cd "$ROOT_DIR"
 source "${SCRIPT_DIR}/../memory-common.sh"
 
 WAIT_SECONDS=60
-# 예전 판의 잡 이름 (meta-repo 하나만 상주시킬 수 있었다). stop 이 함께 치운다
-LEGACY_PLIST="${HOME}/Library/LaunchAgents/com.drakejin.workspace.daemon.plist"
 
 # 대상 meta-repo(META_REPO_ROOT, 기본은 이 레포)에 맞춰 잡 이름·런타임 경로를 정한다 —
 # 여러 meta-repo 의 데몬이 서로의 launchd 잡·락을 건드리지 않게 workspace 이름을 잡 이름에 넣는다
@@ -49,25 +47,10 @@ unload_plist() {
     rm -f "$plist"
 }
 
-# 예전 판의 잡(meta-repo 하나만 상주시킬 수 있었다)은 이 레포의 데몬이었다 — 이 레포를 대상으로 할 때만 치운다
-retire_legacy() {
-    [[ "$ROOT_DIR" == "$META_REPO_ROOT" ]] || return 1
-    unload_plist "$LEGACY_PLIST"
-}
-
-# plist 를 임시 파일에 그려 검사한 뒤 제자리로 옮긴다 — 값은 XML 로 escape 하고, & 가 있을 수 있어 gsub 대신 글자 그대로 바꾼다
+# plist 를 임시 파일에 그려 검사한다 (memory_render_plist). 성공하면 start 가 제자리로 옮긴다
 render_plist() {
-    local tmp="$1"
-    LABEL="$LABEL" ROOT="$(printf '%s' "$ROOT_DIR" | memory_xml_escape)" LOGFILE="$(printf '%s' "$LOG" | memory_xml_escape)" \
-        ENVXML="$(memory_launchd_env_xml)" awk '
-            function put(line, key, val,   i) {
-                while ((i = index(line, key)) > 0) line = substr(line, 1, i - 1) val substr(line, i + length(key))
-                return line
-            }
-            { $0 = put($0, "__LABEL__", ENVIRON["LABEL"]); $0 = put($0, "__ROOT__", ENVIRON["ROOT"])
-              $0 = put($0, "__LOG__", ENVIRON["LOGFILE"]); $0 = put($0, "__ENV__", ENVIRON["ENVXML"]); print }
-        ' "${SCRIPT_DIR}/daemon.plist.template" > "$tmp"
-    plutil -lint "$tmp" >/dev/null
+    memory_render_plist "${SCRIPT_DIR}/daemon.plist.template" "$1" "$(memory_launchd_env_xml)" \
+        "LABEL=${LABEL}" "ROOT=${ROOT_DIR}" "LOG=${LOG}"
 }
 
 usage() {
@@ -117,7 +100,6 @@ start() {
             echo "[memory-daemon] plist 를 만들지 못했습니다 (plutil -lint 실패)" >&2
             return 1
         fi
-        retire_legacy || true
         old="$(installed_label)"
         [[ "$old" != "$LABEL" ]] && { unload_plist "${HOME}/Library/LaunchAgents/${old}.plist" || true; }
         launchctl unload "$PLIST" 2>/dev/null || true
@@ -144,7 +126,6 @@ stop() {
         label="$(installed_label)"
         unload_plist "${HOME}/Library/LaunchAgents/${label}.plist" && was_loaded=1
         [[ "$label" != "$LABEL" ]] && unload_plist "$PLIST" && was_loaded=1
-        retire_legacy && was_loaded=1
         rm -f "$LABEL_FILE"
     fi
     pid=$(daemon_pid)

@@ -27,20 +27,32 @@ label="com.drakejin.workspace.tier"
 plist="${HOME}/Library/LaunchAgents/${label}.plist"
 log="${ROOT_DIR}/.cache/schedule/tier.log"
 
+# plist 를 임시 파일에 그려 lint 한 뒤(memory_render_plist — 경로는 글자 그대로, XML escape) 보여 주거나 제자리로 옮긴다.
+# lint 에 실패하면 LaunchAgents 에 아무것도 두지 않는다
+install_job() {
+    local tmp_dir="${TMPDIR:-/tmp}"
+    # EXIT trap 이 지우므로 전역이다 (mv 로 옮긴 뒤면 지울 것이 없다)
+    tmp_plist="$(mktemp "${tmp_dir%/}/tier.plist.XXXXXX")"
+    trap 'rm -f "$tmp_plist"' EXIT
+    if ! memory_render_plist "${SCRIPT_DIR}/tier.plist.template" "$tmp_plist" "$(memory_launchd_path_xml)" \
+        "LABEL=${label}" "ROOT=${ROOT_DIR}"; then
+        echo "[schedule] tier: plist 를 만들지 못했습니다 (plutil -lint 실패)" >&2
+        exit 1
+    fi
+    if [[ "$dry_run" == "--dry-run" ]]; then
+        cat "$tmp_plist"
+        return 0
+    fi
+    mkdir -p "$(dirname "$plist")" "$(dirname "$log")"
+    launchctl unload "$plist" 2>/dev/null || true
+    mv "$tmp_plist" "$plist"
+    launchctl load "$plist"
+    echo "[schedule] tier: installed (${plist}) — 로그 ${log}"
+}
+
 case "$action" in
     install)
-        rendered="$(sed -e "s|__LABEL__|${label}|g" -e "s|__ROOT__|${ROOT_DIR}|g" -e "s|__PATH__|$(memory_job_path)|g" \
-            "${SCRIPT_DIR}/tier.plist.template")"
-        if [[ "$dry_run" == "--dry-run" ]]; then
-            printf '%s\n' "$rendered"
-            exit 0
-        fi
-        mkdir -p "$(dirname "$plist")" "$(dirname "$log")"
-        printf '%s\n' "$rendered" > "$plist"
-        plutil -lint "$plist" >/dev/null
-        launchctl unload "$plist" 2>/dev/null || true
-        launchctl load "$plist"
-        echo "[schedule] tier: installed (${plist}) — 로그 ${log}"
+        install_job
         ;;
     uninstall)
         launchctl unload "$plist" 2>/dev/null || true

@@ -19,7 +19,7 @@ echo "[init] remote: https://${GITHUB_HOST}/${ORG}"
 while IFS=$'\t' read -r repo_name docs_only; do
     [[ -z "$repo_name" ]] && continue
 
-    output=$("${SCRIPT_DIR}/clone-repo.sh" "$GITHUB_HOST" "$ORG" "$repo_name" "$REPOS_DIR" "$docs_only" 2>&1) && rc=0 || rc=$?
+    output=$("${SCRIPT_DIR}/_clone_repo.sh" "$GITHUB_HOST" "$ORG" "$repo_name" "$REPOS_DIR" "$docs_only" 2>&1) && rc=0 || rc=$?
     echo "$output"
 
     if [[ $rc -ne 0 ]]; then

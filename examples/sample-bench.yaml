@@ -1,4 +1,4 @@
-# make bench 질문 (examples/sample-workspace 용) — 같은 질문을 memory-mcp 가 있을 때(with)와 없을 때(without) claude 에 시켜 비교한다.
+# scripts/memory/run.sh bench -questions <이 파일> 의 질문 (examples/sample-workspace 용) — 같은 질문을 memory-mcp 가 있을 때(with)와 없을 때(without) claude 에 시켜 비교한다.
 # expect 의 문자열이 답에 모두 들어 있으면 정답으로 센다.
 # 질문 파일은 meta-repo 밖에 둔다 — 안에 있으면 에이전트가 Grep 으로 정답을 읽는다 (bench 가 거부한다).
 questions:

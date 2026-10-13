@@ -11,7 +11,7 @@
     </array>
     <key>WorkingDirectory</key><string>__ROOT__</string>
     <key>EnvironmentVariables</key>
-    <dict><key>PATH</key><string>__PATH__</string></dict>
+    <dict>__ENV__</dict>
     <!-- 6시간마다 깨우고, tier-tick 이 24시간 가드를 스스로 건다 (자주 깨워도 하루 한 번만 돈다) -->
     <key>StartInterval</key><integer>21600</integer>
     <key>RunAtLoad</key><true/>

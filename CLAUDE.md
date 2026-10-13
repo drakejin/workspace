@@ -11,7 +11,7 @@
 2. 결과의 `source_path` 를 Read 해서 원문을 근거로 일한다. 스니펫을 답으로 쓰지 않는다. 근거 없는 history 는 지어내지 않는다 — 모르면 모른다고 적는다.
 3. 검색 결과가 없을 때만 디렉토리를 훑는다. 이때도 전체를 읽지 말고 그 디렉토리의 `INDEX.md` 부터 읽는다.
 4. 문서로 정보를 만들 때는 **추론 없이** 쓴다. 출처(커밋, PR, 대화, 파일 경로)가 확인되는 것만 적는다.
-5. `main/{repo}` 작업은 항상 새 worktree 에서 한다: `scripts/run-issues/run.sh <issue> <repo>` → `main/{repo}/.worktrees/<issue>`. 끝나면 `scripts/done-issue/run.sh <issue> <repo>`.
+5. `main/{repo}` 작업은 항상 새 worktree 에서 한다: `scripts/run-issues/run.sh <issue> <repo>` → `main/{repo}/.worktrees/<issue>`. 끝나면 `scripts/done-issue/run.sh <issue> <repo>` — 커밋하지 않은 변경이 있으면 지우지 않고 잃게 될 파일을 보여 준다. 사용자가 버려도 된다고 할 때만 `--force`.
 6. 근거를 따라가야 하면 `related_docs(path)` 로 그 문서와 이어진 문서(개정 이력, 근거, 링크, 같은 entity)를 본다.
 7. 60일보다 오래된 맥락이 필요하면 `list_cold` 로 확인하고, `restore_cold` 전에 반드시 사용자에게 "cold 인덱스 X가 있는데 복원할까요"를 묻는다.
 8. `main/` 아래 파일은 이 레포에 커밋하지 않는다 (pre-commit hook 이 막는다).

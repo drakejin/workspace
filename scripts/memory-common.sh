@@ -95,21 +95,64 @@ memory_workspace_name() {
     echo "${ws:-workspace}"
 }
 
-# launchd 잡의 EnvironmentVariables <dict> 안쪽. start 때의 메모리 설정(.env 와 명령줄)을 잡에 박아 둔다 —
-# launchd 는 셸 환경을 넘기지 않는다. 비밀(AWS 키, 그래프 비밀번호)은 plist 에 쓰지 않는다: 잡이 .env·AWS 기본 체인에서 읽는다
-memory_launchd_env_xml() {
-    local name value
+# launchd 잡에 넣어도 되는 환경변수 이름인가 — 허용 목록 하나로 정한다. 메모리 설정(Go config 와 스크립트가 읽는 이름)만 넣고,
+# 이름에 숫자가 든 것(COLD_STORE_S3_BUCKET, AWS_ENDPOINT_URL_S3)도 받는다. NEO4J_* 는 스택 포트만 (Go 는 NEO4J_* 를 읽지 않는다).
+# 목록 안이라도 이름에 PASSWORD·SECRET·TOKEN 이 든 것(MEMORY_GRAPH_PASSWORD 등)은 비밀이라 빼고, 잡이 .env·AWS 기본 체인에서 다시 읽는다
+memory_launchd_env_allowed() {
+    local allowed='^(META_REPO_ROOT|OPENSEARCH_URL|OS_PORT|NEO4J_BOLT_PORT|NEO4J_HTTP_PORT|COLD_[A-Z0-9_]+|MEMORY_[A-Z0-9_]+|AWS_REGION|AWS_PROFILE|AWS_ENDPOINT_URL_S3)$'
+    local secret='PASSWORD|SECRET|TOKEN'
+    [[ "$1" =~ $allowed ]] && ! [[ "$1" =~ $secret ]]
+}
+
+# launchd 잡의 PATH 항목 (<key>PATH</key><string>…</string>)
+memory_launchd_path_xml() {
     printf '<key>PATH</key><string>%s</string>' "$(memory_job_path | memory_xml_escape)"
-    while IFS='=' read -r name value; do
-        case "$name" in
-            META_REPO_ROOT|OPENSEARCH_URL|OS_PORT|NEO4J_*|COLD_*|MEMORY_*|AWS_REGION|AWS_PROFILE|AWS_ENDPOINT_URL_S3) ;;
-            *) continue ;;
-        esac
-        [[ "$name" == "MEMORY_GRAPH_PASSWORD" ]] && continue
-        printf '<key>%s</key><string>%s</string>' "$name" "$(printf '%s' "$value" | memory_xml_escape)"
-    done < <(env | grep -E '^(META_REPO_ROOT|OPENSEARCH_URL|OS_PORT|NEO4J_[A-Z_]*|COLD_[A-Z_]*|MEMORY_[A-Z_]*|AWS_REGION|AWS_PROFILE|AWS_ENDPOINT_URL_S3)=' | sort)
+}
+
+# launchd 잡의 EnvironmentVariables <dict> 안쪽. start 때의 메모리 설정(.env 와 명령줄)을 잡에 박아 둔다 —
+# launchd 는 셸 환경을 넘기지 않는다. 넣는 이름은 memory_launchd_env_allowed 가 정한다
+memory_launchd_env_xml() {
+    local name
+    memory_launchd_path_xml
+    while IFS= read -r name; do
+        memory_launchd_env_allowed "$name" || continue
+        printf '<key>%s</key><string>%s</string>' "$name" "$(printf '%s' "${!name}" | memory_xml_escape)"
+    done < <(compgen -e | LC_ALL=C sort)
 }
 
 memory_xml_escape() {
     sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+
+# launchd plist 를 그린다: memory_render_plist <템플릿> <출력> <EnvironmentVariables 안쪽 XML> [KEY=값 ...]
+# 템플릿의 __ENV__ 는 셋째 인자(이미 XML)로, __KEY__ 는 값을 XML escape 해서 바꾼다. sed·gsub 는 값의 & \ | 를 특수 문자로
+# 읽으므로 글자 그대로 바꾸고, 바꾼 값은 다시 훑지 않는다. 채우지 않은 자리표시자가 남거나 plutil -lint 가 거부하면 실패한다 —
+# 부르는 쪽은 임시 파일에 그려 성공했을 때만 LaunchAgents 로 옮긴다
+memory_render_plist() {
+    local template="$1" out="$2" env_xml="$3" pair key keys=""
+    local -a vars=("PLIST_V_ENV=${env_xml}")
+    shift 3
+    for pair in "$@"; do
+        key="${pair%%=*}"
+        if [[ ! "$key" =~ ^[A-Z][A-Z0-9_]*$ || "$pair" != *=* ]]; then
+            echo "[memory] plist: 치환 인자는 KEY=값 이어야 합니다 (${pair})" >&2
+            return 1
+        fi
+        keys="${keys} ${key}"
+        vars+=("PLIST_V_${key}=$(printf '%s' "${pair#*=}" | memory_xml_escape)")
+    done
+    env "${vars[@]}" PLIST_KEYS="ENV${keys}" awk '
+        BEGIN { n = split(ENVIRON["PLIST_KEYS"], k, " "); for (i = 1; i <= n; i++) val[k[i]] = ENVIRON["PLIST_V_" k[i]] }
+        {
+            line = $0; rendered = ""
+            while (match(line, /__[A-Z][A-Z0-9_]*__/)) {
+                key = substr(line, RSTART + 2, RLENGTH - 4)
+                if (!(key in val)) { printf "[memory] plist: %s 의 __%s__ 를 채우지 않았습니다\n", FILENAME, key > "/dev/stderr"; exit 1 }
+                rendered = rendered substr(line, 1, RSTART - 1) val[key]
+                line = substr(line, RSTART + RLENGTH)
+            }
+            print rendered line
+        }
+    ' "$template" > "$out" || return 1
+    plutil -lint "$out" >/dev/null
 }
