@@ -74,6 +74,28 @@ join_lists() {
     printf '%s\n%s\n' "$1" "$2" | sed '/^$/d'
 }
 
+# 목록에 gitignored 줄('!! ')이 있으면 그 뜻을 머리에 붙인다
+ignored_note() {
+    grep -q '^!! ' <<< "$1" && echo " (!! 는 gitignored)"
+    return 0
+}
+
+# git 이 지우기를 거부해 아무것도 잃지 않았을 때 남은 것을 알린다. gitignored 파일('!!' 줄)은 git 이 변경으로 보지 않으므로
+# 커밋하지 않은 변경과 나눠 보여 준다
+report_kept() {
+    local kept_changes kept_ignored
+    kept_changes=$(grep -v '^!! ' <<< "$1" || true)
+    kept_ignored=$(grep '^!! ' <<< "$1" || true)
+    if [[ -n "$kept_changes" ]]; then
+        echo "[done-issue] ${REPO_NAME}: 커밋하지 않은 변경은 그대로 있습니다:" >&2
+        print_list "$kept_changes" >&2
+    fi
+    if [[ -n "$kept_ignored" ]]; then
+        echo "[done-issue] ${REPO_NAME}: gitignored 파일(!!)도 그대로 있습니다:" >&2
+        print_list "$kept_ignored" >&2
+    fi
+}
+
 # git worktree remove 가 실패했을 때 실제로 무엇이 남았는지 알린다: report_failure <wt_dir> <err> <등록 디렉토리> <지우기 전 목록>
 # git 은 검사(lock·worktree 아님·변경)를 모두 통과해야 지우기 시작하고, 지우다 실패해도 worktree 등록까지 지운다 —
 # 등록이 그대로고 목록의 파일도 그대로일 때만 아무것도 잃지 않았다고 말한다
@@ -84,20 +106,17 @@ report_failure() {
     lost=$(lines_not_in "$before" "$after")
     if [[ -z "$lost" && ( -z "$admin" || -d "$admin" ) ]]; then
         echo "[done-issue] ${REPO_NAME}: worktree '${wt_name}' 를 지우지 못해 남겨 둡니다 — ${err}" >&2
-        if [[ -n "$before" ]]; then
-            echo "[done-issue] ${REPO_NAME}: 커밋하지 않은 변경은 그대로 있습니다:" >&2
-            print_list "$before" >&2
-        fi
+        report_kept "$before"
         echo "[done-issue] ${REPO_NAME}: lock 이면 'git worktree unlock', 이미 없는 worktree 기록이면 'git -C ${REPO_DIR} worktree prune' 후 확인하세요" >&2
         return 0
     fi
     echo "[done-issue] ${REPO_NAME}: worktree '${wt_name}' 를 지우다가 실패했습니다 — ${err}" >&2
     if [[ -n "$after" ]]; then
-        echo "[done-issue] ${REPO_NAME}: 남아 있는 것:" >&2
+        echo "[done-issue] ${REPO_NAME}: 남아 있는 것$(ignored_note "$after"):" >&2
         print_list "$after" >&2
     fi
     if [[ -n "$lost" ]]; then
-        echo "[done-issue] ${REPO_NAME}: 다음은 이미 지워졌습니다:" >&2
+        echo "[done-issue] ${REPO_NAME}: 다음은 이미 지워졌습니다$(ignored_note "$lost"):" >&2
         print_list "$lost" >&2
     fi
     if [[ -n "$admin" && ! -d "$admin" ]]; then

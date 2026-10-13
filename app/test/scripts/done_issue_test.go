@@ -284,3 +284,59 @@ func TestDoneIssueForcePartialFailureListsOnlyWhatRemains(t *testing.T) {
 		t.Errorf("남은 m/b.txt 를 알려야 한다:\n%s", r.output())
 	}
 }
+
+// section 은 out 에서 header 줄 다음부터 다음 '[done-issue]' 줄 전까지다 (header 가 없으면 빈 문자열).
+func section(out, header string) string {
+	i := strings.Index(out, header)
+	if i < 0 {
+		return ""
+	}
+	rest := out[i+len(header):]
+	if j := strings.Index(rest, "[done-issue]"); j >= 0 {
+		rest = rest[:j]
+	}
+	return rest
+}
+
+// R4-ops-scripts-2: git 이 지우기를 거부해(lock) 아무것도 잃지 않았을 때, "커밋하지 않은 변경" 목록에 gitignored 파일('!!')을 섞지 않는다 —
+// gitignored 파일은 변경이 아니다. 따로, 무엇인지 밝혀 보여 준다.
+func TestDoneIssueLockRefusalSeparatesIgnoredFiles(t *testing.T) {
+	const changesHeader = "커밋하지 않은 변경은 그대로 있습니다:"
+	t.Run("--force: 변경과 gitignored 파일을 나눠 알린다", func(t *testing.T) {
+		ir := newIssueRepo(t)
+		ir.dirty()
+		ir.ignoreLocalFiles()
+		ir.git("worktree", "lock", ir.worktree)
+
+		r := ir.doneIssue("--force", "ISSUE-1", "repo")
+
+		if r.err == nil {
+			t.Fatalf("lock 건 worktree 인데 성공(exit 0)했다:\n%s", r.output())
+		}
+		changes := section(r.stderr, changesHeader)
+		if !strings.Contains(changes, "wip.txt") || strings.Contains(changes, "!! ") {
+			t.Errorf("커밋하지 않은 변경 목록에 wip.txt 만 있어야 한다 (gitignored '!!' 없이):\n%s", r.output())
+		}
+		ignored := section(r.stderr, "gitignored")
+		if !strings.Contains(ignored, ".env") || !strings.Contains(ignored, "build/") {
+			t.Errorf("gitignored 파일(.env, build/)을 따로 밝혀 보여 줘야 한다:\n%s", r.output())
+		}
+	})
+	t.Run("gitignored 파일만 있으면 변경이 있다고 하지 않는다", func(t *testing.T) {
+		ir := newIssueRepo(t)
+		ir.ignoreLocalFiles()
+		ir.git("worktree", "lock", ir.worktree)
+
+		r := ir.doneIssue("ISSUE-1", "repo")
+
+		if r.err == nil {
+			t.Fatalf("lock 건 worktree 인데 성공(exit 0)했다:\n%s", r.output())
+		}
+		if strings.Contains(r.stderr, changesHeader) {
+			t.Errorf("커밋하지 않은 변경이 없는데 그 머리를 찍었다:\n%s", r.output())
+		}
+		if !strings.Contains(section(r.stderr, "gitignored"), ".env") {
+			t.Errorf("남은 gitignored 파일을 알려야 한다:\n%s", r.output())
+		}
+	})
+}
