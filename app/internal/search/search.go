@@ -6,10 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"regexp"
 	"strings"
-	"time"
-	"unicode"
 
 	"github.com/drakejin/workspace/app/internal/document"
 	"github.com/drakejin/workspace/app/internal/model"
@@ -38,46 +35,6 @@ type Request struct {
 func HasFilter(r Request) bool {
 	return r.Date != "" || r.TimeRange.From != "" || r.TimeRange.To != "" || document.NormalizeProject(r.Project) != "" ||
 		document.NormalizeTopic(r.Topic) != "" || r.DocType != ""
-}
-
-var dayOnly = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
-
-func isDay(v string) bool {
-	if !dayOnly.MatchString(v) {
-		return false
-	}
-	_, err := time.Parse("2006-01-02", v)
-	return err == nil
-}
-
-// Validate 는 필터 값을 검사한다.
-func Validate(r Request) error {
-	if r.Date != "" && !isDay(r.Date) {
-		return fmt.Errorf("date 는 YYYY-MM-DD 여야 합니다: %q", r.Date)
-	}
-	for name, v := range map[string]string{"time_range.from": r.TimeRange.From, "time_range.to": r.TimeRange.To} {
-		if dayOnly.MatchString(v) && !isDay(v) {
-			return fmt.Errorf("%s 날짜가 잘못됐습니다: %q", name, v)
-		}
-	}
-	return validateNames(r)
-}
-
-// validateNames 는 프로젝트·주제 값을 검사한다. 색인이 받은 이름이면 무엇이든 되므로 제어 문자만 막되, 준 값이 정규화하면
-// 비는 경우(topic "!!!", project "  ")는 거부한다 — 조용히 필터를 빼면 결과 머리에는 걸러진 것처럼 보이면서 전체 문서가 나온다.
-func validateNames(r Request) error {
-	for name, v := range map[string]string{"project": r.Project, "topic": r.Topic} {
-		if strings.IndexFunc(v, unicode.IsControl) >= 0 {
-			return fmt.Errorf("%s 에 제어 문자가 있습니다: %q", name, v)
-		}
-	}
-	if r.Topic != "" && document.NormalizeTopic(r.Topic) == "" {
-		return fmt.Errorf("topic 에 글자·숫자가 없습니다: %q (%s 로 쓸 수 있는 주제를 확인하세요)", r.Topic, FiltersHint)
-	}
-	if r.Project != "" && document.NormalizeProject(r.Project) == "" {
-		return fmt.Errorf("project 가 공백뿐입니다: %q", r.Project)
-	}
-	return nil
 }
 
 // boundFilter 는 범위 경계 하나다. 날짜만 준 경계는 문서의 날(event_day)끼리 비교하고(그날 전체 포함),
@@ -119,24 +76,21 @@ func (h Hit) Day() string {
 	return model.Day(h.EventTime)
 }
 
-const (
-	defaultSize = 8
-	maxSize     = 50
-)
+const defaultSize = 8
+
+// MaxSize 는 결과 수의 상한이다. 더 큰 size 는 이 값으로 자른다.
+const MaxSize = 50
 
 // Result 는 검색 결과다. Total 은 필터로만 가져올 때 맞는 문서 전체 수다 (Hits 는 그중 최신 Size 건, 질의어 검색이면 0).
+// NoIndex 는 팀(org) alias 가 없다는 뜻이다 — 그 팀(org)에 색인된 문서가 아직 없거나 이름이 틀렸다 (alias 가 있는 0건과 구별한다).
 type Result struct {
-	Hits  []Hit
-	Total int
+	Hits    []Hit
+	Total   int
+	NoIndex bool
 }
 
-// FiltersHint 는 필터 값을 보는 방법이다. 안내문은 MCP 도구와 CLI 명령(scripts/memory/run.sh <command>)이 같이 보므로
-// 두 이름을 함께 적는다.
-const FiltersHint = "search_filters(CLI: filters)"
-
-// ErrEmptyQuery 는 질의어도 필터도 없다는 뜻이다. MCP 입력 이름과 CLI 플래그를 함께 적는다.
-var ErrEmptyQuery = errors.New("query 가 비어 있습니다 (질의어 없이 가져오려면 필터를 하나 이상 주세요 — " +
-	"MCP: date·time_range·project·topic·doc_type, CLI: -date·-from/-to·-project·-topic·-type)")
+// ErrEmptyQuery 는 질의어도 필터도 없다는 뜻이다. 필터의 MCP 입력 이름·CLI 플래그는 부르는 쪽(mcpserver)이 붙인다.
+var ErrEmptyQuery = errors.New("query 가 비어 있습니다 (질의어 없이 가져오려면 필터를 하나 이상 주세요)")
 
 // BuildQuery 는 BM25 multi_match + 필터 질의다.
 func BuildQuery(r Request) map[string]any {
@@ -144,8 +98,8 @@ func BuildQuery(r Request) map[string]any {
 	if size <= 0 {
 		size = defaultSize
 	}
-	if size > maxSize {
-		size = maxSize
+	if size > MaxSize {
+		size = MaxSize
 	}
 	filter := []any{}
 	if r.Workspace != "" {
@@ -161,7 +115,8 @@ func BuildQuery(r Request) map[string]any {
 		filter = append(filter, boundFilter("lte", r.TimeRange.To, r.TimeZone))
 	}
 	if project := document.NormalizeProject(r.Project); project != "" {
-		filter = append(filter, map[string]any{"term": map[string]any{"repo": project}})
+		// 프로젝트는 대소문자를 가리지 않는다 (Alpha-API 로 alpha-api 를) — 색인 값은 디렉토리·frontmatter 철자 그대로라 질의에서 맞춘다
+		filter = append(filter, map[string]any{"term": map[string]any{"repo": map[string]any{"value": project, "case_insensitive": true}}})
 	}
 	if topic := document.NormalizeTopic(r.Topic); topic != "" {
 		filter = append(filter, map[string]any{"term": map[string]any{"topic": topic}})
@@ -189,7 +144,21 @@ func BuildQuery(r Request) map[string]any {
 	return query
 }
 
-// Search 는 팀 hot alias 에 묻는다. alias 가 아직 없으면(문서 0건) 빈 결과.
+// aliasOf 는 요청이 묻는 alias 다 — org 가 있으면 org alias(그 org 의 모든 팀), 없으면 팀 hot alias.
+func aliasOf(r Request) (string, error) {
+	if r.Org != "" {
+		if !naming.ValidName(r.Org) {
+			return "", fmt.Errorf("org 이름이 잘못됐습니다: %q", r.Org)
+		}
+		return naming.OrgAlias(r.Org), nil
+	}
+	if err := naming.ValidateTeam(r.Team); err != nil {
+		return "", err
+	}
+	return naming.HotAlias(r.Team), nil
+}
+
+// Search 는 팀 hot alias 에 묻는다. alias 가 없으면(그 팀에 문서가 아직 없거나 이름이 틀렸다) NoIndex 인 빈 결과.
 func Search(ctx context.Context, c opensearch.Client, r Request) (Result, error) {
 	// 필터 값부터 본다 — 정규화하면 비는 필터만 준 요청이 "질의어가 비었다" 가 아니라 무엇이 잘못됐는지로 거부되게
 	if err := Validate(r); err != nil {
@@ -199,19 +168,14 @@ func Search(ctx context.Context, c opensearch.Client, r Request) (Result, error)
 	if listing && !HasFilter(r) {
 		return Result{}, ErrEmptyQuery
 	}
-	alias := naming.HotAlias(r.Team)
-	if r.Org != "" {
-		if !naming.ValidName(r.Org) {
-			return Result{}, fmt.Errorf("org 이름이 잘못됐습니다: %q", r.Org)
-		}
-		alias = naming.OrgAlias(r.Org)
-	} else if err := naming.ValidateTeam(r.Team); err != nil {
+	alias, err := aliasOf(r)
+	if err != nil {
 		return Result{}, err
 	}
 	var out opensearch.SearchResponse[model.Chunk]
-	err := c.Do(ctx, http.MethodPost, "/"+alias+"/_search", BuildQuery(r), nil, &out)
+	err = c.Do(ctx, http.MethodPost, "/"+alias+"/_search", BuildQuery(r), nil, &out)
 	if opensearch.IsStatus(err, http.StatusNotFound) {
-		return Result{}, nil
+		return Result{NoIndex: true}, nil
 	}
 	if err != nil {
 		return Result{}, err

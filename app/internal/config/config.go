@@ -101,15 +101,6 @@ func (c Config) HotWindow() time.Duration {
 	return time.Duration(c.HotDays) * 24 * time.Hour
 }
 
-// QueryTimeZone 은 at 시각의 Location 오프셋(+09:00)이다 — OpenSearch 질의의 time_zone 에 넘긴다.
-func (c Config) QueryTimeZone(at time.Time) string {
-	loc := c.Location
-	if loc == nil {
-		loc = time.UTC
-	}
-	return at.In(loc).Format("-07:00")
-}
-
 // FromEnv 는 프로세스 환경변수로 Load 한다.
 func FromEnv() (Config, error) { return Load(os.Getenv) }
 
@@ -179,9 +170,20 @@ func Load(getenv func(string) string) (Config, error) {
 	if strings.EqualFold(cfg.Graph.URI, "off") {
 		cfg.Graph.URI = ""
 	}
+	p.validate(cfg)
+	if len(p.errs) > 0 {
+		return Config{}, fmt.Errorf("memory 설정이 잘못됐습니다 — %w", errors.Join(p.errs...))
+	}
+	return cfg, nil
+}
 
+// validate 는 값끼리·형식을 보는 검사다. 잘못된 값은 p 에 모아 Load 가 한 번에 알린다.
+func (p *parser) validate(cfg Config) {
 	if u, err := url.Parse(cfg.OpenSearchURL); err != nil || u.Scheme == "" || u.Host == "" {
 		p.fail("OPENSEARCH_URL: URL 이 아닙니다: %q", cfg.OpenSearchURL)
+	}
+	if cfg.Graph.URI != "" && !validGraphURI(cfg.Graph.URI) {
+		p.fail("MEMORY_GRAPH_URI: bolt://, bolt+s://, bolt+ssc://, neo4j://, neo4j+s://, neo4j+ssc:// 주소 또는 off 여야 합니다: %q", cfg.Graph.URI)
 	}
 	if !naming.ValidName(cfg.Workspace) {
 		p.fail("MEMORY_WORKSPACE: 소문자/숫자/하이픈만: %q", cfg.Workspace)
@@ -198,10 +200,16 @@ func Load(getenv func(string) string) (Config, error) {
 	default:
 		p.fail("COLD_SNAPSHOT_TYPE: fs 또는 s3: %q", cfg.Snapshot.Type)
 	}
-	if len(p.errs) > 0 {
-		return Config{}, fmt.Errorf("memory 설정이 잘못됐습니다 — %w", errors.Join(p.errs...))
-	}
-	return cfg, nil
+}
+
+// graphSchemes 는 Neo4j 드라이버가 받는 URI scheme 이다.
+var graphSchemes = map[string]bool{"bolt": true, "bolt+s": true, "bolt+ssc": true, "neo4j": true, "neo4j+s": true, "neo4j+ssc": true}
+
+// validGraphURI 는 Neo4j 드라이버가 받는 주소인가다 — scheme 오타(http://, host:port)를 graph.New 까지 미루지 않고 다른 설정
+// 오류와 함께 알리려고 Load 에서 본다. 연결은 하지 않는다 (Neo4j 가 꺼져 있어도 색인·검색은 돈다).
+func validGraphURI(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && graphSchemes[u.Scheme] && u.Host != ""
 }
 
 var nonName = regexp.MustCompile(`[^a-z0-9-]+`)
@@ -238,11 +246,11 @@ func (p *parser) str(key, def string) string {
 	return def
 }
 
-// location 은 IANA 시간대 이름(Asia/Seoul)이다. 없으면 이 머신의 시간대.
+// location 은 IANA 시간대 이름(Asia/Seoul)이다. 없으면 이 머신의 시간대 (이름을 찾으면 이름이 붙은 Location).
 func (p *parser) location(key string) *time.Location {
 	v := p.str(key, "")
 	if v == "" {
-		return time.Local
+		return machineLocation(p.getenv, os.Readlink, time.Local)
 	}
 	loc, err := time.LoadLocation(v)
 	if err != nil {

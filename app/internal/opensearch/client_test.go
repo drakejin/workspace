@@ -295,3 +295,61 @@ func TestSnapshotRepositoryIsLeftAloneWhenUnchanged(t *testing.T) {
 		t.Errorf("없으면 만든다: %v %v", missing.calls, err)
 	}
 }
+
+// RUN-10 / API-3: 400 의 원인은 error.root_cause 에만 있다 — 최상위 reason 은 "all shards failed" 뿐이라, 그것만 보이면
+// 에이전트는 무엇을 고칠지 모른다. 원인(type: reason)을 붙이고, 최상위 type 은 그대로 둔다 (HasType 이 그것으로 판단한다).
+func TestErrorCarriesRootCause(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload string
+		typ     string
+		want    []string
+		notWant string
+	}{
+		{"search_phase 의 root_cause", `{"error":{"root_cause":[{"type":"parse_exception","reason":"failed to parse date field [yesterday]"}],` +
+			`"type":"search_phase_execution_exception","reason":"all shards failed"},"status":400}`,
+			"search_phase_execution_exception", []string{"all shards failed", "parse_exception", "failed to parse date field [yesterday]"}, ""},
+		{"root_cause 가 없으면 failed_shards", `{"error":{"type":"search_phase_execution_exception","reason":"all shards failed",` +
+			`"failed_shards":[{"shard":0,"reason":{"type":"too_complex_to_determinize_exception","reason":"Exceeded maximum recursion level"}}]}}`,
+			"search_phase_execution_exception", []string{"all shards failed", "Exceeded maximum recursion level"}, ""},
+		{"원인이 최상위와 같으면 한 번만", `{"error":{"root_cause":[{"type":"resource_already_exists_exception","reason":"exists"}],` +
+			`"type":"resource_already_exists_exception","reason":"exists"}}`,
+			"resource_already_exists_exception", []string{"exists"}, "exists — "},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := parseError("POST /mem-a-hot/_search", http.StatusBadRequest, []byte(c.payload))
+
+			if !HasType(err, c.typ) || !IsStatus(err, http.StatusBadRequest) {
+				t.Errorf("type/status = %v", err)
+			}
+			for _, want := range c.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("%q 가 없다: %v", want, err)
+				}
+			}
+			if c.notWant != "" && strings.Contains(err.Error(), c.notWant) {
+				t.Errorf("원인을 되풀이한다: %v", err)
+			}
+		})
+	}
+}
+
+// API-1: 읽기 준비는 클러스터에 닿는지만 본다 — GET / 하나, 아무것도 쓰지 않는다.
+func TestPingOnlyReads(t *testing.T) {
+	var methods []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.Method+" "+r.URL.Path)
+		_, _ = w.Write([]byte(`{"version":{"number":"2.19.2"}}`))
+	}))
+	defer srv.Close()
+
+	err := Ping(context.Background(), New(srv.URL))
+
+	if err != nil || !reflect.DeepEqual(methods, []string{"GET /"}) {
+		t.Errorf("Ping = %v, 요청 %v", err, methods)
+	}
+	if err := Ping(context.Background(), New("http://127.0.0.1:1")); err == nil || !strings.Contains(err.Error(), "연결 불가") {
+		t.Errorf("닿지 않으면 연결 불가: %v", err)
+	}
+}

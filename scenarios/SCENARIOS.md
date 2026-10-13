@@ -116,7 +116,11 @@ MCP 의 `search_memory` 와 같은 핸들러를 운영 CLI 로 확인한다. `S=
 | F31 | `$S search ScnStatusCodes; $S search ScnNfdTopic` | 각각 N 하나, `docs/feature/환불정책/메모.md` 하나 — 철자만 다른 ingest 가 문서를 하나 더 만들지 않는다 |
 | F32 | `scripts/memory-daemon/run.sh once && ls "$META_REPO_ROOT/.cache/cold-store/scn-filters/chunks/docs/knowledge/"` | `removed=0`, 목록에 `status-codes-v2.md.jsonl` 이 있다 (진짜 문서의 cold store 청크가 지워지지 않는다) |
 | F33 | `printf '\x00\x01BinaryProbe' > "$META_REPO_ROOT/docs/knowledge/probe-bin.md" && $S ingest docs/knowledge/probe-bin.md` | `0개 문서 적재`, `1개 건너뜀 — 데몬과 같은 게이트: …`, `- docs/knowledge/probe-bin.md (binary content)` |
-| F34 | `scenarios/teardown.sh filters` | 정리됨 |
+| F34 | `$S search -project Alpha-API` | F11 과 같다 (A, B, I, F, H, J) — 프로젝트는 대소문자를 가리지 않는다 |
+| F35 | `$S search -from yesterday; echo "exit=$?"` | 에러 `time_range.from 값은 날짜(YYYY-MM-DD), 시각(…), date math(now, now-30d, …) 중 하나여야 합니다: "yesterday"`, exit≠0 (원인 없는 `all shards failed` 가 아니다) |
+| F36 | `$S search -from $D2 -to $D5; echo "exit=$?"` | 에러 `time_range 가 뒤집혔습니다: from(<D2>)이 to(<D5>)보다 늦습니다`, exit≠0 |
+| F37 | `$S search -team scn-nosuch memory; $S search -org scn-nosuch memory` | `team=scn-nosuch 의 색인이 없습니다 — 팀 이름이 맞는지 확인하세요 …`, `org=scn-nosuch 의 색인이 없습니다 — org 이름이 맞는지 …` (0건 안내 `맞는 문서가 없습니다` 가 아니다) |
+| F38 | `scenarios/teardown.sh filters` | 정리됨 |
 
 ## G3. Claude Code + drakejin-workspace-memory-mcp — 이름 `claude` (최종 목표)
 

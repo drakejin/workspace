@@ -40,7 +40,9 @@ type command struct {
 	usage string
 	// offline 이면 OpenSearch 가 꺼져 있어도 돈다 (bootstrap 을 건너뛴다).
 	offline bool
-	run     func(ctx context.Context, c *CLI, args []string) (string, error)
+	// reads 면 읽기 명령이다 — 쓰기 쪽 bootstrap 대신 핸들러가 읽기 준비(ReadReady)만 본다 (cold 설정이 잘못돼도 검색은 된다).
+	reads bool
+	run   func(ctx context.Context, c *CLI, args []string) (string, error)
 }
 
 // commands 는 명령 표다. 이름 순으로 Usage 에 나온다.
@@ -50,13 +52,13 @@ var commands map[string]command
 func init() {
 	commands = map[string]command{
 		"bootstrap":         {usage: "템플릿·ISM 정책·스냅샷 repository·org alias 생성/갱신", run: runBootstrap},
-		"search":            {usage: "[-project P] [-topic T] [-date YYYY-MM-DD] [-from D] [-to D] [-type K] [-team T | -org O] [-size N] [-superseded] [query]   검색 (질의어 없이 필터만 주면 최신순으로 가져온다. 플래그는 질의어 앞에)", run: runSearch},
-		"filters":           {usage: "[-project P] [-topic T] [-date D] [-from D] [-to D] [-type K] [-team T | -org O] [-superseded]   검색 필터에 쓸 수 있는 값(프로젝트·주제·문서 종류·날짜)과 문서 수", run: runFilters},
+		"search":            {usage: "[-project P] [-topic T] [-date YYYY-MM-DD] [-from D] [-to D] [-type K] [-team T | -org O] [-size N] [-superseded] [query]   검색 (질의어 없이 필터만 주면 최신순으로 가져온다. 플래그는 질의어 앞에)", reads: true, run: runSearch},
+		"filters":           {usage: "[-project P] [-topic T] [-date D] [-from D] [-to D] [-type K] [-team T | -org O] [-superseded]   검색 필터에 쓸 수 있는 값(프로젝트·주제·문서 종류·날짜)과 문서 수", reads: true, run: runFilters},
 		"ingest":            {usage: "[-team T] <path>   파일/디렉토리 적재", run: runIngest},
 		"compaction-report": {usage: "[-team T]   주간 compaction 1·2단계 리포트 (markdown)", run: runCompactionReport},
 		"tier":              {usage: "[-team T] [-dry-run] [-keep-files]   hot 기간이 지난 인덱스 → 쓰기 막기 → 스냅샷 → 삭제 → hot 원본 제거 (-team 없으면 이 workspace 의 모든 팀)", run: runTier},
 		"tier-tick":         {usage: "[-every 24h]   스케줄러용: 마지막 tier 에서 every 가 지났으면 tier + audit (보고만)", run: runTierTick},
-		"list-cold":         {usage: "[-team T]   cold 인덱스 목록", run: runListCold},
+		"list-cold":         {usage: "[-team T]   cold 인덱스 목록", reads: true, run: runListCold},
 		"restore":           {usage: "<index>   cold 인덱스 복원", run: runRestore},
 		"reload":            {usage: "[-team T]   cold store 의 청크 JSONL 을 _bulk 로 재적재 (cold 로 간 달은 빼고)", run: runReload},
 		"status":            {usage: "데몬 상태 (scripts/memory-daemon/run.sh status)", offline: true, run: runStatus},
@@ -92,7 +94,7 @@ func (c *CLI) Run(ctx context.Context, name string, args []string) error {
 		return fmt.Errorf("%w: 모르는 명령 %q", ErrUsage, name)
 	}
 	// 도움말은 OpenSearch 없이도 보인다
-	if !cmd.offline && name != "bootstrap" && !asksHelp(args) {
+	if !cmd.offline && !cmd.reads && name != "bootstrap" && !asksHelp(args) {
 		if err := c.Handlers.Ready(ctx); err != nil {
 			return err
 		}

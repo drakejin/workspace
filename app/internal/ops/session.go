@@ -50,7 +50,7 @@ func runSessionContext(ctx context.Context, c *CLI, args []string) (string, erro
 	terms = append(terms, branchWords(ctx, dir)...)
 
 	var lines []string
-	if len(terms) > 0 && c.Handlers.Ready(ctx) == nil {
+	if len(terms) > 0 && c.Handlers.ReadReady(ctx) == nil {
 		res, err := search.Search(ctx, c.OS, search.Request{
 			Workspace: c.Config.Workspace, Team: c.Config.DefaultTeam, Project: repo, Query: strings.Join(terms, " "), Size: sessionHits,
 		})

@@ -29,26 +29,41 @@ func runBootstrap(ctx context.Context, c *CLI, args []string) (string, error) {
 	return "bootstrap 완료", nil
 }
 
+// filterFlags 는 search·filters 가 같이 받는 필터 플래그다 (MCP 의 search_filters 입력과 같은 값).
+type filterFlags struct {
+	team, org, project, topic, date, from, to, docType *string
+	superseded                                         *bool
+}
+
+// addFilterFlags 는 필터 플래그를 f 에 정의한다 — search 와 filters 가 같은 이름·설명을 쓰게 한 곳에서.
+func addFilterFlags(f flags, defaultTeam string) filterFlags {
+	return filterFlags{
+		team:       f.String("team", defaultTeam, "팀"),
+		org:        f.String("org", "", "org(실) — 그 org 의 모든 팀을 함께 본다 (-team 무시)"),
+		project:    f.String("project", "", "프로젝트(관리 대상 repository, 대소문자 무시)"),
+		topic:      f.String("topic", "", "주제"),
+		date:       f.String("date", "", "날짜 YYYY-MM-DD"),
+		from:       f.String("from", "", "범위 시작 (YYYY-MM-DD, 2026-10-01T09:00, now-30d)"),
+		to:         f.String("to", "", "범위 끝 (YYYY-MM-DD, 2026-10-01T18:00, now)"),
+		docType:    f.String("type", "", "문서 종류 (spec|adr|prd|plan|knowledge|guide|note)"),
+		superseded: f.Bool("superseded", false, "밀린·deprecate 된 문서도 본다"),
+	}
+}
+
+func (ff filterFlags) input() mcpserver.FiltersInput {
+	return mcpserver.FiltersInput{Team: *ff.team, Org: *ff.org, Project: *ff.project, Topic: *ff.topic, Date: *ff.date,
+		TimeRange: model.TimeRange{From: *ff.from, To: *ff.to}, DocType: *ff.docType, IncludeSuperseded: *ff.superseded}
+}
+
 func runSearch(ctx context.Context, c *CLI, args []string) (string, error) {
 	f := newFlags("search")
-	team := f.String("team", c.Config.DefaultTeam, "팀")
-	org := f.String("org", "", "org(실) — 그 org 의 모든 팀을 함께 검색 (-team 무시)")
-	project := f.String("project", "", "프로젝트(관리 대상 repository)")
-	topic := f.String("topic", "", "주제")
-	date := f.String("date", "", "날짜 YYYY-MM-DD")
-	from := f.String("from", "", "범위 시작 (YYYY-MM-DD 또는 now-30d)")
-	to := f.String("to", "", "범위 끝 (YYYY-MM-DD 또는 now)")
-	docType := f.String("type", "", "문서 종류 (spec|adr|prd|plan|knowledge|guide|note)")
+	filters := addFilterFlags(f, c.Config.DefaultTeam)
 	size := f.Int("size", 0, "결과 수 (1~50, 기본 8)")
-	superseded := f.Bool("superseded", false, "밀린·deprecate 된 문서도 본다")
 	rest, err := f.parse(args)
 	if err != nil {
 		return "", err
 	}
-	in := mcpserver.SearchInput{
-		Team: *team, Org: *org, Query: strings.Join(rest, " "), Project: *project, Topic: *topic, Date: *date,
-		TimeRange: model.TimeRange{From: *from, To: *to}, DocType: *docType, Size: *size, IncludeSuperseded: *superseded,
-	}
+	in := filters.input().WithQuery(strings.Join(rest, " "), *size)
 	if strings.TrimSpace(in.Query) == "" && in.Filters() == "" {
 		return "", f.usageErr()
 	}
@@ -57,15 +72,7 @@ func runSearch(ctx context.Context, c *CLI, args []string) (string, error) {
 
 func runFilters(ctx context.Context, c *CLI, args []string) (string, error) {
 	f := newFlags("filters")
-	team := f.String("team", c.Config.DefaultTeam, "팀")
-	org := f.String("org", "", "org(실) — 그 org 의 모든 팀을 함께 센다 (-team 무시)")
-	project := f.String("project", "", "프로젝트")
-	topic := f.String("topic", "", "주제")
-	date := f.String("date", "", "날짜 YYYY-MM-DD")
-	from := f.String("from", "", "범위 시작")
-	to := f.String("to", "", "범위 끝")
-	docType := f.String("type", "", "문서 종류 (spec|adr|prd|plan|knowledge|guide|note)")
-	superseded := f.Bool("superseded", false, "밀린·deprecate 된 문서도 센다")
+	filters := addFilterFlags(f, c.Config.DefaultTeam)
 	rest, err := f.parse(args)
 	if err != nil {
 		return "", err
@@ -73,8 +80,7 @@ func runFilters(ctx context.Context, c *CLI, args []string) (string, error) {
 	if len(rest) != 0 {
 		return "", f.usageErr()
 	}
-	return c.Handlers.Filters(ctx, mcpserver.FiltersInput{Team: *team, Org: *org, Project: *project, Topic: *topic, Date: *date,
-		TimeRange: model.TimeRange{From: *from, To: *to}, DocType: *docType, IncludeSuperseded: *superseded})
+	return c.Handlers.Filters(ctx, filters.input())
 }
 
 func runIngest(ctx context.Context, c *CLI, args []string) (string, error) {

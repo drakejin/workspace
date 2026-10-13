@@ -165,24 +165,60 @@ func (c *client) send(ctx context.Context, method, path string, body io.Reader, 
 	return nil
 }
 
+// Ping 은 클러스터에 닿는지 본다 (GET /). 읽기 도구의 준비다 — 아무것도 쓰지 않는다.
+func Ping(ctx context.Context, c Client) error {
+	return c.Do(ctx, http.MethodGet, "/", nil, nil, nil)
+}
+
+// cause 는 OpenSearch 에러 본문의 type·reason 한 쌍이다.
+type cause struct {
+	Type   string `json:"type"`
+	Reason string `json:"reason"`
+}
+
+// errorDetail 은 OpenSearch 에러 본문의 error 객체다. 검색 실패의 최상위 reason 은 "all shards failed" 뿐이고 원인은
+// root_cause(없으면 failed_shards[].reason)에 있다.
+type errorDetail struct {
+	cause
+	RootCause    []cause `json:"root_cause"`
+	FailedShards []struct {
+		Reason cause `json:"reason"`
+	} `json:"failed_shards"`
+}
+
+// rootCause 는 최상위와 다른 첫 원인이다 (없으면 빈 값).
+func (d errorDetail) rootCause() cause {
+	candidates := append([]cause(nil), d.RootCause...)
+	for _, f := range d.FailedShards {
+		candidates = append(candidates, f.Reason)
+	}
+	for _, c := range candidates {
+		if c.Reason != "" && c != d.cause {
+			return c
+		}
+	}
+	return cause{}
+}
+
 func parseError(op string, status int, payload []byte) error {
 	var body struct {
 		Error json.RawMessage `json:"error"`
 	}
 	e := &Error{Op: op, Status: status, Reason: strings.TrimSpace(string(payload))}
-	if json.Unmarshal(payload, &body) == nil && len(body.Error) > 0 {
-		var detail struct {
-			Type   string `json:"type"`
-			Reason string `json:"reason"`
+	if json.Unmarshal(payload, &body) != nil || len(body.Error) == 0 {
+		return e
+	}
+	var detail errorDetail
+	if json.Unmarshal(body.Error, &detail) == nil && detail.Type != "" {
+		e.Type, e.Reason = detail.Type, detail.Reason
+		if rc := detail.rootCause(); rc.Reason != "" {
+			e.Reason += " — " + rc.Type + ": " + rc.Reason
 		}
-		if json.Unmarshal(body.Error, &detail) == nil && detail.Type != "" {
-			e.Type, e.Reason = detail.Type, detail.Reason
-		} else {
-			var s string
-			if json.Unmarshal(body.Error, &s) == nil {
-				e.Reason = s
-			}
-		}
+		return e
+	}
+	var s string
+	if json.Unmarshal(body.Error, &s) == nil {
+		e.Reason = s
 	}
 	return e
 }

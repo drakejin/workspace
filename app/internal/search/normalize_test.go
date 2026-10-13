@@ -42,7 +42,7 @@ func TestFilterThatNormalizesToEmptyIsRejected(t *testing.T) {
 func TestFilterValuesAreNFC(t *testing.T) {
 	q := BuildQuery(Request{Query: "x", Topic: norm.NFD.String("환불정책"), Project: " " + norm.NFD.String("결제 서비스") + " "})
 	got, _ := json.Marshal(filterOf(t, q))
-	want := `[{"term":{"repo":"결제 서비스"}},{"term":{"topic":"환불정책"}}]`
+	want := `[{"term":{"repo":{"case_insensitive":true,"value":"결제 서비스"}}},{"term":{"topic":"환불정책"}}]`
 	if string(got) != norm.NFC.String(want) {
 		t.Errorf("filter\n got  %s\n want %s", got, want)
 	}
