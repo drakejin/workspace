@@ -146,7 +146,7 @@ claude mcp add drakejin-workspace-memory-mcp -s user -- bash ~/Workspace/drakeji
 
 | 도구 | 하는 일 |
 | --- | --- |
-| `search_memory(query?, project?, topic?, date?, time_range?, doc_type?, team?, org?, size?, include_superseded?)` | hot 영역 BM25 검색, 또는 필터로 가져오기. 필터: **프로젝트**(`project`), **주제**(`topic`), **날짜**(`date`, 그날 하루 — 문서의 날: frontmatter `date`, 없으면 커밋 시각을 `MEMORY_TIME_ZONE` 에서 본 날), **범위**(`time_range` from~to), 문서 종류. `query` 를 비우고 필터만 주면 맞는 문서를 최신순으로(문서 하나에 한 건, 머리 `문서 N건`) 가져온다. 질의어 검색은 청크 단위라(머리 `청크 N건 (BM25)`) 한 문서의 여러 절이 따로 나올 수 있다. 결과는 `source_path › header_path (종류, project=, topic=, 날짜)`, 청크, (증류가 켜져 있으면) 요약 |
+| `search_memory(query?, project?, topic?, date?, time_range?, doc_type?, team?, org?, size?, include_superseded?)` | hot 영역 BM25 검색, 또는 필터로 가져오기. 필터: **프로젝트**(`project`), **주제**(`topic`), **날짜**(`date`, 그날 하루 — 문서의 날: frontmatter `date`, 없으면 커밋 시각을 `MEMORY_TIME_ZONE` 에서 본 날), **범위**(`time_range` from~to), 문서 종류. `query` 를 비우고 필터만 주면 맞는 문서를 최신순으로(문서 하나에 한 건, 머리 `문서 N건`) 가져온다. 질의어 검색은 청크 단위라 한 문서의 여러 절이 따로 나올 수 있다(머리 `청크 N건 · 문서 M건 (BM25)` — 맞은 청크 수와 그 청크들의 문서 수). 결과는 `source_path › header_path (종류, project=, topic=, 날짜)`, 청크, (증류가 켜져 있으면) 요약 |
 | `search_filters(project?, topic?, date?, time_range?, doc_type?, …)` | 필터에 쓸 수 있는 값과 문서 수 — 프로젝트·주제·문서 종류·날짜 범위·날짜별 수 |
 | `related_docs(path, depth?)` | knowledge graph 에서 이어진 문서 — supersedes·derived_from·relates·링크·같은 entity·같은 repo |
 | `docs_by_entity(entity)` | 증류가 뽑은 entity(`service:order-api` 등)를 다루는 문서 |
@@ -188,7 +188,7 @@ frontmatter(`team`, `repo`(또는 `project`), `topic`, `doc_type`, `date`, `supe
 | 언제 | 할 일 | 명령 |
 | --- | --- | --- |
 | 아무 때나 | 검색해 보기 | `scripts/memory/run.sh search "PaymentRetryPolicy 재시도"` (`-team` / `-org` 는 질의어 앞에) |
-| repo 최신화 | 기본 브랜치(origin/HEAD)에 있는 repo 만 pull + INDEX.md 에 새 repo 행 | `make sync` |
+| repo 최신화 | 기본 브랜치(origin/HEAD)나 main/master 에 있는 repo 만 pull + INDEX.md 에 새 repo 행 | `make sync` |
 | 이슈 작업 | worktree 만들기 / 정리 | `scripts/run-issues/run.sh ISSUE-1 books-guitar` → `main/books-guitar/.worktrees/ISSUE-1` / `scripts/done-issue/run.sh ISSUE-1 books-guitar` (커밋하지 않은 변경이 있으면 남긴다 — 버리려면 `--force`) |
 | 질문이 쌓이면 | 판정이 사람에게 넘긴 질문 | `scripts/memory/run.sh questions` → `scripts/memory/run.sh answer <pairKey> latest\|old\|keep` |
 | 주 1회 | compaction — 60일 지난 사실을 knowledge 로 다시 쓰고 원문은 cold 로 | Claude 에서 `/compaction [team]` ([절차](./.claude/commands/compaction.md). 리포트 `scripts/memory/run.sh compaction-report -team T`, 이동 `scripts/memory/run.sh tier -team T` — 먼저 `-dry-run`) |
@@ -320,7 +320,7 @@ MATCH p = (:Doc {workspace: 'workspace'})-[:SUPERSEDES*]->(:Doc) RETURN p;
 MATCH (a:Doc {workspace: 'workspace'})-[r:DERIVED_FROM]->(b:Doc) RETURN a.path, r.why, b.path;
 
 // 깨진 링크 후보 — 링크 대상이 hot 에 없다 (cold 로 간 문서도 나온다. 디스크에 있는 색인 범위 밖 가이드는 out-of-scope 라 빠진다
-// — 확정은 scripts/memory/run.sh audit 의 broken-link: 디스크에도 hot 에도 cold 에도 없는 대상)
+// — 확정은 scripts/memory/run.sh audit 의 broken-link: 디스크에도 hot 에도 cold 에도 없거나 철자(대소문자)만 다른 대상)
 MATCH (s:Doc {workspace: 'workspace'})-[r]->(d:Doc {status: 'unindexed'}) RETURN s.path, type(r), d.path;
 
 // entity 별 문서 (증류를 켰을 때)
@@ -363,7 +363,7 @@ cat .cache/daemon/status.json | jq .lastCycle         # 마지막 사이클
 | 명령어 | 설명 |
 | --- | --- |
 | `make init` | `workspace.seed.json` 의 repo 를 `main/` 에 clone (`docsOnly: true` 면 `docs/` 만) + pre-commit hook + `make sync`. 멱등 |
-| `make sync` | 기본 브랜치(origin/HEAD)에 있는 repo 만 pull (다른 브랜치에서 작업 중이면 건너뜀), `INDEX.md` 에 없는 repo 행 추가 (로컬 claude, 읽기 도구만) |
+| `make sync` | 기본 브랜치(origin/HEAD)나 main/master 에 있는 repo 만 pull (다른 브랜치에서 작업 중이면 건너뜀), `INDEX.md` 에 없는 repo 행 추가 (로컬 claude, 읽기 도구만) |
 | **`make memory-init`** | 메모리 층 올리기 — 도구·빌드·OpenSearch·Neo4j·템플릿·ISM·스냅샷 repository·최초 색인 (멱등) |
 | **`make memory-daemon-start`** | reconcile 데몬(색인·판정·증류·그래프·주간 감사) 상주 — macOS 는 launchd, 없으면 nohup. 이미 돌고 있으면 그대로 둔다 |
 | **`make memory-daemon-stop`** | 데몬 상주 해제 — launchd 에서 내리고 SIGTERM, 최대 60초 기다린다 |
@@ -471,7 +471,8 @@ cat .cache/daemon/status.json | jq .lastCycle         # 마지막 사이클
 
 repo 를 추가하면 `make init` 을 다시 실행한다 — 이미 있는 repo 는 건너뛰고, 데몬이 다음 사이클에 `main/{repo}/docs/` 를 색인한다.
 `docsOnly: true` 는 sparse checkout 으로 `docs/` 만 받는다 (코드가 큰 repo 의 문서만 메모리에 넣을 때).
-브랜치는 적지 않는다 — `make sync` 는 repo 마다 원격의 기본 브랜치(clone 이 정한 `origin/HEAD`, `run-issues` 가 worktree 를 따는 기준과 같다)에 있을 때만 pull 한다.
+브랜치는 적지 않는다 — `make sync` 는 repo 마다 원격의 기본 브랜치(clone 이 정한 `origin/HEAD`, `run-issues` 가 worktree 를 따는 기준과 같다)나 main/master 에 있을 때만 pull 한다.
+`origin/HEAD` 는 fetch 가 고치지 않아 원격이 기본 브랜치 이름을 바꾸면 낡는다 — 그 repo 에서 `git remote set-head origin -a` 로 맞춘다 (main/master 로 바꾼 경우는 그대로 받는다).
 
 ### 7.2 .env
 

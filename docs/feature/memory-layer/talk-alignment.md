@@ -79,7 +79,7 @@ date: 2026-10-13
 
 #### 데모 4단계 측정
 
-`examples/sample-workspace` 사본(샘플 14 문서, 증류 켬)에서 `scripts/memory/run.sh bench -questions examples/sample-bench.yaml -model haiku -runs 2` (2026-10-13).
+`examples/sample-workspace` 사본(측정 당시 샘플 14 문서, 증류 켬)에서 `scripts/memory/run.sh bench -questions examples/sample-bench.yaml -model haiku -runs 2` (2026-10-13).
 두 조건 모두 내장 도구는 Read·Glob·Grep 뿐이고 같은 규칙(샘플의 CLAUDE.md)을 받는다 — 차이는 memory MCP 유무뿐이다.
 
 | 조건 | 정답률 | 도구 호출 | 턴 | 시간 | 입력 토큰 | 비용 |
@@ -158,4 +158,4 @@ date: 2026-10-13
 | 2026-10-13 | Go 를 `app/` 한 모듈로, 생성물은 `.cache/`, 설정은 seed 하나. Neo4j knowledge graph, audit, archive, org alias, SessionStart 훅, bench, launchd. 실제 ISM·S3(LocalStack)·실제 claude 판정·증류 검증 | 발표 약 97%, drakejin 회사 약 95% (질문·지식 PR 은 원장으로 대체) |
 | 2026-10-13 | 루트 Makefile 을 다섯 개(init·sync·memory-init·memory-daemon-start/stop)로 줄이고 Go 개발 타겟은 app/Makefile, 나머지는 scripts 로 | 근접도 변화 없음 |
 | 2026-10-13 | MCP 서버 `drakejin-workspace-memory-mcp`, 검색 필터(날짜·범위·주제·프로젝트) + 필터만으로 가져오기 + `search_filters`, 판정 이웃은 같은 프로젝트 안, 시나리오 테스트(scenarios/) | 발표 §12 도구 확장 |
-| 2026-10-13 | 감사가 색인 범위 밖 가이드(scenarios/·.claude/·examples/)로 가는 링크를 깨진 링크로 보지 않는다(그래프는 `out-of-scope`). 이 문서를 `doc_type: guide`(노화 없음)로 — README 에서 닿는 설계 배경이 60일 뒤 cold 로 가지 않게. 도구 수·샘플 문서 수 정정 | 근접도 변화 없음 |
+| 2026-10-13 | 감사가 색인 범위 밖 가이드(scenarios/·.claude/·examples/)로 가는 링크를 깨진 링크로 보지 않는다(그래프는 `out-of-scope`). 이 문서를 `doc_type: guide`(노화 없음)로 — README 에서 닿는 설계 배경이 60일 뒤 cold 로 가지 않게. 철자(대소문자)만 다른 링크는 깨진 링크로 알린다. 질의어 검색 머리는 `청크 N건 · 문서 M건`. 도구 수·샘플 문서 수 정정 | 근접도 변화 없음 |

@@ -31,7 +31,7 @@ const (
 	Unindexed       Kind = "unindexed"        // 파일이 있는데 색인에 없고 cold 소유도 아니다 (고칠 수 있음: 색인)
 	StaleContent    Kind = "stale-content"    // 색인 내용과 파일 내용(sha)이 다르다 (고칠 수 있음: 재색인)
 	OrphanChunks    Kind = "orphan-chunks"    // cold store 청크 JSONL 의 파일도, cold 보관도 없다 (고칠 수 있음: JSONL 삭제)
-	BrokenLink      Kind = "broken-link"      // 링크 대상이 디스크에도(색인 범위 밖 포함) hot 에도 cold 에도 없다
+	BrokenLink      Kind = "broken-link"      // 링크 대상이 디스크에도(색인 범위 밖 포함) hot 에도 cold 에도 없다, 또는 철자만 다르다
 	UnsourcedFact   Kind = "unsourced-fact"   // knowledge 에 근거(derived_from 또는 ## 출처)가 없다
 	StaleQuestion   Kind = "stale-question"   // 답을 오래 기다리는 판정 질문
 	CorruptedLedger Kind = "corrupted-ledger" // 원장에 읽을 수 없는 줄이 있다
@@ -318,7 +318,7 @@ func (r *runner) links(ctx context.Context) error {
 	return nil
 }
 
-// checkLink 는 rel 의 링크 하나가 살아 있는지 본다: hot(스캔한 파일) → 디스크 → cold store 순서.
+// checkLink 는 rel 의 링크 하나가 살아 있는지 본다: hot(스캔한 파일) → 디스크(그 철자 그대로) → cold store 순서.
 func (r *runner) checkLink(ctx context.Context, rel, team string, l model.Link) error {
 	if _, ok := r.files[l.To]; ok {
 		return nil
@@ -331,6 +331,12 @@ func (r *runner) checkLink(ctx context.Context, rel, team string, l model.Link) 
 	if ingest.ExistsAsSpelled(r.Config.MetaRepoRoot, l.To) {
 		return nil // 디스크에 있다 — 색인 범위 밖(scenarios/·.claude/·examples/)이거나 게이트에 걸린 파일이어도 링크는 산다
 	}
+	if ingest.LiveUnderOtherSpelling(r.Config.MetaRepoRoot, l.To) {
+		// 철자(대소문자)만 다른 파일이 디스크에 있다 — GitHub 에서 깨진다. cold store 는 보지 않는다: APFS 위의 로컬
+		// cold store 는 그 hot 문서의 raw 사본을 이 철자로도 열어서 cold 로 간 문서처럼 보인다
+		r.add(BrokenLink, rel, r.wrongCaseDetail(l), false)
+		return nil
+	}
 	_, ok, err := r.Cold.Get(ctx, cold.RawKey(team, l.To))
 	if err != nil {
 		return fmt.Errorf("audit cold store: %w", err)
@@ -339,6 +345,15 @@ func (r *runner) checkLink(ctx context.Context, rel, team string, l model.Link) 
 		r.add(BrokenLink, rel, fmt.Sprintf("%s → %s 가 디스크에도 hot 에도 cold 에도 없다", l.Type, l.To), false)
 	}
 	return nil // ok 면 cold 로 간 문서를 가리킨다 — 정상
+}
+
+// wrongCaseDetail 은 철자만 다른 링크의 설명이다 — 디스크의 철자를 알려 준다.
+func (r *runner) wrongCaseDetail(l model.Link) string {
+	_, onDisk, err := ingest.ResolveOnDisk(r.Config.MetaRepoRoot, l.To)
+	if err != nil {
+		return fmt.Sprintf("%s → %s 는 디스크의 철자와 다르다 (GitHub 에서 깨진다)", l.Type, l.To)
+	}
+	return fmt.Sprintf("%s → %s 는 디스크의 철자와 다르다 — 파일은 %s 로 있다 (GitHub 에서 깨진다)", l.Type, l.To, onDisk)
 }
 
 func (r *runner) questions(_ context.Context) error {

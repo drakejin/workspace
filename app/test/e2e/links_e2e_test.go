@@ -131,3 +131,27 @@ func TestAuditFindsNoBrokenLinksInRepoDocs(t *testing.T) {
 		t.Errorf("레포 문서의 broken-link:\n%s", strings.Join(got, "\n"))
 	}
 }
+
+// TestAuditReportsWrongCaseLinkToAHotDoc 는 철자(대소문자)만 다른 링크를 broken-link 로 알리는지 본다 — GitHub 에서 깨진다.
+// 대소문자를 구분하지 않는 디스크(macOS APFS 기본)에서는 적재가 남긴 hot 문서의 raw 사본이 로컬 cold store 에서 그 철자로도
+// 열려, 예전 감사는 cold 로 간 문서로 보고 넘어갔다. 대소문자를 구분하는 디스크에서는 cold 조회가 실패해 원래 보고됐다.
+func TestAuditReportsWrongCaseLinkToAHotDoc(t *testing.T) {
+	cfg := newConfig(t, nil)
+	m := newMCP(t, cfg)
+	ctx := context.Background()
+	root := cfg.MetaRepoRoot
+	write(t, root, "docs/knowledge/status-codes-v2.md", "# 상태 코드\n\n## 출처\n- 운영 회의\n")
+	write(t, root, "docs/feature/INDEX.md", "# feature\n[상태 코드](../knowledge/Status-Codes-V2.md) · [정상](../knowledge/status-codes-v2.md)\n")
+	if _, err := m.indexer.IngestPath(ctx, "docs", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := audit.Run(ctx, audit.Deps{OS: m.os, Config: cfg, Cold: m.store, Indexer: m.indexer, Now: time.Now()}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := brokenLinks(rep)
+	if len(got) != 1 || !strings.Contains(got[0], "docs/feature/INDEX.md: LINKS_TO → docs/knowledge/Status-Codes-V2.md") {
+		t.Errorf("철자만 다른 링크 하나가 broken-link 다: %v", got)
+	}
+}

@@ -106,3 +106,28 @@ func TestSyncStillPullsMain(t *testing.T) {
 		t.Errorf("app HEAD = %s, want %s", got, want)
 	}
 }
+
+// origin/HEAD 는 clone 때 정해지고 fetch 가 고치지 않는다 — 원격이 기본 브랜치 이름을 master 에서 main 으로 바꾼 뒤 main 으로
+// 옮긴 repo 는 origin/HEAD 가 아직 master 다. 예전 규칙(main/master)에 있는 repo 는 그래도 pull 한다.
+func TestSyncPullsMainWhenOriginHeadIsStale(t *testing.T) {
+	w := newSyncWorkspace(t, "master")
+	repo := w.clone("app")
+	w.git(w.origin, "branch", "-m", "master", "main")
+	w.git(w.origin, "symbolic-ref", "HEAD", "refs/heads/main")
+	w.git(w.src, "branch", "-m", "master", "main")
+	w.git(repo, "fetch", "-q", "origin")
+	w.git(repo, "checkout", "-q", "-b", "main", "origin/main")
+	if head := w.git(repo, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); head != "origin/master" {
+		t.Fatalf("전제: origin/HEAD = %s (낡은 origin/master 여야 한다)", head)
+	}
+	want := w.push("main", "v2\n")
+
+	r := w.pull()
+
+	if r.err != nil || !strings.Contains(r.stdout, "[sync] app: pulled 'main'") {
+		t.Fatalf("_pull_repos.sh: %v\n%s", r.err, r.output())
+	}
+	if got := w.git(repo, "rev-parse", "HEAD"); got != want {
+		t.Errorf("app HEAD = %s, want %s", got, want)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -114,25 +115,13 @@ func toolCount(t *testing.T) int {
 	return len(res.Tools)
 }
 
-// sampleDocCount 는 샘플 meta-repo 의 마크다운 문서 수다.
-func sampleDocCount(t *testing.T) int {
-	t.Helper()
-	n := 0
-	err := filepath.WalkDir(filepath.Join(repoRoot(t), "examples", "sample-workspace"), func(p string, d fs.DirEntry, err error) error {
-		if err == nil && !d.IsDir() && filepath.Ext(p) == ".md" {
-			n++
-		}
-		return err
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return n
-}
+var sampleDocs = regexp.MustCompile(`측정 당시 샘플 (\d+) 문서`)
 
-var sampleDocs = regexp.MustCompile(`샘플 (\d+) 문서`)
+// benchSampleDocs 는 2026-10-13 벤치를 잰 커밋의 examples/sample-workspace 마크다운 수다 (git ls-tree 로 확인).
+// 측정 기록이라 샘플이 늘어도 바꾸지 않는다 — 지금 샘플 수와 비교하면 문서를 더할 때마다 옛 측정을 고쳐 쓰게 된다.
+const benchSampleDocs = 14
 
-// DOC-8 · DOC-9: 설계 배경 문서의 도구 수·샘플 문서 수가 레포와 같다.
+// DOC-8 · DOC-9: 설계 배경 문서의 도구 수는 레포와 같고, 측정 근거의 샘플 문서 수는 잰 때의 수다.
 func TestTalkAlignmentCountsMatchTheRepo(t *testing.T) {
 	talk := readDoc(t, "docs/feature/memory-layer/talk-alignment.md")
 	tools := toolCount(t)
@@ -146,14 +135,13 @@ func TestTalkAlignmentCountsMatchTheRepo(t *testing.T) {
 	if want := fmt.Sprintf("MCP 도구 %d개", tools); !strings.Contains(readDoc(t, "GUIDE.md"), want) {
 		t.Errorf("DOC-8: GUIDE §10 에 %q 가 없다", want)
 	}
-	samples := sampleDocCount(t)
 	matches := sampleDocs.FindAllStringSubmatch(talk, -1)
 	if len(matches) == 0 || strings.Contains(talk, "15 문서") {
-		t.Errorf("DOC-9: 측정 근거가 샘플 문서 수(%d)를 적지 않거나 옛 수(15 문서)가 남았다", samples)
+		t.Errorf("DOC-9: 측정 근거가 그때의 샘플 문서 수(측정 당시 샘플 %d 문서)를 적지 않거나 옛 수(15 문서)가 남았다", benchSampleDocs)
 	}
 	for _, m := range matches {
-		if m[1] != fmt.Sprint(samples) {
-			t.Errorf("DOC-9: %q — 샘플은 %d 문서다", m[0], samples)
+		if m[1] != fmt.Sprint(benchSampleDocs) {
+			t.Errorf("DOC-9: %q — 잰 때의 샘플은 %d 문서다", m[0], benchSampleDocs)
 		}
 	}
 }
@@ -253,17 +241,43 @@ func TestAuditKindsAreDocumented(t *testing.T) {
 	}
 }
 
-var bm25Header = regexp.MustCompile(`(\S+) \d+건 \(BM25\)`)
+var (
+	// 단어는 백틱(인라인 코드)에서 끊는다
+	bm25Quote  = regexp.MustCompile("(?:[^\\s\x60]+ (?:\\d+|[NM])건 · )?[^\\s\x60]+ (?:\\d+|[NM])건 \\(BM25\\)")
+	bm25Header = regexp.MustCompile(`^청크 (\d+|N)건 · 문서 (\d+|M)건 \(BM25\)$`)
+)
 
-// DOC-16 · API-7: 문서에 옮긴 질의어 검색 머리는 청크 수라고 밝힌다 ("청크 N건 (BM25)").
+// DOC-16 · API-7: 문서에 옮긴 질의어 검색 머리(일반형 포함)는 청크 수와 문서 수를 함께 밝힌다 ("청크 N건 · 문서 M건 (BM25)", N ≥ M).
 func TestQuotedBM25HeadersCountChunks(t *testing.T) {
+	quoted := 0
 	for _, f := range []string{"README.md", "GUIDE.md", "scenarios/SCENARIOS.md"} {
-		for _, m := range bm25Header.FindAllStringSubmatch(readDoc(t, f), -1) {
-			if m[1] != "청크" {
-				t.Errorf("%s: %q — 질의어 검색의 수는 청크 수다 (\"청크 N건 (BM25)\")", f, m[0])
+		for _, q := range bm25Quote.FindAllString(readDoc(t, f), -1) {
+			quoted++
+			m := bm25Header.FindStringSubmatch(q)
+			if m == nil {
+				t.Errorf("%s: %q — 질의어 검색 머리는 \"청크 N건 · 문서 M건 (BM25)\" 다", f, q)
+				continue
+			}
+			if m[1] == "N" || m[2] == "M" {
+				continue // 일반형("청크 N건 · 문서 M건") — 수는 없다
+			}
+			if chunks, docs := atoi(t, m[1]), atoi(t, m[2]); chunks < docs {
+				t.Errorf("%s: %q — 청크가 문서보다 적을 수 없다", f, q)
 			}
 		}
 	}
+	if quoted == 0 {
+		t.Error("README·GUIDE·SCENARIOS 에 옮긴 질의어 검색 머리가 없다")
+	}
+}
+
+func atoi(t *testing.T, s string) int {
+	t.Helper()
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 var (
@@ -331,7 +345,12 @@ func TestGuideDaemonEnvSentenceMatchesAllowlist(t *testing.T) {
 			t.Errorf("GUIDE §8 데몬 문장에 %s 가 없다: %q", name, line)
 		}
 	}
-	if strings.Contains(line, "`OS_DASH_PORT`") && !strings.Contains(line, "담지 않는다") {
+	carried, dash, hasDash := strings.Cut(line, "`OS_DASH_PORT`")
+	if hasDash && !strings.Contains(dash, "담지 않는다") {
 		t.Errorf("GUIDE §8: OS_DASH_PORT 는 잡에 담지 않는다: %q", line)
+	}
+	// 재시작 안내는 잡에 담는 값에 붙는다 — 담지 않는 OS_DASH_PORT 절 뒤에 오면 "OS_DASH_PORT 를 바꾸면 재시작" 으로 읽힌다
+	if !strings.Contains(carried, "make memory-daemon-stop && make memory-daemon-start") || strings.Contains(dash, "바꾸면") {
+		t.Errorf("GUIDE §8: 재시작 안내가 잡에 담는 값 바로 뒤에 와야 한다: %q", line)
 	}
 }

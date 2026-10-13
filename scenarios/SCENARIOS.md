@@ -99,8 +99,8 @@ MCP 의 `search_memory` 와 같은 핸들러를 운영 CLI 로 확인한다. `S=
 | F14 | `$S search -project alpha-api -topic payments -from $D30` | A |
 | F15 | `$S search -type adr` | A, C, J |
 | F16 | `$S search -type knowledge` | N, H (M 은 숨김) |
-| F17 | `$S search ScnFeePolicy` | L 하나 (머리 `… 청크 1건 (BM25)` — 질의어 검색의 수는 청크 수다, score 표시) |
-| F18 | `$S search -superseded ScnFeePolicy` | L, K (K 에 superseded 표시) |
+| F17 | `$S search ScnFeePolicy` | L 하나 (머리 `… 청크 1건 · 문서 1건 (BM25)` — 질의어 검색은 청크 수와 그 문서 수를 함께 센다, score 표시) |
+| F18 | `$S search -superseded ScnFeePolicy` | L, K (K 에 superseded 표시, 머리 `… include_superseded · 청크 2건 · 문서 2건 (BM25)`) |
 | F19 | `$S search -project beta-web ScnRefundFlow` | `맞는 문서가 없습니다` (D 는 프로젝트가 없다) |
 | F20 | `$S search -date 2026-1-2 x; echo "exit=$?"` | 에러 `date 는 YYYY-MM-DD 여야 합니다`, exit≠0 |
 | F21 | `$S search; echo "exit=$?"` | 사용법 에러(exit 2) — 질의어도 필터도 없음 |

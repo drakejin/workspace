@@ -273,7 +273,7 @@ scripts/memory/run.sh search IdempotencyKeyHeader
 ```
 
 ```
-team=demo · 청크 2건 (BM25)
+team=demo · 청크 2건 · 문서 2건 (BM25)
 
 [1] docs/repository/order-api/adr/0001-idempotency-key.md › ADR-0001 결제 요청 멱등 키 > 결정  (adr, project=order-api, 2026-10-08; score 7.73)
 요약: order-api의 결제 요청에 멱등성 키를 도입하여 이중 결제 문제를 방지하는 아키텍처 결정을 기술합니다.
@@ -283,8 +283,8 @@ order-api 가 결제 대행사로 보내는 모든 결제 요청에 `Idempotency
 …
 ```
 
-머리의 `청크 N건` 은 맞은 청크 수다 — 질의어 검색은 청크(제목 단위로 자른 조각) 단위라 한 문서의 여러 절이 따로 나올 수 있다
-(필터로 가져오기의 `문서 N건` 은 문서 수). 함수명·필드명이 그대로 맞는다 — 식별자 분할 analyzer 가 `ClickDeduplicator.window` 를 원형과 `click`·`deduplicator`·`window` 로 함께 색인한다.
+머리의 `청크 N건 · 문서 M건` 은 맞은 청크 수와 그 청크들이 나온 문서 수다 — 질의어 검색은 청크(제목 단위로 자른 조각) 단위라 한 문서의 여러 절이
+따로 나와 결과 수(`size`)를 나눠 쓸 수 있다 (여기서는 ADR 과 샘플 README 가 한 청크씩. 필터로 가져오기의 `문서 N건` 은 문서 수). 함수명·필드명이 그대로 맞는다 — 식별자 분할 analyzer 가 `ClickDeduplicator.window` 를 원형과 `click`·`deduplicator`·`window` 로 함께 색인한다.
 `요약:` 줄은 증류가 붙인 것이다. 밀린 구판까지 보려면 `-superseded` (플래그는 질의어 앞에):
 
 ```bash
@@ -498,8 +498,8 @@ relates:                                          # (선택) 관련 문서 — �
 ---
 ```
 
-본문의 마크다운 링크(`[..](../x.md)`)도 그래프의 `LINKS_TO` 가 된다. 링크 대상이 디스크에도 hot 에도 cold 에도 없으면 주간 감사가 `broken-link` 로 알린다
-(`scenarios/` 처럼 색인 범위 밖이어도 디스크에 있으면 산 링크다).
+본문의 마크다운 링크(`[..](../x.md)`)도 그래프의 `LINKS_TO` 가 된다. 링크 대상이 디스크에도 hot 에도 cold 에도 없거나 디스크의 철자와 대소문자만 다르면(GitHub 에서 깨진다)
+주간 감사가 `broken-link` 로 알린다 (`scenarios/` 처럼 색인 범위 밖이어도 디스크에 그 철자로 있으면 산 링크다).
 knowledge 는 근거가 있어야 한다 — `derived_from` 이나 `## 출처` 절이 없으면 감사가 `unsourced-fact` 로 알린다.
 
 ### 5.2 예제 — Claude 에게 ADR 을 쓰게 하기
@@ -575,7 +575,7 @@ knowledge 인덱스는 `mem-knowledge-keep`(우선순위 200)이라 ISM 이 건�
 | `unindexed` | 파일이 있는데 색인에도 cold 에도 없다 | 색인한다 |
 | `stale-content` | 색인 내용(sha)이 파일과 다르다 (stat 이 보존된 복사 등) | 다시 색인한다 |
 | `orphan-chunks` | cold store 에 청크만 남았다 | 지운다 (raw 원본은 이력이라 남긴다) |
-| `broken-link` | 링크 대상이 디스크에도 hot 에도 cold 에도 없다 (색인 범위 밖이어도 디스크에 그 철자로 있으면 산 링크다) | 보고만 |
+| `broken-link` | 링크 대상이 디스크에도 hot 에도 cold 에도 없다. 디스크의 철자와 대소문자만 다른 링크도 알린다(GitHub 에서 깨진다 — 설명에 디스크의 철자). 색인 범위 밖이어도 디스크에 그 철자로 있으면 산 링크다 | 보고만 |
 | `unsourced-fact` | knowledge 에 근거가 없다 | 보고만 |
 | `stale-question` | 14일 넘게 답을 기다리는 판정 질문 | 보고만 |
 | `corrupted-ledger` | 원장에 읽을 수 없는 줄 | 보고만 (그 줄은 건너뛴다) |
@@ -638,7 +638,7 @@ ISM 이 먼저 옮긴 경우다. "갖고 있다" 의 판단:
 ## 8. 설정 레퍼런스
 
 `.env`(복사: `cp .env.example .env`) 또는 환경변수. 명령줄에서 준 값이 `.env` 보다 우선한다.
-`make memory-daemon-start` 로 띄운 데몬(launchd)은 start 때의 설정 중 `META_REPO_ROOT`·`OPENSEARCH_URL`·`OS_PORT`·`NEO4J_BOLT_PORT`·`NEO4J_HTTP_PORT`·`COLD_*`·`MEMORY_*`·`AWS_REGION`·`AWS_PROFILE`·`AWS_ENDPOINT_URL_S3`(`.env` 와 명령줄 값. 이름에 `PASSWORD`·`SECRET`·`TOKEN` 이 든 것은 빼고 — 잡이 `.env`·AWS 기본 체인에서 다시 읽는다)를 잡에 담아 돈다. 데몬이 쓰지 않는 `OS_DASH_PORT` 는 담지 않는다 — 바꾸면 `make memory-daemon-stop && make memory-daemon-start`.
+`make memory-daemon-start` 로 띄운 데몬(launchd)은 start 때의 설정 중 `META_REPO_ROOT`·`OPENSEARCH_URL`·`OS_PORT`·`NEO4J_BOLT_PORT`·`NEO4J_HTTP_PORT`·`COLD_*`·`MEMORY_*`·`AWS_REGION`·`AWS_PROFILE`·`AWS_ENDPOINT_URL_S3`(`.env` 와 명령줄 값. 이름에 `PASSWORD`·`SECRET`·`TOKEN` 이 든 것은 빼고 — 잡이 `.env`·AWS 기본 체인에서 다시 읽는다)를 잡에 담아 돈다 — 이 값을 바꾸면 `make memory-daemon-stop && make memory-daemon-start`. 데몬이 쓰지 않는 `OS_DASH_PORT` 는 담지 않는다.
 
 | 변수 | 기본 | 뜻 |
 | --- | --- | --- |

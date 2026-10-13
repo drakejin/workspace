@@ -136,3 +136,33 @@ func TestOrphanIndexNamesTheOnDiskSpellingOfALegacyEntry(t *testing.T) {
 		t.Errorf("없는 파일 문구 = %q", gone)
 	}
 }
+
+// 철자(대소문자)만 다른 링크는 GitHub 에서 깨진다. 대소문자를 구분하지 않는 디스크(APFS)의 로컬 cold store 에서는 hot 문서의
+// raw 사본이 그 철자로도 열리지만, 그것을 cold 로 간 문서로 보지 않고 깨진 링크로 알린다 — 디스크의 철자도 함께.
+func TestWrongCaseLinkToAHotDocIsBrokenEvenWithItsColdRaw(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	coldDir := t.TempDir()
+	requireCaseInsensitiveFS(t, root)
+	requireCaseInsensitiveFS(t, coldDir)
+	writeFile(t, root, "docs/knowledge/status-codes-v2.md", "# 상태 코드\n\n## 출처\n- x\n")
+	writeFile(t, root, "docs/feature/INDEX.md", "# feature\n[상태 코드](../knowledge/Status-Codes-V2.md) · [정상](../knowledge/status-codes-v2.md)\n")
+	store := cold.NewLocalStore(coldDir)
+	// 적재가 hot 문서마다 남기는 raw 사본
+	if err := store.Put(ctx, cold.RawKey(unitTeam, "docs/knowledge/status-codes-v2.md"), "# 상태 코드\n"); err != nil {
+		t.Fatal(err)
+	}
+	r := newUnitRunner(t, root, store, map[string]ingest.IndexedDoc{})
+
+	if err := r.links(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"docs/knowledge/Status-Codes-V2.md"}
+	if got := brokenTargets(r.findings); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("broken-link 대상\n got  %v\n want %v", got, want)
+	}
+	if detail := r.findings[0].Detail; !strings.Contains(detail, "docs/knowledge/status-codes-v2.md") {
+		t.Errorf("디스크의 철자를 알려야 한다: %q", detail)
+	}
+}
