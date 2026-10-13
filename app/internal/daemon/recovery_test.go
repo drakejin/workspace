@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/drakejin/workspace/app/internal/cold"
+	"github.com/drakejin/workspace/app/internal/llm"
 	"github.com/drakejin/workspace/app/internal/state"
 )
 
@@ -86,6 +88,83 @@ func TestJudgePendingSurvivesARestart(t *testing.T) {
 	}
 }
 
+// cancellingAsker 는 질의를 받는 동안 종료 신호가 온 LLM 대신이다 — ctx 를 끊고, 끊긴 호출처럼 답 없이 돌아온다.
+type cancellingAsker struct {
+	cancel context.CancelFunc
+	calls  int
+}
+
+func (a *cancellingAsker) Ask(context.Context, llm.Input) (json.RawMessage, bool) {
+	a.calls++
+	a.cancel()
+	return nil, false
+}
+
+// neighborHit 은 팀 hot alias 의 이웃 검색 결과 한 건이다.
+func neighborHit(d DiffEntry, score float64, eventTime string) map[string]any {
+	return map[string]any{"_index": recoveryIndex, "_score": score, "_source": map[string]any{
+		"source_path": d.SourcePath, "body_sha": d.BodySHA, "event_time": eventTime, "text": d.Body,
+	}}
+}
+
+// R4-daemon-b-1: 종료 신호가 진행 중인 판정 LLM 호출을 끊으면 그 쌍은 대기분으로 남는다 — LLM 이 판정하지 못한 것(폴백 질문)으로
+// 원장에 적지 않는다. 적으면 다시 뜬 데몬이 그 쌍을 이미 판정한 것으로 건너뛰어, 종료 때문에 생긴 질문에 사람이 답해야 한다.
+func TestJudgeLeavesThePairPendingWhenShutdownCutsTheLLMCall(t *testing.T) {
+	root := t.TempDir()
+	entry := writeDoc(t, root, docA, contentA)
+	other := writeDoc(t, root, "docs/specs/pay/b.md", "---\ndate: 2026-10-03\n---\n# 결제\nRecoveryFee 는 5000원이다.\n")
+	fos := &routedOS{indices: []string{recoveryIndex}, neighbors: []map[string]any{
+		neighborHit(entry, 10, "2026-10-01T00:00:00Z"),
+		neighborHit(other, 9, "2026-10-03T00:00:00Z"), // 유효 시각 차 2일 — latest-wins 가 아니라 LLM 이 판정한다
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ask := &cancellingAsker{cancel: cancel}
+	logs := &logSink{}
+	j := &Judge{OS: fos, Config: recoveryConfig(root), State: state.NewJudgeState(root), Ask: ask, Log: logs.Logf}
+
+	sum, err := j.Run(ctx, []DiffEntry{entry})
+
+	if ask.calls != 1 {
+		t.Fatalf("LLM 호출 %d번 (이웃과 견주는 판정이 LLM 까지 가야 한다)\n%s", ask.calls, logs)
+	}
+	if err == nil || sum.Questions != 0 {
+		t.Errorf("끊긴 판정은 질문이 아니라 오류다: questions=%d err=%v", sum.Questions, err)
+	}
+	if latest, err := j.State.Latest("t"); err != nil || len(latest) != 0 {
+		t.Errorf("판정 원장에 남기면 안 된다: %+v %v", latest, err)
+	}
+	pending, err := state.ReadJudgePending(root)
+	if _, ok := pending[docA]; err != nil || !ok {
+		t.Errorf("대기 목록에 남아 다음 boot 가 이어 판정해야 한다: %v %v", pending, err)
+	}
+}
+
+// R4-daemon-b-4: 판정이 꺼져 있으면(MEMORY_JUDGE_ENABLED=false) boot 가 대기분을 되살리지도, 이어 판정한다고 알리지도 않는다 —
+// Run 이 판정하지 않으므로 그 말이 거짓이 된다. 대기 목록은 디스크에 그대로 둬 판정을 다시 켠 boot 가 이어 판정한다.
+func TestJudgeRestoreIsQuietWhenJudgeIsDisabled(t *testing.T) {
+	root := t.TempDir()
+	entry := writeDoc(t, root, docA, contentA)
+	if err := state.WriteJudgePending(root, map[string]state.PendingJudgment{docA: pendingOf(entry)}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := recoveryConfig(root)
+	cfg.Judge.Enabled = false
+	logs := &logSink{}
+	j := &Judge{OS: &routedOS{}, Config: cfg, State: state.NewJudgeState(root), Ask: &stubAsker{}, Log: logs.Logf}
+
+	if err := j.Restore(); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(j.retry) != 0 || logs.has("이어 판정") {
+		t.Errorf("판정이 꺼져 있으면 되살리지 않는다: retry=%+v\n%s", j.retry, logs)
+	}
+	if pending, err := state.ReadJudgePending(root); err != nil || len(pending) != 1 {
+		t.Errorf("대기 목록은 디스크에 그대로 둔다: %v %v", pending, err)
+	}
+}
+
 // IDX-11·IDX-8: 증류 실패(LLM 응답 없음·스키마 불일치·빈 요약)는 부팅 백필만 기다리지 않고 뒤 사이클에 다시 시도한다 —
 // 바로 다음 사이클이 아니라 백오프가 지난 뒤에.
 func TestDistillRetriesAFailedJobOnALaterCycle(t *testing.T) {
@@ -131,6 +210,41 @@ func TestDistillRetriesAFailedJobOnALaterCycle(t *testing.T) {
 				t.Errorf("성공한 문서는 다시 하지 않는다: calls=%d", ask.calls)
 			}
 		})
+	}
+}
+
+// R4-daemon-b-2: 같은 본문이 늘 같은 식으로 실패하면(스키마 불일치·빈 요약) 다시 시도에 상한이 있다 — distillMaxAttempts 번
+// 실패하면 포기하고 로그로 알린다. 그 뒤로는 백오프가 지나도 그 본문을 다시 부르지 않고, 본문이 바뀌면 처음부터 다시 시도한다.
+func TestDistillGivesUpAfterMaxAttempts(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	entry := writeDoc(t, root, docA, contentA)
+	fos := &routedOS{indices: []string{recoveryIndex}}
+	clock := &fakeClock{t: time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)}
+	ask := &stubAsker{raw: `{"summary":"  ","entities":[]}`, ok: true}
+	logs := &logSink{}
+	q := NewDistillQueue(ctx, fos, recoveryConfig(root), state.NewDistillCache(root), ask, logs.Logf)
+	q.now = clock.Now
+
+	q.EnqueueDiff([]DiffEntry{entry})
+	q.Settle()
+	for range distillMaxAttempts * 2 { // 매번 백오프 상한만큼 기다린 사이클
+		clock.Advance(distillRetryMax)
+		q.EnqueueDiff(nil)
+		q.Settle()
+	}
+
+	if ask.calls != distillMaxAttempts {
+		t.Errorf("calls = %d, want %d (상한까지만 시도한다)\n%s", ask.calls, distillMaxAttempts, logs)
+	}
+	if !logs.has("포기") {
+		t.Errorf("포기를 알려야 한다\n%s", logs)
+	}
+	edited := writeDoc(t, root, docA, editedA)
+	q.EnqueueDiff([]DiffEntry{edited})
+	q.Settle()
+	if ask.calls != distillMaxAttempts+1 {
+		t.Errorf("calls = %d (새 본문은 다시 시도한다)", ask.calls)
 	}
 }
 

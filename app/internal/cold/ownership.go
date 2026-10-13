@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -168,8 +166,7 @@ func (o *Ownership) Reloadable(ctx context.Context, root string, ch model.Chunk)
 	case v == verdictOwned:
 		return false
 	case v == verdictStranded:
-		_, err := os.Stat(filepath.Join(root, filepath.FromSlash(ch.SourcePath)))
-		return err == nil
+		return onDiskExists(root, ch.SourcePath)
 	}
 	return true
 }

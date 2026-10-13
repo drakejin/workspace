@@ -4,11 +4,10 @@ import (
 	"errors"
 	"io/fs"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
-	"golang.org/x/text/unicode/norm"
+	"github.com/drakejin/workspace/app/internal/document"
 )
 
 // readDir 는 디렉토리 나열이다 (테스트가 나열 횟수를 센다).
@@ -40,18 +39,12 @@ func readListing(dir string, modTime time.Time) (dirListing, error) {
 	return l, nil
 }
 
-// match 는 name 과 같은 항목의 실제 이름이다: 그 철자 그대로 있으면 그것, 없으면 대소문자·유니코드 정규화만 다른 것(여럿이면 이름순 첫째).
+// match 는 name 과 같은 항목의 실제 이름이다 (document.MatchName — 그 철자 그대로 없을 때만 목록을 훑는다).
 func (l dirListing) match(name string) (string, bool) {
 	if l.exact[name] {
 		return name, true
 	}
-	want := norm.NFC.String(name)
-	for _, n := range l.names {
-		if strings.EqualFold(norm.NFC.String(n), want) {
-			return n, true
-		}
-	}
-	return "", false
+	return document.MatchName(l.names, name)
 }
 
 // listingCache 는 디렉토리 나열을 그 디렉토리의 mtime 이 그대로인 동안 다시 쓴다 — 항목이 생기거나 지워지거나 이름이 바뀌면
@@ -64,7 +57,7 @@ type listingCache struct {
 
 func newListingCache() *listingCache { return &listingCache{dirs: map[string]dirListing{}} }
 
-// match 는 matchEntry 와 같되 바뀌지 않은 디렉토리의 나열을 다시 쓴다.
+// match 는 document.MatchEntry 와 같되 바뀌지 않은 디렉토리의 나열을 다시 쓴다.
 func (c *listingCache) match(dir, name string) (string, bool) {
 	l, err := c.listing(dir)
 	if err != nil {

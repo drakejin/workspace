@@ -69,7 +69,7 @@ scripts/memory-daemon/run.sh status  # 5) 확인 — 무엇이 꺼져 있으면 
 [memory-init] opensearch: ready
 [memory-init] neo4j: waiting http://localhost:7476
 [memory-init] neo4j: ready
-[reconcile] scanned=11 indexed=11 stat_updated=0 removed=0 skipped=0 failed=0 cold_owned=0 flags=0 trigger=boot took=365ms
+[reconcile] scanned=11 indexed=11 stat_updated=0 removed=0 skipped=0 failed=0 cold_owned=0 cold_kept=0 flags=0 trigger=boot took=365ms
 [graph] docs=14 entities=0 edges=29
 [memory-init] reconcile: done
 

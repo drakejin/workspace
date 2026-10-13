@@ -60,8 +60,8 @@ type Reconciler struct {
 	Log     func(format string, args ...any)
 
 	mu sync.Mutex
-	// coldOwned 는 cold 가 소유한 hot 파일의 stat 이다. stat 이 그대로면 다음 사이클에 다시 읽지 않는다.
-	coldOwned map[string]statKey
+	// coldOwned 는 cold 가 소유한 hot 파일이다. stat 이 그대로면 다음 사이클에 다시 읽지 않는다.
+	coldOwned map[string]coldOwnedFile
 
 	flagsMu    sync.RWMutex
 	desired    map[string]string // 마지막으로 계산한 superseded_by (재색인 때 숨김 표시와 위치 유지)
@@ -74,6 +74,13 @@ type statKey struct {
 }
 
 func statOf(f ingest.ScannedFile) statKey { return statKey{f.MtimeMs, f.Size} }
+
+// coldOwnedFile 은 cold 소유로 본 hot 파일이다. kept 면 git 이 되살릴 수 없어(커밋하지 않았거나 커밋 뒤 고쳤다) tier 가 hot 에 남기는
+// 원본이다 — 다음 tier 가 정리할 원본(cold_owned)과 따로 센다(cold_kept).
+type coldOwnedFile struct {
+	stat statKey
+	kept bool
+}
 
 // SupersededBy 는 마지막으로 계산한 숨김 표시(superseded_by, deprecated)다. Indexer 의 Deps.SupersededBy 로 꽂는다 — 사이클이 파일을
 // 다시 쓰기 전에(loadState) 정본에서 계산해 두므로, 다시 쓴 문서가 수렴 전에 기본 검색에 드러나거나 knowledge 인덱스를 오가지 않는다.
@@ -99,6 +106,26 @@ func (r *Reconciler) refreshFlags(docs map[string]ingest.IndexedDoc) (map[string
 	return desired, deprecated, nil
 }
 
+// keepFlags 는 정본을 읽지 못한 사이클의 숨김 표시다 — 지난번에 계산한 값을 그대로 두고, 아직 계산한 적이 없으면(boot) 색인에
+// 있는 표시를 쓴다 (다시 쓴 문서가 숨김 표시 없이 기본 검색에 드러나지 않게).
+func (r *Reconciler) keepFlags(docs map[string]ingest.IndexedDoc) {
+	r.flagsMu.Lock()
+	defer r.flagsMu.Unlock()
+	if r.desired != nil {
+		return
+	}
+	desired, deprecated := make(map[string]string, len(docs)), map[string]bool{}
+	for p, d := range docs {
+		if d.SupersededBy != "" {
+			desired[p] = d.SupersededBy
+		}
+		if d.Deprecated {
+			deprecated[p] = true
+		}
+	}
+	r.desired, r.deprecated = desired, deprecated
+}
+
 // cycleState 는 사이클이 시작할 때 읽은 색인 상태다. 사이클 동안 읽기만 한다.
 type cycleState struct {
 	indices  []string
@@ -122,7 +149,7 @@ func (r *Reconciler) Once(ctx context.Context) (state.CycleSummary, []DiffEntry,
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.coldOwned == nil {
-		r.coldOwned = map[string]statKey{}
+		r.coldOwned = map[string]coldOwnedFile{}
 	}
 
 	files, skipped, err := ingest.ScanHot(r.Config.MetaRepoRoot, r.Config.Reconcile.MaxFileBytes)
@@ -175,11 +202,22 @@ func (r *Reconciler) loadState(ctx context.Context) (cycleState, error) {
 	if err != nil {
 		return cycleState{}, fmt.Errorf("list restored docs: %w", err)
 	}
-	// 파일을 다시 쓰기 전에 숨김 표시를 정본대로 계산해 둔다 — boot 사이클도 밀린·deprecate 문서를 숨긴 채로 다시 쓴다
+	// 파일을 다시 쓰기 전에 숨김 표시를 정본대로 계산해 둔다 — boot 사이클도 밀린·deprecate 문서를 숨긴 채로 다시 쓴다.
+	// 원장을 읽지 못해도(권한·IO 오류) 사이클은 이어 간다 — 원장 하나 때문에 고친·지운 문서가 색인에 반영되지 않으면 안 된다.
+	// 다시 쓰는 문서는 지난 표시(처음이면 색인에 있는 표시)를 잇고, 수렴(Converge)이 같은 오류를 사이클 오류로 알린다
 	if _, _, err := r.refreshFlags(existing); err != nil {
-		return cycleState{}, fmt.Errorf("flags: %w", err)
+		r.Log("[reconcile] 숨김 표시의 정본(원장)을 읽지 못했습니다 — 지난 표시를 이어 다시 쓴다: %v", err)
+		r.keepFlags(existing)
 	}
 	return cycleState{indices: indices, existing: existing, owner: cold.NewOwnership(archived, r.Cold), restored: restored}, nil
+}
+
+// managedIndices 는 이 workspace 팀의 인덱스 가운데 데몬이 맞추는 것이다 (restore_cold 로 복원한 인덱스는 뺀다). 그래프·증류 백필·
+// 증류 반영도 사이클(loadState·Converge)과 같은 범위만 본다 — 같은 클러스터를 쓰는 다른 workspace 의 인덱스가 잠깐 열리지 않아도
+// (샤드 503) 이 workspace 의 그래프가 멈추거나 요약이 색인에 반영되지 않으면 안 된다.
+func managedIndices(ctx context.Context, c opensearch.Client, cfg config.Config) ([]string, error) {
+	managed, _, err := ingest.WorkspaceIndices(ctx, c, cfg.Workspace, cfg.DefaultTeam)
+	return managed, err
 }
 
 // synced 는 파일들을 색인과 맞춘 결과다.
@@ -231,8 +269,8 @@ func (r *Reconciler) syncFile(ctx context.Context, f ingest.ScannedFile, st cycl
 	if upToDate(f, ex, known, st.restored) {
 		return fileResult{}, nil
 	}
-	if !known && r.coldOwned[f.Rel] == statOf(f) {
-		sum.ColdOwned++ // 지난 사이클에 cold 소유로 본 stat 그대로다
+	if c, ok := r.coldOwned[f.Rel]; !known && ok && c.stat == statOf(f) {
+		r.countColdOwned(ctx, f, c, sum) // 지난 사이클에 cold 소유로 본 stat 그대로다
 		return fileResult{}, nil
 	}
 	// Prepare 가 게이트(바이너리·크기 — ingest_path 와 같은 규칙)를 거친다
@@ -281,9 +319,27 @@ func (r *Reconciler) claimColdOwned(ctx context.Context, f ingest.ScannedFile, b
 	if err != nil || !owned {
 		return false, err
 	}
-	r.coldOwned[f.Rel] = statOf(f)
-	sum.ColdOwned++
+	r.countColdOwned(ctx, f, coldOwnedFile{stat: statOf(f), kept: true}, sum)
 	return true, nil
+}
+
+// countColdOwned 는 cold 소유 파일 하나를 센다: 다음 tier 가 정리할 원본은 cold_owned, git 이 되살릴 수 없어 tier 가 hot 에 남기는
+// 원본은 cold_kept. 남기는 원본(처음 보는 파일 포함 — kept 로 넘긴다)은 git 으로 다시 본다 — 커밋해도 stat 이 그대로라 기억한
+// 값으로는 알 수 없다.
+func (r *Reconciler) countColdOwned(ctx context.Context, f ingest.ScannedFile, c coldOwnedFile, sum *state.CycleSummary) {
+	if c.kept {
+		kept, err := cold.KeptByGit(ctx, r.Config.MetaRepoRoot, f.Rel)
+		if err != nil {
+			r.Log("[reconcile] cold 소유 원본 %s 의 커밋 여부를 git 으로 확인하지 못했습니다 — tier 도 지우지 않는다: %v", f.Rel, err)
+		}
+		c.kept = kept
+	}
+	r.coldOwned[f.Rel] = c
+	if c.kept {
+		sum.ColdKept++
+		return
+	}
+	sum.ColdOwned++
 }
 
 // rewrite 는 내용이 바뀐(또는 처음 보는) 문서를 다시 쓰고 변경분을 돌려준다.
@@ -443,7 +499,7 @@ func removeReason(rel string, gated map[string]string) string {
 // (인덱스를 지워도 같은 결과로 재구축된다). knowledge 가 밀리면 자기 날짜의 월별 인덱스로 옮겨 노화시킨다.
 // 문서 하나가 실패해도 나머지 문서는 마저 맞추고, 실패는 모아 돌려준다 (실패한 문서는 다음 사이클이 다시 맞춘다).
 func (r *Reconciler) Converge(ctx context.Context) (int, error) {
-	indices, _, err := ingest.WorkspaceIndices(ctx, r.OS, r.Config.Workspace, r.Config.DefaultTeam)
+	indices, err := managedIndices(ctx, r.OS, r.Config)
 	if err != nil {
 		return 0, fmt.Errorf("converge: %w", err)
 	}

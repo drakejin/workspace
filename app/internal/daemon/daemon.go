@@ -235,8 +235,8 @@ func (d *Daemon) cycle(trigger string) {
 		d.log("[reconcile] failed: %v", err)
 		rec.Error = err.Error()
 	} else {
-		d.log("[reconcile] scanned=%d indexed=%d stat_updated=%d removed=%d skipped=%d failed=%d cold_owned=%d flags=%d trigger=%s took=%dms",
-			sum.Scanned, sum.Indexed, sum.StatUpdated, sum.Removed, sum.Skipped, sum.Failed, sum.ColdOwned, sum.FlagsConverged, trigger, sum.TookMs)
+		d.log("[reconcile] scanned=%d indexed=%d stat_updated=%d removed=%d skipped=%d failed=%d cold_owned=%d cold_kept=%d flags=%d trigger=%s took=%dms",
+			sum.Scanned, sum.Indexed, sum.StatUpdated, sum.Removed, sum.Skipped, sum.Failed, sum.ColdOwned, sum.ColdKept, sum.FlagsConverged, trigger, sum.TookMs)
 		rec.Summary = &sum
 	}
 
@@ -289,7 +289,7 @@ func (d *Daemon) syncGraph(ctx context.Context, changed bool) string {
 	if !needed {
 		return "unchanged"
 	}
-	indices, err := ingest.ManagedIndices(ctx, d.os)
+	indices, err := managedIndices(ctx, d.os, d.cfg)
 	if err != nil {
 		return "failed: " + err.Error()
 	}
@@ -338,7 +338,7 @@ func (d *Daemon) Heartbeat() error {
 }
 
 func (d *Daemon) missingDistill(ctx context.Context) ([]DistillJob, error) {
-	indices, err := ingest.ManagedIndices(ctx, d.os)
+	indices, err := managedIndices(ctx, d.os, d.cfg)
 	if err != nil {
 		return nil, err
 	}

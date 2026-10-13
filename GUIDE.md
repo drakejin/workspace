@@ -65,6 +65,7 @@ Claude Code 가 파일 트리를 뒤지는 대신 `search_memory` 로 묻게 하
 frontmatter 오류처럼 고치면 되는 실패는 색인에 있던 판을 그대로 두고 `fail` 로 알린다.
 빈 파일·frontmatter 만 있는 `.md` 도 빈 청크 하나로 색인한다 — 한 번 쓰면 다음 사이클은 건너뛴다. 본문이 없으니 판정·증류 대상은 아니고,
 검색 결과(질의어 검색·필터로만 가져오기·세션 훅)에도 나오지 않는다 (`search_filters` 의 수에는 든다).
+예전 판은 빈 청크에 빈 text(`""`)를 써 목록에 빈 결과로 나왔다 — 데몬이 그 판의 문서를 한 번 다시 쓰고, `restore_cold` 는 복원한 달의 빈 text 를 지운 뒤 검색에 붙인다.
 
 문서의 정체(`source_path`)는 디스크에 있는 철자를 유니코드 NFC 로 맞춘 경로다. macOS(APFS)는 대소문자와 NFC/NFD 를 구분하지 않아
 철자만 다른 경로가 같은 파일을 연다 — `ingest_path` 에 `docs/knowledge/LIMITS.md`(실제는 `limits.md`)나 Finder 가 NFD 로 만든 한글 이름을
@@ -92,7 +93,7 @@ NFC 로 친 경로를 줘도 디스크의 철자 하나로 적재하고, 주제(
 [memory-init] opensearch: ready
 [memory-init] neo4j: waiting http://localhost:7476
 [memory-init] neo4j: ready
-[reconcile] scanned=11 indexed=11 stat_updated=0 removed=0 skipped=0 failed=0 cold_owned=0 flags=0 trigger=boot took=365ms
+[reconcile] scanned=11 indexed=11 stat_updated=0 removed=0 skipped=0 failed=0 cold_owned=0 cold_kept=0 flags=0 trigger=boot took=365ms
 [graph] docs=14 entities=0 edges=29
 [memory-init] reconcile: done
 
@@ -127,7 +128,7 @@ launchd 가 없는 머신은 nohup 백그라운드라(`[memory-daemon] backgroun
 
 ```
 [daemon] LLM 백엔드: 로컬 claude CLI (2.1.283 (Claude Code))
-[reconcile] scanned=11 indexed=0 stat_updated=0 removed=0 skipped=0 failed=0 cold_owned=0 flags=0 trigger=boot took=11ms
+[reconcile] scanned=11 indexed=0 stat_updated=0 removed=0 skipped=0 failed=0 cold_owned=0 cold_kept=0 flags=0 trigger=boot took=11ms
 [graph] docs=14 entities=0 edges=29
 [daemon] watching /Users/jin/Workspace/drakejin/workspace (루트 문서, docs/, main/*/docs/), interval=1m0s, debounce=3s, judge=on, distill=off, graph=on
 ```
@@ -139,14 +140,14 @@ launchd 가 없는 머신은 nohup 백그라운드라(`[memory-daemon] backgroun
 
 | 로그 | 뜻 |
 | --- | --- |
-| `[reconcile] scanned= indexed= stat_updated= removed= skipped= failed= cold_owned= flags=` | 스캔한 파일 / 다시 색인 / mtime 만 바뀜 / 색인에서 뺌 / 게이트에 걸림 / 준비·쓰기 실패 / cold 소유라 되살리지 않음 / superseded_by·deprecated 수렴 |
+| `[reconcile] scanned= indexed= stat_updated= removed= skipped= failed= cold_owned= cold_kept= flags=` | 스캔한 파일 / 다시 색인 / mtime 만 바뀜 / 색인에서 뺌 / 게이트에 걸림 / 준비·쓰기 실패 / cold 소유라 되살리지 않음 — 다음 tier 가 정리할 hot 원본 / cold 소유인데 git 에 커밋된 내용이 아니라 tier 가 hot 에 남기는 원본(`kept-uncommitted` — 커밋하면 정리한다) / superseded_by·deprecated 수렴. 판정·cold 문서 조치 원장을 읽지 못하면(권한·IO) 색인·tombstone 은 마치고 숨김 표시는 지난 값을 이으며, 사이클은 `[reconcile] failed: converge: …` 로 알린다 |
 | `[reconcile] skip <path> (<이유>)` · `remove <path> (<이유>)` · `fail <path> (<오류>)` | 게이트(`size N > MAX`·`binary content`)에 걸려 색인하지 않는 파일 / 색인에서 뺀 문서(디스크에 없다, 게이트에 걸렸다, 색인 범위 밖 경로) / 준비·쓰기에 실패한 파일(frontmatter 값 오류 — 예: 잘못된 team 이름, 감사 `bad-frontmatter` 로도 알린다 —, 다른 workspace 의 팀, 일시적인 오류) — 실패는 색인에 있던 판을 그대로 두고 다음 사이클이 다시 시도하며, 나머지 파일은 계속 돈다 |
 | `[reconcile] warn <path>: frontmatter YAML 이 깨졌습니다 …` | frontmatter YAML 을 읽지 못해 메타데이터(team·date·supersedes …) 없이 원문 전체를 본문으로 색인했다 — 쓴 글은 버리지 않는다. YAML 을 고치면 다음 사이클이 다시 색인한다 (감사 `bad-frontmatter`) |
 | `[reconcile] handoff <path> (…)` | `ingest_path`·`ingest`·`audit -apply` 가 먼저 색인한 문서를 판정·증류·그래프로 넘긴다 (다시 쓰지 않으므로 `indexed=` 에는 세지 않는다) |
 | `[judge] superseded A ↔ B (latest-wins …)` · `(llm: 모순, 고확신 …)` · `question …` | 판정 결과 |
-| `[judge] 일부 실패 — 다음 사이클에 다시: …` | 판정하지 못한 문서(검색·원장 쓰기 오류) — `.cache/daemon/judge-pending.json` 에 남아 다음 사이클이, 데몬을 다시 띄웠으면 boot 가 이어 판정한다 (그 사이 본문이 바뀐 문서는 새 변경분으로 판정) |
+| `[judge] 일부 실패 — 다음 사이클에 다시: …` | 판정하지 못한 문서(검색·원장 쓰기 오류, 종료 신호가 끊은 LLM 호출 — 질문으로 남기지 않는다) — `.cache/daemon/judge-pending.json` 에 남아 다음 사이클이, 데몬을 다시 띄웠으면 boot 가 이어 판정한다 (그 사이 본문이 바뀐 문서는 새 변경분으로 판정. `MEMORY_JUDGE_ENABLED=false` 인 동안은 되살리지 않고 그대로 둔다) |
 | `[distill] path: summary N자, entities M` | 증류 |
-| `[distill] path: <오류> — N 뒤 사이클에 다시 시도` | 증류 실패(LLM 응답 없음·스키마 불일치·빈 요약·색인 반영 실패) — 1분부터 두 배씩(최대 1시간) 기다린 뒤의 사이클이 다시 넣는다. 데몬을 다시 띄우면 boot 백필(요약이 빈 문서)이 이어받는다 |
+| `[distill] path: <오류> — N 뒤 사이클에 다시 시도` · `— 8번 실패해 포기한다 …` | 증류 실패(LLM 응답 없음·스키마 불일치·빈 요약·색인 반영 실패) — 1분부터 두 배씩(최대 1시간) 기다린 뒤의 사이클이 다시 넣는다. 같은 본문은 8번까지만 시도하고 포기를 알린다 (본문을 고치면 처음부터 다시 시도한다). 데몬을 다시 띄우면 boot 백필(요약이 빈 문서)이 한 번 더 넣는다 |
 | `[graph] docs= entities= edges=` | 그래프 재구축 (바뀐 게 있을 때만) |
 | `[audit] 주간 감사: …` | 7일마다 정합성 감사 요약 |
 | `[reconcile] matched N files > sanityMaxFiles` / `스캔이 일부만 됐습니다` | 루트를 잘못 잡은 것으로 보고 색인 거부 / 읽지 못한 디렉토리가 있어 이번 사이클은 삭제 보류 (status 에 `REFUSED` · `PARTIAL-SCAN`) |
@@ -265,7 +266,7 @@ MEMORY_DISTILL_ENABLED=true MEMORY_LLM_MODEL=haiku scripts/memory-daemon/run.sh 
 
 ```
 [judge] superseded_by docs/knowledge/order-status.md → docs/knowledge/order-status-v2.md
-[reconcile] scanned=16 indexed=16 stat_updated=0 removed=0 skipped=0 failed=0 cold_owned=0 flags=1 trigger=boot took=625ms
+[reconcile] scanned=16 indexed=16 stat_updated=0 removed=0 skipped=0 failed=0 cold_owned=0 cold_kept=0 flags=1 trigger=boot took=625ms
 [judge] superseded docs/feature/payment-retry/2026-08-04-retry-policy.md ↔ docs/feature/payment-retry/2026-10-06-retry-policy.md (latest-wins: 유효 시각 차 63.0일 > 7일)
 [judge] superseded docs/specs/refund-window/policy-a.md ↔ docs/specs/refund-window/policy-b.md (llm: 모순, 고확신 — 신판이 사실)
 [judge] candidates=3 latestWins=1 llm=1 questions=0 idempotentSkip=1
@@ -276,7 +277,7 @@ MEMORY_DISTILL_ENABLED=true MEMORY_LLM_MODEL=haiku scripts/memory-daemon/run.sh 
 [distill] CLAUDE.md: summary 93자, entities 5
 [distill] README.md: summary 91자, entities 3
 …
-[reconcile] scanned=16 indexed=0 stat_updated=0 removed=0 skipped=0 failed=0 cold_owned=0 flags=0 trigger=settle took=10ms
+[reconcile] scanned=16 indexed=0 stat_updated=0 removed=0 skipped=0 failed=0 cold_owned=0 cold_kept=0 flags=0 trigger=settle took=10ms
 [graph] docs=16 entities=27 edges=53
 ```
 
@@ -461,7 +462,7 @@ hot 원본 3개를 cold 로 넘겼습니다 (git rm). 원본은 cold store raw �
 episodic 과 같이 cold 로 간다 — 리포트(episodic 만 보는 수명 확인)에는 없지만 tier 에는 나온다.
 지우기 전에 cold store 에 같은 내용(sha)이 있는지 확인하므로 그 사이에 고친 문서는 지우지 않는다. git 레포면 `git rm` 으로 지워 커밋만 하면 된다.
 git 이 되살릴 수 없는 원본 — 커밋하지 않았거나 커밋 뒤 고친(add 만 한) 파일 — 은 지우지 않고 `- hot 에 남김: … (git 에 커밋된 내용이 아니다)` 로 알린다
-(그 달의 원본만 남았으면 결정이 `kept-uncommitted`). 커밋하면 다음 tier 가 뺀다.
+(그 달의 원본만 남았으면 결정이 `kept-uncommitted`). 커밋하면 다음 tier 가 뺀다 — 그때까지 데몬 로그에는 `cold_owned` 가 아니라 `cold_kept` 로 찍힌다.
 
 ```bash
 scripts/memory/run.sh list-cold
@@ -607,6 +608,7 @@ knowledge 는 유사도로 판정하지 않으므로 선언이 없으면 구판�
 뒤의 인덱스에서 실패해도 그때까지 한 일(지운 인덱스, hot 에서 뺀 원본)을 `[tier] 중간에 실패했습니다 — 그 전에 한 일:` 아래에 에러와 함께 출력한다.
 
 ISM 이 먼저 옮긴 달은 hot 원본이 남아 데몬 로그에 `cold_owned` 가 찍힌다. 다음 `scripts/memory/run.sh tier` 가 그 원본을 치운다(`pruned`).
+git 에 커밋된 내용이 아닌 원본은 tier 가 남기므로(`kept-uncommitted`) `cold_kept` 로 따로 찍힌다 — 커밋하면 다음 tier 가 치운다.
 ISM 스냅샷 뒤에 그 달로 늦게 쓴 문서는 스냅샷에 없으므로 치우지 않는다 — 데몬이 다시 색인하고, tier 가 스냅샷에 넣은 뒤에야 뺀다 (§7 cold 소유).
 knowledge 인덱스는 `mem-knowledge-keep`(우선순위 200)이라 ISM 이 건드리지 않는다.
 
@@ -667,8 +669,9 @@ cold 는 두 가지를 같이 둔다 (발표의 "S3 층").
 S3 호환 저장소(LocalStack·MinIO)는 `AWS_ENDPOINT_URL_S3` + `COLD_STORE_S3_PATH_STYLE=true`. 자격 증명은 AWS 기본 체인.
 OpenSearch 쪽 S3 설정 예는 `app/test/s3/` (repository-s3 플러그인을 넣은 이미지 + `s3.client.default.*` 설정) — `make -C app test-e2e-s3` 가 이 구성으로 tier·복원·재적재를 확인한다.
 
-**cold 소유.** cold 가 그 내용을 갖고 있으면 hot 에 파일이 남아 있어도 데몬이 되살리지 않는다(`cold_owned`) — tier 직후 커밋 전이거나
-ISM 이 먼저 옮긴 경우다. "갖고 있다" 의 판단:
+**cold 소유.** cold 가 그 내용을 갖고 있으면 hot 에 파일이 남아 있어도 데몬이 되살리지 않는다(`cold_owned`) — ISM 이 먼저 옮겼거나
+tier 가 `-keep-files` 로 남긴 경우다. git 에 커밋된 내용이 아니라 tier 가 남긴 원본(`kept-uncommitted`)은 `cold_kept` 로 따로 센다 (커밋하면
+다음 tier 가 치운다). "갖고 있다" 의 판단:
 
 - 그 달의 스냅샷이 모두 목록(`{team}/manifests/{index}.jsonl`, tier·archive 가 남긴다)으로 덮이면: 목록에 그 (경로, 내용 sha) 가 있을 때.
   목록의 줄은 그 스냅샷이 지금 있을 때만 센다 — 지워진 스냅샷의 줄만 남은 문서는 어느 스냅샷에도 없는 갇힌 문서다 (감사의 `stranded-cold`)
@@ -743,6 +746,7 @@ tier 정기 실행(`scripts/schedule/run.sh install`)도 같은 규칙으로 ins
 | `다른 workspace 가 쓰는 팀입니다` | 다른 meta-repo 가 같은 팀 이름을 쓴다 | 이 meta-repo 는 다른 `MEMORY_DEFAULT_TEAM`/frontmatter team |
 | `데몬이 이미 돌고 있습니다` | 데몬 중복 실행 | `scripts/memory-daemon/run.sh status` 로 pid 확인 |
 | `cold_owned` 가 계속 찍힌다 | cold 로 간 원본이 hot 에 남아 있다 (ISM 이 옮긴 경우 등) | `scripts/memory/run.sh tier` 가 정리한다 |
+| `cold_kept` 가 계속 찍힌다 | cold 로 간 원본이 git 에 커밋된 내용이 아니라(커밋하지 않았거나 커밋 뒤 고쳤다) tier 가 hot 에 남겼다 (`kept-uncommitted`) | 원본을 커밋하면 다음 `scripts/memory/run.sh tier` 가 정리한다 (tier 만 다시 돌려서는 남는다) |
 | `[bootstrap] 경고: ISM 정책 … 덮어쓰지 않습니다` (또는 스냅샷 repository) | 클러스터의 정책·repository 가 이 설정과 다르다 — 같은 스택을 쓰는 다른 meta-repo 가 다른 `MEMORY_HOT_DAYS`·`COLD_SNAPSHOT_*` 로 만들었거나, 이 레포를 업데이트해 정책 본문이 바뀌었다 (`설명(…)은 같고 본문이 다르다`) | 이 설정이 맞으면 `scripts/memory/run.sh bootstrap` (클러스터 전역 — §8) |
 | `graph: failed …` / 그래프 도구가 "꺼져 있다" | Neo4j 가 꺼져 있다 / `MEMORY_GRAPH_URI=off` | `make memory-init`, 그다음 `scripts/memory/run.sh graph rebuild` |
 | `related_docs` 에 entity 경로가 없다 | 증류가 꺼져 있다 | `.env` 에 `MEMORY_DISTILL_ENABLED=true` 후 `make memory-daemon-stop && make memory-daemon-start` (본문이 LLM 으로 간다) |

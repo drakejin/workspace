@@ -199,3 +199,26 @@ func TestWithFlagsReturnsACopy(t *testing.T) {
 		t.Errorf("사본 = %+v", out)
 	}
 }
+
+// R4-daemon-a-2: 예전 판이 cold store 에 남긴 청크 JSONL 의 빈 청크 0 은 "text": "" 다. reload 는 청크를 지금 판의 모양으로 다시
+// 써(_bulk) 빈 text 를 필드째 뺀다 — 다시 실은 빈 문서가 exists 에 걸려 목록·검색에 빈 결과로 나오지 않는다.
+func TestReloadDropsTheEmptyTextOfOldBlankChunks(t *testing.T) {
+	const rel = "docs/specs/blank.md"
+	ctx := context.Background()
+	store := cold.NewLocalStore(t.TempDir())
+	old := `{"workspace":"ws","team":"` + unitTeam + `","doc_type":"spec","memory_kind":"episodic","event_time":"2026-10-01T00:00:00Z",` +
+		`"source_path":"` + rel + `","header_path":"blank","chunk_index":0,"text":"","content_sha":"c","body_sha":"b","index_version":5}` + "\n"
+	if err := store.Put(ctx, cold.ChunksKey(unitTeam, rel), old); err != nil {
+		t.Fatal(err)
+	}
+	rec := &recordOS{}
+
+	report, err := Reload(ctx, store, New(unitDeps(t.TempDir(), rec, store)), unitTeam, nil)
+
+	if err != nil || report.Chunks != 1 {
+		t.Fatalf("reload = %+v %v", report, err)
+	}
+	if text, ok := rec.head(t, rel)["text"]; ok {
+		t.Errorf("다시 실은 빈 청크 0 에 text 가 남았다: %q", text)
+	}
+}

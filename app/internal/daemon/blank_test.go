@@ -75,3 +75,25 @@ func TestDistillSkipsBlankDocuments(t *testing.T) {
 		t.Errorf("빈 본문에 LLM 을 %d번 불렀다", ask.calls)
 	}
 }
+
+// R4-daemon-a-2: 본문이 없는 문서를 text 필드 없이 쓰기 전의 판(5)은 빈 청크 0 에 "text": "" 를 썼다 — exists 는 빈 문자열도 있다고
+// 보아 그 문서가 목록·검색에 빈 결과로 나온다. 데몬은 그 판의 문서를 내용이 같아도 한 번 다시 써 빈 text 를 없앤다.
+func TestReconcileRewritesBlankDocsWrittenWithAnEmptyText(t *testing.T) {
+	const rel = "docs/specs/pay/blank.md"
+	const emptyTextVersion = 5 // 빈 청크 0 에 "text": "" 를 쓰던 마지막 판
+	root := t.TempDir()
+	writeDoc(t, root, rel, "---\ndate: 2026-10-01\n---\n")
+	fos := &routedOS{indices: []string{recoveryIndex}, docs: []map[string]any{
+		indexedHead(t, root, rel, map[string]any{"text": "", "index_version": emptyTextVersion}),
+	}}
+	d, logs := newRecoveryDaemon(t, recoveryConfig(root), fos)
+
+	sum, diff, err := d.rec.Once(context.Background())
+
+	if err != nil || sum.Indexed != 1 || !fos.sent("/_bulk", "") {
+		t.Errorf("빈 text 로 쓴 판은 다시 쓴다: %+v %v\n%s", sum, err, logs)
+	}
+	if len(diff) != 0 {
+		t.Errorf("내용이 같으니 판정·증류로 넘기지 않는다: %+v", diff)
+	}
+}

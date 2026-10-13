@@ -141,8 +141,8 @@ func TestDecide(t *testing.T) {
 	}
 	ask := &stubAsker{}
 	j := &Judge{Config: cfg, Ask: ask, Now: func() time.Time { return time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC) }}
-	r := j.Decide(context.Background(), "k", sd("old.md", "01"), sd("new.md", "12"))
-	if r.Decision != state.DecisionSuperseded || r.By != "latest-wins" || r.Old.Path != "old.md" || ask.calls != 0 {
+	r, err := j.Decide(context.Background(), "k", sd("old.md", "01"), sd("new.md", "12"))
+	if err != nil || r.Decision != state.DecisionSuperseded || r.By != "latest-wins" || r.Old.Path != "old.md" || ask.calls != 0 {
 		t.Errorf("latest-wins = %+v calls=%d", r, ask.calls)
 	}
 	cases := []struct {
@@ -161,8 +161,8 @@ func TestDecide(t *testing.T) {
 	}
 	for _, c := range cases {
 		j.Ask = &stubAsker{raw: c.raw, ok: c.ok}
-		r := j.Decide(context.Background(), "k", sd("old.md", "10"), sd("new.md", "12"))
-		if r.Decision != c.decision || r.By != c.by || r.Old.Path != c.loser {
+		r, err := j.Decide(context.Background(), "k", sd("old.md", "10"), sd("new.md", "12"))
+		if err != nil || r.Decision != c.decision || r.By != c.by || r.Old.Path != c.loser {
 			t.Errorf("%s → %+v", c.raw, r)
 		}
 	}

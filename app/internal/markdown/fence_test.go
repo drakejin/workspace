@@ -87,6 +87,35 @@ func TestChunkSplitsOversizeParagraph(t *testing.T) {
 	}
 }
 
+// R4-daemon-b-5: 긴 줄 하나를 문장 경계에서 나눌 때 원문을 그 경계에서 자른다 — 문장마다 다듬어(trim) 공백 하나로 다시 잇지
+// 않는다. 문장 사이의 공백·탭 묶음이 그대로 남아, 나뉜 조각을 이으면 원래 줄이다.
+func TestSentenceSplitKeepsTheWhitespaceBetweenSentences(t *testing.T) {
+	const maxChars = 500
+	line := strings.Repeat("문장입니다.  둘째  칸.\t", 400) + "끝."
+
+	parts := splitLong(line, maxChars)
+
+	if len(parts) < 2 {
+		t.Fatalf("나뉘어야 한다: %d 조각", len(parts))
+	}
+	for i, p := range parts {
+		if n := utf8.RuneCountInString(p); n > maxChars {
+			t.Errorf("조각 %d = %d자 > %d", i, n, maxChars)
+		}
+	}
+	if joined := strings.Join(parts, ""); joined != line {
+		t.Errorf("이은 조각이 원래 줄과 다르다: %d자 / %d자", utf8.RuneCountInString(joined), utf8.RuneCountInString(line))
+	}
+	chunks := ChunkMarkdown("# T\n"+line, "x", maxChars)
+	total := 0
+	for _, c := range chunks[1:] { // 첫 청크는 헤더 줄이다
+		total += utf8.RuneCountInString(c.Text)
+	}
+	if total != utf8.RuneCountInString(line) {
+		t.Errorf("청크의 글자 수 %d, want %d (공백이 빠졌다)", total, utf8.RuneCountInString(line))
+	}
+}
+
 // IDX-15: 첫 H1 은 코드 펜스 밖에서 찾는다 (청커와 같은 펜스·헤더 규칙).
 func TestFirstH1IgnoresCodeFences(t *testing.T) {
 	cases := []struct {
@@ -104,6 +133,31 @@ func TestFirstH1IgnoresCodeFences(t *testing.T) {
 		if got != c.want || found != c.found {
 			t.Errorf("FirstH1(%q) = %q %v, want %q %v", c.body, got, found, c.want, c.found)
 		}
+	}
+}
+
+// R4-daemon-b-3: 닫는 # 은 앞에 공백(스페이스·탭)이 있을 때만 뺀다 (CommonMark) — "C#"·"F#" 처럼 낱말에 붙은 # 은 제목의 일부다.
+// 제목(FirstH1)과 청커의 header_path 가 같은 규칙이다.
+func TestHeadingKeepsATrailingHashWithoutASpace(t *testing.T) {
+	cases := map[string]string{
+		"# Kotlin vs C#": "Kotlin vs C#",
+		"# F#":           "F#",
+		"# C# ##":        "C#",
+		"# 제목 #":         "제목",
+		"# 제목 ##   ":     "제목",
+		"# 제목\t#":        "제목",
+		"#  두 칸 앞":       "두 칸 앞",
+	}
+	for line, want := range cases {
+		if got, found := FirstH1(line + "\n본문"); got != want || !found {
+			t.Errorf("FirstH1(%q) = %q %v, want %q", line, got, found, want)
+		}
+		if got := ChunkMarkdown(line+"\n본문", "x", 0); len(got) != 1 || got[0].HeaderPath != want {
+			t.Errorf("header_path(%q) = %+v, want %q", line, got, want)
+		}
+	}
+	if got := paths(ChunkMarkdown("# 언어\n## C#\n본문\n## F# #\n본문", "x", 0)); !reflect.DeepEqual(got, []string{"언어", "언어 > C#", "언어 > F#"}) {
+		t.Errorf("하위 제목 = %v", got)
 	}
 }
 

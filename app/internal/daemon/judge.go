@@ -128,7 +128,10 @@ func (j *Judge) judgeOne(ctx context.Context, d DiffEntry, seen map[string]bool,
 	if model.ParseTime(mine.EventTime).After(model.ParseTime(theirs.EventTime)) {
 		older, newer = theirs, mine
 	}
-	rec := j.Decide(ctx, key, older, newer)
+	rec, err := j.Decide(ctx, key, older, newer)
+	if err != nil {
+		return err
+	}
 	if err := j.State.Ledger.Append(d.Team, rec); err != nil {
 		return err
 	}
@@ -149,8 +152,9 @@ type side struct {
 	text string
 }
 
-// Decide 는 쌍 하나를 판정한다.
-func (j *Judge) Decide(ctx context.Context, pairKey string, older, newer side) state.JudgeRecord {
+// Decide 는 쌍 하나를 판정한다. 종료 신호(ctx)가 LLM 호출을 끊었으면 판정하지 않고 오류다 — LLM 이 판정하지 못한 것(폴백 질문)이
+// 아니므로 원장에 남기지 않고, 호출자가 대기분으로 남겨 다음 boot 가 이어 판정한다.
+func (j *Judge) Decide(ctx context.Context, pairKey string, older, newer side) (state.JudgeRecord, error) {
 	now := time.Now
 	if j.Now != nil {
 		now = j.Now
@@ -160,14 +164,17 @@ func (j *Judge) Decide(ctx context.Context, pairKey string, older, newer side) s
 	if gapDays > j.Config.Judge.WindowDays {
 		base.Decision, base.By = state.DecisionSuperseded, "latest-wins"
 		base.Reason = fmt.Sprintf("유효 시각 차 %.1f일 > %g일", gapDays, j.Config.Judge.WindowDays)
-		return base
+		return base, nil
 	}
 	system, user := judgePrompt(older, newer)
 	raw, ok := j.Ask.Ask(ctx, llm.Input{System: system, User: user, Schema: judgeSchema, Tag: "judge"})
+	if !ok && ctx.Err() != nil {
+		return state.JudgeRecord{}, fmt.Errorf("판정 중 종료 — 대기분으로 남긴다: %w", ctx.Err())
+	}
 	var v Verdict
 	if !ok || json.Unmarshal(raw, &v) != nil || (v.Winner != "old" && v.Winner != "new") {
 		base.Decision, base.By, base.Reason = state.DecisionQuestion, "fallback", "LLM 판정 불가 — 사람이 답한다"
-		return base
+		return base, nil
 	}
 	base.By = "llm"
 	switch {
@@ -182,7 +189,7 @@ func (j *Judge) Decide(ctx context.Context, pairKey string, older, newer side) s
 		base.Decision, base.Reason = state.DecisionSuperseded, "모순, 고확신 — 구판이 사실"
 		base.Old, base.New = newer.Side, older.Side
 	}
-	return base
+	return base, nil
 }
 
 // judgePrompt 는 판정 질의(시스템 프롬프트, 본문)다. 문서 본문은 질의마다 바뀌는 난수 태그로 감싼다 — 본문이 구분자를 흉내 내거나

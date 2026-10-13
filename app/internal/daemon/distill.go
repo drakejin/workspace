@@ -13,7 +13,6 @@ import (
 
 	"github.com/drakejin/workspace/app/internal/config"
 	"github.com/drakejin/workspace/app/internal/document"
-	"github.com/drakejin/workspace/app/internal/ingest"
 	"github.com/drakejin/workspace/app/internal/llm"
 	"github.com/drakejin/workspace/app/internal/model"
 	"github.com/drakejin/workspace/app/internal/opensearch"
@@ -31,6 +30,10 @@ summary 는 검색 결과 카드용 한두 문장, 한국어. 문서에 없는 �
 	distillRetryMax  = time.Hour
 	// distillRetryMaxShift 는 백오프를 두 배로 늘리는 횟수의 상한이다 (그 뒤로는 distillRetryMax)
 	distillRetryMaxShift = 10
+	// distillMaxAttempts 는 같은 본문(body_sha)의 증류를 시도하는 상한이다 (첫 시도 포함). 다 실패하면 포기하고 알린다 — 늘 같은 식으로
+	// 실패하는 본문(스키마 불일치·빈 요약)이 데몬이 도는 내내 매시간 LLM(기본 opus)을 부르지 않게. 본문이 바뀌면 처음부터 다시
+	// 시도하고, 데몬을 다시 띄우면 boot 백필이 한 번 더 넣는다. 백오프로 첫 실패 뒤 약 두 시간에 걸쳐 시도한다
+	distillMaxAttempts = 8
 )
 
 var distillSchema = map[string]any{
@@ -55,8 +58,8 @@ type DistillJob struct {
 // DistillQueue 는 증류 큐(사이클 E)다. 캐시 키는 본문 sha — hit 면 LLM 0회, miss 면 로컬 claude 로
 // {summary, entities} 를 뽑아 .cache/distill 원장에 append 하고 인덱스에 반영한다.
 // 색인 사이클과 분리된 비동기 큐라 문서가 한꺼번에 바뀌어도 사이클이 막히지 않는다.
-// 실패는 그 문서만 건너뛰고, 백오프(distillRetryBase 부터 두 배씩, 최대 distillRetryMax)가 지난 뒤의 사이클이 다시 넣는다.
-// 데몬이 다시 뜨면 부팅 백필(요약이 빈 문서)이 이어받는다.
+// 실패는 그 문서만 건너뛰고, 백오프(distillRetryBase 부터 두 배씩, 최대 distillRetryMax)가 지난 뒤의 사이클이 다시 넣는다 —
+// 같은 본문은 distillMaxAttempts 번까지. 데몬이 다시 뜨면 부팅 백필(요약이 빈 문서)이 이어받는다.
 type DistillQueue struct {
 	ctx   context.Context
 	os    opensearch.Client
@@ -134,28 +137,41 @@ func (q *DistillQueue) dueRetries(diff []DiffEntry) []DistillJob {
 	return due
 }
 
-// recordLocked 는 작업 결과를 다시 시도 목록에 반영한다: 성공이면 지우고, 실패면 백오프 뒤로 미룬다(기다릴 시간과 true).
-// 종료 중(ctx 끝)의 실패는 미루지 않는다 — 다시 뜬 데몬의 부팅 백필이 이어받는다.
-func (q *DistillQueue) recordLocked(job DistillJob, err error) (time.Duration, bool) {
+// retryOutcome 은 작업 결과를 다시 시도 목록에 반영한 결과다.
+type retryOutcome struct {
+	wait     time.Duration // 다시 시도하기까지 기다리는 시간 (retrying 일 때)
+	retrying bool
+	gaveUp   bool // 같은 본문이 distillMaxAttempts 번 실패해 포기했다
+	attempts int
+}
+
+// recordLocked 는 작업 결과를 다시 시도 목록에 반영한다: 성공이면 지우고, 실패면 백오프 뒤로 미루고, 같은 본문이
+// distillMaxAttempts 번 실패했으면 목록에서 빼고 포기한다. 종료 중(ctx 끝)의 실패는 미루지 않는다 — 다시 뜬 데몬의 부팅 백필이
+// 이어받는다.
+func (q *DistillQueue) recordLocked(job DistillJob, err error) retryOutcome {
 	key := docKey(job.Team, job.SourcePath)
 	if err == nil {
 		if r, ok := q.failed[key]; ok && r.job.BodySHA == job.BodySHA {
 			delete(q.failed, key)
 		}
-		return 0, false
+		return retryOutcome{}
 	}
 	if q.ctx.Err() != nil {
-		return 0, false
+		return retryOutcome{}
 	}
 	r := q.failed[key]
 	if r.job.BodySHA != job.BodySHA {
-		r = retryJob{job: job} // 새 본문 — 백오프를 처음부터
+		r = retryJob{job: job} // 새 본문 — 백오프와 시도 수를 처음부터
 	}
 	r.attempts++
+	if r.attempts >= distillMaxAttempts {
+		delete(q.failed, key)
+		return retryOutcome{gaveUp: true, attempts: r.attempts}
+	}
 	wait := retryWait(r.attempts)
 	r.nextAt = q.now().Add(wait)
 	q.failed[key] = r
-	return wait, true
+	return retryOutcome{wait: wait, retrying: true, attempts: r.attempts}
 }
 
 // Enqueue 는 작업을 넣는다. 같은 (팀, 경로, 본문) 은 한 번만. 본문이 없는 문서(빈 파일·frontmatter 만)는 요약할 것이
@@ -184,7 +200,7 @@ func (q *DistillQueue) pumpLocked() {
 		go func() {
 			err := q.process(job)
 			q.mu.Lock()
-			wait, retrying := q.recordLocked(job, err)
+			out := q.recordLocked(job, err)
 			q.active--
 			delete(q.queued, jobKey(job))
 			q.pumpLocked()
@@ -192,13 +208,20 @@ func (q *DistillQueue) pumpLocked() {
 				q.idle.Broadcast()
 			}
 			q.mu.Unlock()
-			switch {
-			case retrying:
-				q.log("[distill] %s: %v — %s 뒤 사이클에 다시 시도", job.SourcePath, err, wait)
-			case err != nil:
-				q.log("[distill] %s: %v", job.SourcePath, err)
-			}
+			q.logResult(job, err, out)
 		}()
+	}
+}
+
+// logResult 는 실패한 작업의 처리(다시 시도·포기)를 알린다.
+func (q *DistillQueue) logResult(job DistillJob, err error, out retryOutcome) {
+	switch {
+	case out.gaveUp:
+		q.log("[distill] %s: %v — %d번 실패해 포기한다 (본문이 바뀌거나 데몬을 다시 띄우면 다시 시도한다)", job.SourcePath, err, out.attempts)
+	case out.retrying:
+		q.log("[distill] %s: %v — %s 뒤 사이클에 다시 시도", job.SourcePath, err, out.wait)
+	case err != nil:
+		q.log("[distill] %s: %v", job.SourcePath, err)
 	}
 }
 
@@ -231,7 +254,7 @@ func (q *DistillQueue) process(job DistillJob) error {
 		}
 		q.log("[distill] %s: summary %d자, entities %d", job.SourcePath, len([]rune(facts.Summary)), len(facts.Entities))
 	}
-	indices, err := ingest.ManagedIndices(ctx, q.os)
+	indices, err := managedIndices(ctx, q.os, q.cfg)
 	if err != nil {
 		return err
 	}
