@@ -32,7 +32,7 @@ func TestJudgePromptFencesDocumentsWithANonce(t *testing.T) {
 		return side{Side: state.Side{Path: path, BodySHA: path + "-sha", EventTime: "2026-10-" + day + "T00:00:00Z"}, text: text}
 	}
 	rec := &inputRecorder{}
-	j := &Judge{Config: config.Config{Judge: config.Judge{Enabled: true, WindowDays: 7}}, Ask: rec, Now: time.Now}
+	j := &judge{Config: config.Config{Judge: config.Judge{Enabled: true, WindowDays: 7}}, Ask: rec, Now: time.Now}
 
 	j.Decide(context.Background(), "k", sd("docs/specs/a.md", injected, "10"), sd("docs/specs/b.md", "결제 수수료는 5%다.", "12"))
 	j.Decide(context.Background(), "k", sd("docs/specs/a.md", "하나", "10"), sd("docs/specs/b.md", "둘", "12"))

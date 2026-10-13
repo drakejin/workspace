@@ -139,11 +139,11 @@ func headOf(path string, extra map[string]any) map[string]any {
 	return src
 }
 
-func newCycleReconciler(t *testing.T, fos *cycleOS) *Reconciler {
+func newCycleReconciler(t *testing.T, fos *cycleOS) *reconciler {
 	t.Helper()
 	root := t.TempDir()
 	cfg := config.Config{MetaRepoRoot: root, Workspace: "ws", DefaultTeam: "t", Reconcile: config.Reconcile{MaxFileBytes: 1 << 20}}
-	return &Reconciler{OS: fos, Config: cfg, Judge: state.NewJudgeState(root), Log: t.Logf, coldOwned: map[string]coldOwnedFile{}}
+	return &reconciler{OS: fos, Config: cfg, Judge: state.NewJudgeState(root), Log: t.Logf, coldOwned: map[string]coldOwnedFile{}}
 }
 
 // IDX-9: 수렴은 문서 하나가 실패해도 나머지 문서를 마저 맞추고, 실패는 모아 돌려준다 — 예전에는 첫 실패에서 멈춰 그 뒤 문서는
@@ -240,7 +240,7 @@ func TestGraphAndDistillReadOnlyThisWorkspacesIndices(t *testing.T) {
 	if err := d.cache.Put("t", state.DistillRecord{BodySHA: entry.BodySHA, SourcePath: docA, Summary: "결제 요약"}); err != nil {
 		t.Fatal(err)
 	}
-	job := DistillJob{Team: "t", SourcePath: docA, BodySHA: entry.BodySHA, Title: entry.Title, Body: entry.Body}
+	job := distillJob{Team: "t", SourcePath: docA, BodySHA: entry.BodySHA, Title: entry.Title, Body: entry.Body}
 	if err := d.distill.process(job); err != nil {
 		t.Errorf("증류 반영 = %v", err)
 	}

@@ -219,7 +219,7 @@ func runQuestions(_ context.Context, c *CLI, args []string) (string, error) {
 	if _, err := newFlags("questions").parse(args); err != nil {
 		return "", err
 	}
-	return RenderQuestions(c.Config.MetaRepoRoot)
+	return renderQuestions(c.Config.MetaRepoRoot)
 }
 
 func runAnswer(_ context.Context, c *CLI, args []string) (string, error) {
@@ -231,7 +231,7 @@ func runAnswer(_ context.Context, c *CLI, args []string) (string, error) {
 	if len(rest) != 2 {
 		return "", f.usageErr()
 	}
-	a, ok := ParseAnswer(rest[1])
+	a, ok := parseAnswer(rest[1])
 	if !ok {
 		return "", f.usageErr()
 	}

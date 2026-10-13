@@ -96,7 +96,7 @@ func RestoreAll(ctx context.Context, c opensearch.Client, cfg config.Config, ind
 		if len(rest) == 0 {
 			return fmt.Errorf("%s 를 담은 스냅샷이 없습니다", index)
 		}
-		if err := RestoreIndex(ctx, c, cfg, index, rest[len(rest)-1]); err != nil {
+		if err := restoreIndex(ctx, c, cfg, index, rest[len(rest)-1]); err != nil {
 			return err
 		}
 		rest = rest[:len(rest)-1]

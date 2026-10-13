@@ -118,7 +118,7 @@ date: 2026-10-13
 | --- | --- | --- |
 | 파생물의 유일한 writer, 데몬은 하나 | pid 락. 두 번째 데몬 거부, 1회 색인은 건너뜀 | ✅ `TestDaemonLifecycle/writer_는_하나` |
 | 트리거 boot · 60s 타이머 · watcher(debounce 3s, 내용은 버리는 힌트) | 같음. watcher 는 색인 범위만 연다 | ✅ `TestDaemonRunWatchAndShutdown` |
-| 직렬 1개 + 최대 1회 재실행 | `daemon.Serial` | ✅ |
+| 직렬 1개 + 최대 1회 재실행 | `daemon.serial` | ✅ |
 | A. hot 스캔 → stat/sha diff → 변경분만 | 같음 + sanityMaxFiles. 부분 스캔이면 삭제 보류 | ✅ |
 | B. cold sync (S3 manifest → 인덱스) | 해당 없음 — cold 가 인덱스 스냅샷(발표 설계). 대신 "cold 소유": 같은 내용이 cold 에 있으면 되살리지 않는다 | 🟡 |
 | D. 판정: episodic 만, latest-wins(>7일) → LLM → 질문 | 같음 (workspace·팀 범위, 상대 점수 0.3). 실제 claude(haiku)로 모순 판정 확인 | ✅ |

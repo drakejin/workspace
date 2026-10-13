@@ -81,7 +81,7 @@ func FetchFacets(ctx context.Context, c opensearch.Client, r Request) (Facets, e
 
 // facetsBody 는 필터에 맞는 문서들의 값별 수를 세는 집계 질의다 (문서는 돌려받지 않는다).
 func facetsBody(r Request) map[string]any {
-	q := BuildQuery(Request{Workspace: r.Workspace, Date: r.Date, TimeRange: r.TimeRange, TimeZone: r.TimeZone, Project: r.Project, Topic: r.Topic, DocType: r.DocType, IncludeSuperseded: r.IncludeSuperseded})
+	q := buildQuery(Request{Workspace: r.Workspace, Date: r.Date, TimeRange: r.TimeRange, TimeZone: r.TimeZone, Project: r.Project, Topic: r.Topic, DocType: r.DocType, IncludeSuperseded: r.IncludeSuperseded})
 	terms := func(field string) map[string]any {
 		return map[string]any{"terms": map[string]any{"field": field, "size": MaxFacetValues}}
 	}

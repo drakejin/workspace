@@ -34,12 +34,12 @@ func TestInScope(t *testing.T) {
 }
 
 func TestResolveInsideRoot(t *testing.T) {
-	abs, rel, err := ResolveInsideRoot("/meta", "docs/a.md")
+	abs, rel, err := resolveInsideRoot("/meta", "docs/a.md")
 	if err != nil || abs != "/meta/docs/a.md" || rel != "docs/a.md" {
 		t.Errorf("= %s %s %v", abs, rel, err)
 	}
 	for _, bad := range []string{"../etc/passwd", "/etc/passwd", "docs/../../x"} {
-		if _, _, err := ResolveInsideRoot("/meta", bad); err == nil {
+		if _, _, err := resolveInsideRoot("/meta", bad); err == nil {
 			t.Errorf("%s 는 거부", bad)
 		}
 	}

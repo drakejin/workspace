@@ -449,6 +449,7 @@ repo 를 추가하면 `make init` 을 다시 실행한다 — 이미 있는 repo
 
 - Go 1.25 (`app/mise.toml`). 모든 Go 코드는 `app/` 아래 한 모듈. `gofmt`, `go vet` 통과
 - 외부 세계(OpenSearch, Neo4j, S3, 파일, LLM)에 닿는 컴포넌트는 작은 인터페이스 + unexported 구현, 생성자 주입
+- `internal/` 의 exported 식별자(패키지 수준 func·const·var·type)는 다른 패키지(테스트·e2e 포함)가 쓰는 것만 둔다 — 자기 패키지 안에서만 쓰면 비공개로 (`app/test/code` 가 `make -C app test` 에서 확인한다)
 - Go 개발 명령은 `app/Makefile` 에 있다 (`make -C app <타겟>`, §5.3). 테스트 타겟은 `app/test/run.sh` 를 부른다
 - `make -C app test` = `go test -race ./...` (스택 없이). `make -C app test-e2e`·`test-e2e-slow` 는 루트의 `make memory-init` 으로 스택이 떠 있어야 하고, test-e2e 는 `.cache/coverage.out` 에 커버리지를 남긴다
 - e2e 는 고유 팀·workspace 로 돌고 끝나면 자기 인덱스·스냅샷·그래프만 지운다 — 실제 메모리와 같은 스택을 써도 섞이지 않는다

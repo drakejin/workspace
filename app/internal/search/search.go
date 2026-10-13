@@ -31,7 +31,7 @@ type Request struct {
 	IncludeSuperseded bool // 판정·선언으로 밀린 문서와 deprecate 된 문서도 본다 (기본: 숨김)
 }
 
-// HasFilter 는 질의어 말고 문서를 좁히는 조건이 있는가다. 프로젝트·주제는 BuildQuery 와 같은 정규화한 값으로 본다.
+// HasFilter 는 질의어 말고 문서를 좁히는 조건이 있는가다. 프로젝트·주제는 buildQuery 와 같은 정규화한 값으로 본다.
 func HasFilter(r Request) bool {
 	return r.Date != "" || r.TimeRange.From != "" || r.TimeRange.To != "" || document.NormalizeProject(r.Project) != "" ||
 		document.NormalizeTopic(r.Topic) != "" || r.DocType != ""
@@ -93,8 +93,8 @@ type Result struct {
 // ErrEmptyQuery 는 질의어도 필터도 없다는 뜻이다. 필터의 MCP 입력 이름·CLI 플래그는 부르는 쪽(mcpserver)이 붙인다.
 var ErrEmptyQuery = errors.New("query 가 비어 있습니다 (질의어 없이 가져오려면 필터를 하나 이상 주세요)")
 
-// BuildQuery 는 BM25 multi_match + 필터 질의다.
-func BuildQuery(r Request) map[string]any {
+// buildQuery 는 BM25 multi_match + 필터 질의다.
+func buildQuery(r Request) map[string]any {
 	size := r.Size
 	if size <= 0 {
 		size = defaultSize
@@ -177,7 +177,7 @@ func Search(ctx context.Context, c opensearch.Client, r Request) (Result, error)
 		return Result{}, err
 	}
 	var out opensearch.SearchResponse[model.Chunk]
-	err = c.Do(ctx, http.MethodPost, "/"+alias+"/_search", BuildQuery(r), nil, &out)
+	err = c.Do(ctx, http.MethodPost, "/"+alias+"/_search", buildQuery(r), nil, &out)
 	if opensearch.IsStatus(err, http.StatusNotFound) {
 		return Result{NoIndex: true}, nil
 	}

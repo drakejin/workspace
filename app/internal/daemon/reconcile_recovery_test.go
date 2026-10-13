@@ -66,7 +66,7 @@ func TestReconcileSkipsTombstonesOnAPartialScan(t *testing.T) {
 	if _, diff, err = d.rec.Once(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(diff) != 1 || diff[0].SourcePath != "docs/specs/gone.md" || diff[0].Change != ChangeRemoved {
+	if len(diff) != 1 || diff[0].SourcePath != "docs/specs/gone.md" || diff[0].Change != changeRemoved {
 		t.Errorf("다 읽히면 정말 없는 문서만 지운다: %+v", diff)
 	}
 }
@@ -105,11 +105,11 @@ func TestReconcileKeepsIndexingWhenALedgerCannotBeRead(t *testing.T) {
 	if sum.Indexed != 2 || sum.Removed != 1 {
 		t.Errorf("색인·tombstone 은 마쳐야 한다: %+v\n%s", sum, logs)
 	}
-	changes := map[string]Change{}
+	changes := map[string]changeKind{}
 	for _, e := range diff {
 		changes[e.SourcePath] = e.Change
 	}
-	if changes[docA] != ChangeNew || changes["docs/specs/gone.md"] != ChangeRemoved {
+	if changes[docA] != changeNew || changes["docs/specs/gone.md"] != changeRemoved {
 		t.Errorf("변경분 = %v", changes)
 	}
 	if by, _ := d.rec.SupersededBy(hidden); by != "docs/specs/pay/new.md" {

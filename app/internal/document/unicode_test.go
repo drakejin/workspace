@@ -22,10 +22,10 @@ func TestTopicAndProjectAreNFC(t *testing.T) {
 	if got := NormalizeTopic(nfd("Café Menu")); got != "café-menu" {
 		t.Errorf("NormalizeTopic(NFD Café Menu) = %q", got)
 	}
-	if got := FactsFromPath("docs/feature/" + nfd("환불정책") + "/" + nfd("메모.md")); got.Topic != "환불정책" {
+	if got := factsFromPath("docs/feature/" + nfd("환불정책") + "/" + nfd("메모.md")); got.Topic != "환불정책" {
 		t.Errorf("경로의 NFD 주제 = %q", got.Topic)
 	}
-	if got := FactsFromPath("docs/repository/" + nfd("결제") + "/adr/0001.md"); got.Repo != "결제" {
+	if got := factsFromPath("docs/repository/" + nfd("결제") + "/adr/0001.md"); got.Repo != "결제" {
 		t.Errorf("경로의 NFD 프로젝트 = %q", got.Repo)
 	}
 	fm := markdown.Frontmatter{"topic": nfd("환불 정책"), "project": nfd("결제 서비스")}

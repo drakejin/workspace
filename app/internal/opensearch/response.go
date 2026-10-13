@@ -26,8 +26,8 @@ type SearchResponse[T any] struct {
 	} `json:"hits"`
 }
 
-// ScanPageSize 는 Scan 이 한 번에 읽는 건수다.
-const ScanPageSize = 1000
+// scanPageSize 는 Scan 이 한 번에 읽는 건수다.
+const scanPageSize = 1000
 
 // ChunkSort 는 청크를 유일하게 정렬하는 키다 (workspace·team·경로·청크 번호가 청크 id 의 재료).
 // 인덱스를 옮기다 끊기면 같은 청크가 두 인덱스에 있을 수 있어 _index 로 마저 가른다 — search_after 가 페이지 경계에서
@@ -45,7 +45,7 @@ var ChunkSort = []any{
 func Scan[T any](ctx context.Context, c Client, indices string, query map[string]any, source []string, sort []any, fn func(Hit[T]) error) error {
 	var after []any
 	for {
-		body := map[string]any{"size": ScanPageSize, "query": query, "sort": sort}
+		body := map[string]any{"size": scanPageSize, "query": query, "sort": sort}
 		if source != nil {
 			body["_source"] = source
 		}
@@ -65,7 +65,7 @@ func Scan[T any](ctx context.Context, c Client, indices string, query map[string
 				return err
 			}
 		}
-		if len(out.Hits.Hits) < ScanPageSize {
+		if len(out.Hits.Hits) < scanPageSize {
 			return nil
 		}
 		after = out.Hits.Hits[len(out.Hits.Hits)-1].Sort

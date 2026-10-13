@@ -16,12 +16,12 @@ const (
 	DocNote      DocType = "note"
 )
 
-// DocTypes 는 허용되는 문서 종류 전부다.
-var DocTypes = []DocType{DocSpec, DocADR, DocPRD, DocPlan, DocKnowledge, DocGuide, DocNote}
+// docTypes 는 허용되는 문서 종류 전부다.
+var docTypes = []DocType{DocSpec, DocADR, DocPRD, DocPlan, DocKnowledge, DocGuide, DocNote}
 
 // ParseDocType 은 문자열을 DocType 으로 바꾼다. 모르는 값이면 false.
 func ParseDocType(s string) (DocType, bool) {
-	for _, t := range DocTypes {
+	for _, t := range docTypes {
 		if string(t) == s {
 			return t, true
 		}

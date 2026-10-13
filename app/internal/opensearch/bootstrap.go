@@ -46,7 +46,7 @@ func BootstrapClaim(ctx context.Context, c Client, cfg config.Config) error {
 }
 
 func bootstrap(ctx context.Context, c Client, cfg config.Config, mode clusterWrite, warn warnFunc) error {
-	if err := c.Do(ctx, http.MethodPut, "/_index_template/"+TemplateName, IndexTemplate(), nil, nil); err != nil {
+	if err := c.Do(ctx, http.MethodPut, "/_index_template/"+templateName, indexTemplate(), nil, nil); err != nil {
 		return fmt.Errorf("index template: %w", err)
 	}
 	// 템플릿은 새 인덱스에만 붙는다. 이미 있는 인덱스에는 새 필드를 더한다 (추가만이라 안전)
@@ -59,10 +59,10 @@ func bootstrap(ctx context.Context, c Client, cfg config.Config, mode clusterWri
 	if err := ensurePolicy(ctx, c, HotColdPolicy, HotColdPolicyBody(cfg.HotDays, cfg.Snapshot.Repository), mode, warn); err != nil {
 		return fmt.Errorf("ISM %s: %w", HotColdPolicy, err)
 	}
-	if err := ensurePolicy(ctx, c, KeepPolicy, KeepPolicyBody(), mode, warn); err != nil {
-		return fmt.Errorf("ISM %s: %w", KeepPolicy, err)
+	if err := ensurePolicy(ctx, c, keepPolicy, keepPolicyBody(), mode, warn); err != nil {
+		return fmt.Errorf("ISM %s: %w", keepPolicy, err)
 	}
-	if err := SyncOrgAliases(ctx, c, cfg); err != nil {
+	if err := syncOrgAliases(ctx, c, cfg); err != nil {
 		return fmt.Errorf("org alias: %w", err)
 	}
 	return nil
@@ -248,15 +248,15 @@ func IndexAliases(team, org string) map[string]any {
 func EnsureIndex(ctx context.Context, c Client, index, team, org string) error {
 	body := map[string]any{"aliases": IndexAliases(team, org), "mappings": map[string]any{"properties": Properties()}}
 	err := c.Do(ctx, http.MethodPut, "/"+index, body, nil, nil)
-	if HasType(err, "resource_already_exists_exception") {
+	if hasType(err, "resource_already_exists_exception") {
 		return nil
 	}
 	return err
 }
 
-// SyncOrgAliases 는 이 workspace 팀들의 인덱스에 org alias 를 MEMORY_TEAM_ORGS 대로 맞춘다 (팀을 org 로 옮기거나 뺄 때).
+// syncOrgAliases 는 이 workspace 팀들의 인덱스에 org alias 를 MEMORY_TEAM_ORGS 대로 맞춘다 (팀을 org 로 옮기거나 뺄 때).
 // 다른 meta-repo 의 팀 인덱스는 건드리지 않는다 — 그쪽 설정은 그쪽 bootstrap 이 맞춘다.
-func SyncOrgAliases(ctx context.Context, c Client, cfg config.Config) error {
+func syncOrgAliases(ctx context.Context, c Client, cfg config.Config) error {
 	owned, err := WorkspaceTeams(ctx, c, cfg.Workspace)
 	if err != nil {
 		return err

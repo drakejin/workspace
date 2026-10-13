@@ -33,10 +33,10 @@ func (hitsOS) Bulk(context.Context, []any, url.Values) (opensearch.BulkResponse,
 func TestJudgeSkipsBlankDocuments(t *testing.T) {
 	os := &captureOS{}
 	cfg := config.Config{Workspace: "ws", Judge: config.Judge{Enabled: true, WindowDays: 7, MinScore: 0.3}}
-	j := &Judge{OS: os, Config: cfg, State: state.NewJudgeState(t.TempDir()), Log: t.Logf}
+	j := &judge{OS: os, Config: cfg, State: state.NewJudgeState(t.TempDir()), Log: t.Logf}
 	for _, body := range blankBodies {
-		d := DiffEntry{SourcePath: "docs/a.md", Team: "t", Kind: model.KindEpisodic, Change: ChangeNew, BodySHA: "x", Body: body}
-		if sum, err := j.Run(context.Background(), []DiffEntry{d}); err != nil || sum.Candidates != 0 {
+		d := diffEntry{SourcePath: "docs/a.md", Team: "t", Kind: model.KindEpisodic, Change: changeNew, BodySHA: "x", Body: body}
+		if sum, err := j.Run(context.Background(), []diffEntry{d}); err != nil || sum.Candidates != 0 {
 			t.Errorf("Run(%q) = %+v %v", body, sum, err)
 		}
 	}
@@ -49,13 +49,13 @@ func TestJudgeSkipsBlankDocuments(t *testing.T) {
 // 숨기거나, 문서가 빈 문서에 밀리지 않게.
 func TestBestNeighborSkipsBlankDocuments(t *testing.T) {
 	self := `{"_score":2.0,"_source":{"source_path":"docs/a.md","body_sha":"a","text":"배송비는 3000원이다"}}`
-	d := DiffEntry{SourcePath: "docs/a.md", Team: "t", Kind: model.KindEpisodic, Body: "배송비는 3000원이다"}
+	d := diffEntry{SourcePath: "docs/a.md", Team: "t", Kind: model.KindEpisodic, Body: "배송비는 3000원이다"}
 	blank := hitsOS{hits: `[` + self + `,{"_score":1.9,"_source":{"source_path":"docs/b.md","body_sha":"b","text":""}}]`}
-	if n, err := BestNeighbor(context.Background(), blank, d, "ws", 0.3); err != nil || n != nil {
+	if n, err := bestNeighbor(context.Background(), blank, d, "ws", 0.3); err != nil || n != nil {
 		t.Errorf("빈 문서가 이웃이다: %+v %v", n, err)
 	}
 	full := hitsOS{hits: `[` + self + `,{"_score":1.9,"_source":{"source_path":"docs/b.md","body_sha":"b","text":"배송비는 3500원이다"}}]`}
-	if n, err := BestNeighbor(context.Background(), full, d, "ws", 0.3); err != nil || n == nil || n.SourcePath != "docs/b.md" {
+	if n, err := bestNeighbor(context.Background(), full, d, "ws", 0.3); err != nil || n == nil || n.SourcePath != "docs/b.md" {
 		t.Errorf("본문이 있는 문서는 이웃이다: %+v %v", n, err)
 	}
 }
@@ -64,10 +64,10 @@ func TestBestNeighborSkipsBlankDocuments(t *testing.T) {
 func TestDistillSkipsBlankDocuments(t *testing.T) {
 	ask := &stubAsker{raw: `{"summary":"요약","entities":[]}`, ok: true}
 	cfg := config.Config{Workspace: "ws", Distill: config.Distill{Enabled: true, Concurrency: 1}}
-	q := NewDistillQueue(context.Background(), &captureOS{}, cfg, state.NewDistillCache(t.TempDir()), ask, t.Logf)
-	var diff []DiffEntry
+	q := newDistillQueue(context.Background(), &captureOS{}, cfg, state.NewDistillCache(t.TempDir()), ask, t.Logf)
+	var diff []diffEntry
 	for i, body := range blankBodies {
-		diff = append(diff, DiffEntry{Team: "t", SourcePath: "docs/a.md", Change: ChangeNew, BodySHA: string(rune('a' + i)), Body: body})
+		diff = append(diff, diffEntry{Team: "t", SourcePath: "docs/a.md", Change: changeNew, BodySHA: string(rune('a' + i)), Body: body})
 	}
 	q.EnqueueDiff(diff)
 	q.Settle()

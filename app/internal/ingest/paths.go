@@ -13,10 +13,10 @@ import (
 
 var docExtensions = map[string]bool{".md": true, ".markdown": true, ".mdx": true}
 
-// IgnoredSegments 는 어디에 있든 색인도 watch 도 하지 않는 디렉토리다 — 의존성·VCS·캐시·작업 사본이다. .worktrees 는 작업 중
+// ignoredSegments 는 어디에 있든 색인도 watch 도 하지 않는 디렉토리다 — 의존성·VCS·캐시·작업 사본이다. .worktrees 는 작업 중
 // 사본이라 원본과 중복된다. 코드 트리의 빌드 산출물 이름(build·dist·bin·coverage·vendor)은 두지 않는다: 색인 범위(docs/**,
 // main/{repo}/docs/**) 안에서는 docs/feature/build/ 처럼 주제 디렉토리 이름일 수 있고, 코드 트리는 InScope 가 내려가지 않는다.
-var IgnoredSegments = map[string]bool{
+var ignoredSegments = map[string]bool{
 	"node_modules": true, ".git": true, ".worktrees": true, ".cache": true, ".next": true, ".claude": true,
 }
 
@@ -27,7 +27,7 @@ func IsIndexable(rel string) bool {
 		return false
 	}
 	for _, seg := range strings.Split(rel, "/") {
-		if IgnoredSegments[seg] {
+		if ignoredSegments[seg] {
 			return false
 		}
 	}
@@ -44,7 +44,7 @@ func InScope(relDir string) bool {
 	}
 	parts := strings.Split(rel, "/")
 	for _, p := range parts {
-		if IgnoredSegments[p] {
+		if ignoredSegments[p] {
 			return false
 		}
 	}
@@ -58,8 +58,8 @@ func InScope(relDir string) bool {
 	}
 }
 
-// ResolveInsideRoot 는 사용자 입력 경로를 meta-repo 안의 절대/상대 경로로 바꾼다. 밖으로 나가면 실패한다.
-func ResolveInsideRoot(root, input string) (abs, rel string, err error) {
+// resolveInsideRoot 는 사용자 입력 경로를 meta-repo 안의 절대/상대 경로로 바꾼다. 밖으로 나가면 실패한다.
+func resolveInsideRoot(root, input string) (abs, rel string, err error) {
 	abs = input
 	if !filepath.IsAbs(abs) {
 		abs = filepath.Join(root, input)
@@ -72,9 +72,9 @@ func ResolveInsideRoot(root, input string) (abs, rel string, err error) {
 	return abs, filepath.ToSlash(rel), nil
 }
 
-// CanonicalRel 은 문서의 정체(source_path)로 쓰는 꼴이다: posix 구분자, 유니코드 NFC. 스캔(디스크 이름, NFD 일 수 있다)과
+// canonicalRel 은 문서의 정체(source_path)로 쓰는 꼴이다: posix 구분자, 유니코드 NFC. 스캔(디스크 이름, NFD 일 수 있다)과
 // ingest_path(사람이 친 NFC)가 같은 파일을 같은 문서로 맞춘다.
-func CanonicalRel(rel string) string {
+func canonicalRel(rel string) string {
 	return document.CanonicalPath(filepath.ToSlash(rel))
 }
 
@@ -88,11 +88,11 @@ func ResolveOnDisk(root, input string) (abs, rel string, err error) {
 
 // resolveOnDisk 는 ResolveOnDisk 이되 디렉토리 항목 찾기(match)를 고를 수 있다 — Indexer 는 나열을 다시 쓰는 것을 꽂는다.
 func resolveOnDisk(root, input string, match document.EntryMatcher) (abs, rel string, err error) {
-	if _, rel, err = ResolveInsideRoot(root, input); err != nil {
+	if _, rel, err = resolveInsideRoot(root, input); err != nil {
 		return "", "", err
 	}
 	onDisk, _ := document.OnDiskSpelling(root, rel, match)
-	return filepath.Join(root, filepath.FromSlash(onDisk)), CanonicalRel(onDisk), nil
+	return filepath.Join(root, filepath.FromSlash(onDisk)), canonicalRel(onDisk), nil
 }
 
 // LiveUnderOtherSpelling 은 rel 의 파일이 디스크에 다른 철자(대소문자·NFC/NFD)로 살아 있는가다 — rel 로 os.Stat 은 되는데
@@ -103,12 +103,12 @@ func LiveUnderOtherSpelling(root, rel string) bool {
 		return false
 	}
 	onDisk, found := document.OnDiskSpelling(root, rel, document.MatchEntry)
-	return found && CanonicalRel(onDisk) != rel
+	return found && canonicalRel(onDisk) != rel
 }
 
-// RealInsideRoot 는 abs 가 심볼릭 링크를 다 풀어도 root 안인지 본다. 링크로 meta-repo 밖의 파일을 읽어
-// 색인·cold store 에 옮기지 않게 한다 (ResolveInsideRoot 는 경로 문자열만 본다). 파일이 없으면 통과시킨다 — 읽는 쪽이 실패한다.
-func RealInsideRoot(root, abs string) error {
+// realInsideRoot 는 abs 가 심볼릭 링크를 다 풀어도 root 안인지 본다. 링크로 meta-repo 밖의 파일을 읽어
+// 색인·cold store 에 옮기지 않게 한다 (resolveInsideRoot 는 경로 문자열만 본다). 파일이 없으면 통과시킨다 — 읽는 쪽이 실패한다.
+func realInsideRoot(root, abs string) error {
 	real, err := filepath.EvalSymlinks(abs)
 	if err != nil {
 		return nil

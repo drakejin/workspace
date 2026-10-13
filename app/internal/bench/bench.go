@@ -176,7 +176,7 @@ func Run(ctx context.Context, suite Suite, opt Options, run Runner) ([]Result, e
 				args := claudeArgs(q.Prompt, mode, opt, mcpConfig)
 				start := time.Now()
 				stdout, err := run(ctx, opt.Root, args)
-				r := ParseStream(stdout)
+				r := parseStream(stdout)
 				r.QuestionID, r.Mode, r.Run = q.ID, mode, i
 				if r.DurationMs == 0 {
 					r.DurationMs = time.Since(start).Milliseconds()
@@ -244,8 +244,8 @@ func writeMCPConfig(opt Options) (map[string]string, func(), error) {
 	return paths, func() { os.RemoveAll(dir) }, nil
 }
 
-// ParseStream 은 claude -p --output-format stream-json 출력에서 도구 호출과 result 를 읽는다.
-func ParseStream(stdout string) Result {
+// parseStream 은 claude -p --output-format stream-json 출력에서 도구 호출과 result 를 읽는다.
+func parseStream(stdout string) Result {
 	r := Result{ToolCalls: map[string]int{}}
 	sc := bufio.NewScanner(strings.NewReader(stdout))
 	sc.Buffer(make([]byte, 64*1024), 64*1024*1024)

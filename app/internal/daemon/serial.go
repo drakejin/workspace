@@ -2,8 +2,8 @@ package daemon
 
 import "sync"
 
-// Serial 은 트리거(boot/timer/watch)가 몰려도 작업을 항상 직렬 1개 + 최대 1회 재실행으로 줄인다.
-type Serial struct {
+// serial 은 트리거(boot/timer/watch)가 몰려도 작업을 항상 직렬 1개 + 최대 1회 재실행으로 줄인다.
+type serial struct {
 	task func(reason string)
 
 	mu      sync.Mutex
@@ -16,11 +16,11 @@ type rerun struct {
 	done   chan struct{}
 }
 
-// NewSerial 은 task 를 감싼 Serial 이다.
-func NewSerial(task func(reason string)) *Serial { return &Serial{task: task} }
+// newSerial 은 task 를 감싼 serial 이다.
+func newSerial(task func(reason string)) *serial { return &serial{task: task} }
 
 // Run 은 작업을 돌린다. 이미 돌고 있으면 재실행 1회를 예약하고 그 재실행이 끝날 때까지 기다린다.
-func (s *Serial) Run(reason string) {
+func (s *serial) Run(reason string) {
 	s.mu.Lock()
 	if s.running {
 		if s.rerun == nil {

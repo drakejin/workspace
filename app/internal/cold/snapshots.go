@@ -149,7 +149,7 @@ func TeamInWorkspace(ctx context.Context, c opensearch.Client, store Store, work
 	if owned[team] {
 		return true, nil
 	}
-	keys, err := store.List(ctx, TeamPrefix(team))
+	keys, err := store.List(ctx, teamPrefix(team))
 	if err != nil {
 		return false, fmt.Errorf("cold store %s: %w", team, err)
 	}
@@ -241,10 +241,10 @@ func DeleteSnapshot(ctx context.Context, c opensearch.Client, cfg config.Config,
 	return nil
 }
 
-// RestoreIndex 는 스냅샷에서 인덱스를 되살린다. 복원본은 ISM 자동 관리에서 뺀다 — 원래 생성일을 유지하므로
+// restoreIndex 는 스냅샷에서 인덱스를 되살린다. 복원본은 ISM 자동 관리에서 뺀다 — 원래 생성일을 유지하므로
 // 그대로 두면 ISM 이 바로 다시 cold 로 보낸다. 검색 alias 없이 되살린다 — restore_cold 는 다 합치고 deprecate 표시를
 // 입힌 뒤에 alias 를 붙이고(Restore), archive 는 alias 없이 잠깐 열어 고친다.
-func RestoreIndex(ctx context.Context, c opensearch.Client, cfg config.Config, index, snapshot string) error {
+func restoreIndex(ctx context.Context, c opensearch.Client, cfg config.Config, index, snapshot string) error {
 	if err := restoreSnapshot(ctx, c, cfg, snapshot, restoreBody(index)); err != nil {
 		return fmt.Errorf("restore %s from %s: %w", index, snapshot, err)
 	}

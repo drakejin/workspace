@@ -16,9 +16,9 @@ import (
 	"github.com/drakejin/workspace/app/internal/state"
 )
 
-// ComposeProject 는 docker-compose.yml 의 name 이다. META_REPO_ROOT 가 다른 meta-repo 를 가리켜도
+// composeProject 는 docker-compose.yml 의 name 이다. META_REPO_ROOT 가 다른 meta-repo 를 가리켜도
 // 스택을 이 이름으로 찾는다.
-const ComposeProject = "drakejin-workspace-memory"
+const composeProject = "drakejin-workspace-memory"
 
 // heartbeatStaleFactor 는 heartbeat 가 interval 의 몇 배를 넘으면 멈춘 것으로 볼지다.
 const heartbeatStaleFactor = 3
@@ -55,7 +55,7 @@ func NewProbe(cfg config.Config, os opensearch.Client, g graph.Store) Probe {
 func (p *liveProbe) Containers(ctx context.Context) (map[string]string, bool) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "docker", "compose", "-p", ComposeProject, "ps", "--format", "{{.Service}} {{.State}}").Output()
+	out, err := exec.CommandContext(ctx, "docker", "compose", "-p", composeProject, "ps", "--format", "{{.Service}} {{.State}}").Output()
 	if err != nil {
 		return nil, false
 	}

@@ -121,11 +121,11 @@ func TestAskDoesNotCallACancelledCallAFallback(t *testing.T) {
 }
 
 func TestParseEnvelope(t *testing.T) {
-	env, ok := ParseEnvelope("{\"subtype\":\"a\"}\nnoise\n{\"subtype\":\"b\"}")
+	env, ok := parseEnvelope("{\"subtype\":\"a\"}\nnoise\n{\"subtype\":\"b\"}")
 	if !ok || env.Subtype != "b" {
 		t.Errorf("env = %+v", env)
 	}
-	if _, ok := ParseEnvelope("nothing"); ok {
+	if _, ok := parseEnvelope("nothing"); ok {
 		t.Error("없으면 false")
 	}
 }

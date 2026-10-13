@@ -108,7 +108,7 @@ func (ix *indexer) prepare(ctx context.Context, abs, rel, teamOverride string) (
 	if !IsIndexable(rel) {
 		return Prepared{}, fmt.Errorf("색인 대상이 아닙니다: %s", rel)
 	}
-	if err := RealInsideRoot(ix.Config.MetaRepoRoot, abs); err != nil {
+	if err := realInsideRoot(ix.Config.MetaRepoRoot, abs); err != nil {
 		return Prepared{}, err
 	}
 	content, info, err := ix.readGated(abs, rel)
@@ -170,7 +170,7 @@ func (ix *indexer) readGated(abs, rel string) ([]byte, fs.FileInfo, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("stat %s: %w", rel, err)
 	}
-	reason, err := Gate(abs, info.Size(), ix.Config.Reconcile.MaxFileBytes)
+	reason, err := gate(abs, info.Size(), ix.Config.Reconcile.MaxFileBytes)
 	if err != nil {
 		return nil, nil, fmt.Errorf("read %s: %w", rel, err)
 	}
@@ -396,7 +396,7 @@ func (ix *indexer) walkIndexable(dir string) ([]docFile, error) {
 		if err != nil {
 			return err
 		}
-		rel = CanonicalRel(rel)
+		rel = canonicalRel(rel)
 		if d.IsDir() && !InScope(rel) {
 			return filepath.SkipDir
 		}
@@ -412,7 +412,7 @@ func (ix *indexer) walkIndexable(dir string) ([]docFile, error) {
 // RemoveFile 은 문서를 색인과 청크 JSONL 에서 뺀다. 색인에 있는 source_path 를 그대로 지운다 — 색인 규칙이 바뀌었거나 옛 cold
 // 청크를 reload 해 색인 범위 밖이 된 경로도 지운다 (범위 밖이라고 건너뛰면 tombstone·audit -apply 가 지웠다고 하는데 남는다).
 func (ix *indexer) RemoveFile(ctx context.Context, input string, indices []string) (int, error) {
-	_, rel, err := ResolveInsideRoot(ix.Config.MetaRepoRoot, input)
+	_, rel, err := resolveInsideRoot(ix.Config.MetaRepoRoot, input)
 	if err != nil {
 		return 0, err
 	}

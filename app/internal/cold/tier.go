@@ -25,13 +25,13 @@ type TierAction string
 
 const (
 	TierMoved    TierAction = "tiered"
-	TierWould    TierAction = "would-tier"
+	tierWould    TierAction = "would-tier"
 	TierKept     TierAction = "kept-hot"
 	TierRestored TierAction = "skipped-restored"
 	TierPruned   TierAction = "pruned"
 	// TierDropped 는 문서가 하나도 없는 지난달 인덱스를 스냅샷 없이 지운 것이다 (그 달을 cold 가 가졌다고 남기지 않는다).
 	TierDropped   TierAction = "dropped-empty"
-	TierWouldDrop TierAction = "would-drop-empty"
+	tierWouldDrop TierAction = "would-drop-empty"
 	// TierKeptUncommitted 는 cold 로 간 달의 hot 원본을 git 이 되살릴 수 없어(커밋하지 않았거나 커밋 뒤 고쳤다) 남긴 것이다.
 	TierKeptUncommitted TierAction = "kept-uncommitted"
 )
@@ -154,7 +154,7 @@ func tierOne(ctx context.Context, c opensearch.Client, store Store, cfg config.C
 		d.Action = TierKept
 		return d, nil
 	case opt.DryRun:
-		d.Action = TierWould
+		d.Action = tierWould
 		return d, nil
 	}
 	return moveToCold(ctx, c, store, cfg, opt, d)
@@ -170,7 +170,7 @@ func dropEmpty(ctx context.Context, c opensearch.Client, name string, cutoff tim
 		d.Action = TierKept
 		return d, nil
 	case dryRun:
-		d.Action = TierWouldDrop
+		d.Action = tierWouldDrop
 		return d, nil
 	}
 	// 쓰기를 막고 다시 센다 — 그 사이 들어온 문서가 있으면 지우지 않는다 (다음 tier 가 스냅샷과 함께 옮긴다)

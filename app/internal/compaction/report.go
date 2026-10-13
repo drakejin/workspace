@@ -70,8 +70,8 @@ func Build(ctx context.Context, c opensearch.Client, cfg config.Config, team str
 	return Report{
 		Team:      team,
 		Cutoff:    cutoff,
-		Expired:   FindExpired(chunks, cutoff),
-		Conflicts: FindConflicts(chunks),
+		Expired:   findExpired(chunks, cutoff),
+		Conflicts: findConflicts(chunks),
 	}, nil
 }
 
@@ -93,8 +93,8 @@ func fetch(ctx context.Context, c opensearch.Client, cfg config.Config, team str
 	return chunks, nil
 }
 
-// FindExpired 는 문서의 가장 최신 청크가 기준보다 오래된 episodic 문서다. knowledge 는 노화하지 않는다.
-func FindExpired(chunks []model.Chunk, cutoff time.Time) []ExpiredDoc {
+// findExpired 는 문서의 가장 최신 청크가 기준보다 오래된 episodic 문서다. knowledge 는 노화하지 않는다.
+func findExpired(chunks []model.Chunk, cutoff time.Time) []ExpiredDoc {
 	newest := map[string]model.Chunk{}
 	for _, c := range chunks {
 		if prev, ok := newest[c.SourcePath]; !ok || prev.EventTime < c.EventTime {
@@ -117,9 +117,9 @@ func FindExpired(chunks []model.Chunk, cutoff time.Time) []ExpiredDoc {
 	return out
 }
 
-// FindConflicts 는 같은 repo 안에서 같은 주제(헤더 경로의 마지막 제목)를 서로 다른 문서가 다루면 후보로 낸다.
+// findConflicts 는 같은 repo 안에서 같은 주제(헤더 경로의 마지막 제목)를 서로 다른 문서가 다루면 후보로 낸다.
 // 이미 밀린(superseded) 문서는 판정이 끝났으니 빼고, 흔한 섹션 제목은 주제로 보지 않는다.
-func FindConflicts(chunks []model.Chunk) []Conflict {
+func findConflicts(chunks []model.Chunk) []Conflict {
 	type group struct {
 		repo, topic string
 		chunks      []model.Chunk

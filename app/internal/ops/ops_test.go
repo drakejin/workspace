@@ -98,14 +98,14 @@ func TestRenderStatusShowsColdKept(t *testing.T) {
 
 func TestQuestionsAndAnswer(t *testing.T) {
 	root := t.TempDir()
-	if out, _ := RenderQuestions(root); !strings.Contains(out, "없습니다") {
+	if out, _ := renderQuestions(root); !strings.Contains(out, "없습니다") {
 		t.Error("빈 질문")
 	}
 	s := state.NewJudgeState(root)
 	old := state.Side{Path: "a.md", BodySHA: "a", EventTime: "2026-10-01T00:00:00Z"}
 	neu := state.Side{Path: "b.md", BodySHA: "b", EventTime: "2026-10-02T00:00:00Z"}
 	_ = s.Ledger.Append("t", state.JudgeRecord{PairKey: "k", Decision: state.DecisionQuestion, Old: old, New: neu, Reason: "?"})
-	out, _ := RenderQuestions(root)
+	out, _ := renderQuestions(root)
 	if !strings.Contains(out, "old: a.md (2026-10-01)") {
 		t.Errorf("questions = %s", out)
 	}
@@ -113,7 +113,7 @@ func TestQuestionsAndAnswer(t *testing.T) {
 		answer   Answer
 		decision state.Decision
 		loser    string
-	}{{AnswerLatest, state.DecisionSuperseded, "a.md"}, {AnswerOld, state.DecisionSuperseded, "b.md"}, {AnswerKeep, state.DecisionKeep, "a.md"}}
+	}{{AnswerLatest, state.DecisionSuperseded, "a.md"}, {answerOld, state.DecisionSuperseded, "b.md"}, {answerKeep, state.DecisionKeep, "a.md"}}
 	for _, c := range cases {
 		if _, err := AnswerQuestion(root, "k", c.answer, time.Now()); err != nil {
 			t.Fatal(err)
@@ -125,7 +125,7 @@ func TestQuestionsAndAnswer(t *testing.T) {
 		_ = s.Ledger.Append("t", state.JudgeRecord{PairKey: "k", Decision: state.DecisionQuestion, Old: old, New: neu})
 	}
 	// 답을 바꿔도(old → latest) 어느 쪽이 구판인지는 기록 순서가 아니라 유효 시각으로 정한다
-	for _, a := range []Answer{AnswerOld, AnswerLatest} {
+	for _, a := range []Answer{answerOld, AnswerLatest} {
 		if _, err := AnswerQuestion(root, "k", a, time.Now()); err != nil {
 			t.Fatal(err)
 		}
@@ -137,7 +137,7 @@ func TestQuestionsAndAnswer(t *testing.T) {
 	same := "2026-10-05T00:00:00Z"
 	_ = s.Ledger.Append("t", state.JudgeRecord{PairKey: "tie", Decision: state.DecisionQuestion,
 		Old: state.Side{Path: "c.md", BodySHA: "c", EventTime: same}, New: state.Side{Path: "d.md", BodySHA: "d", EventTime: same}})
-	for _, a := range []Answer{AnswerOld, AnswerLatest} {
+	for _, a := range []Answer{answerOld, AnswerLatest} {
 		if _, err := AnswerQuestion(root, "tie", a, time.Now()); err != nil {
 			t.Fatal(err)
 		}
@@ -145,10 +145,10 @@ func TestQuestionsAndAnswer(t *testing.T) {
 	if latest, _ := s.Latest("t"); latest["tie"].Old.Path != "c.md" {
 		t.Errorf("같은 시각 쌍을 다시 답한 latest → %+v", latest["tie"])
 	}
-	if _, err := AnswerQuestion(root, "missing", AnswerKeep, time.Now()); err == nil {
+	if _, err := AnswerQuestion(root, "missing", answerKeep, time.Now()); err == nil {
 		t.Error("없는 질문")
 	}
-	if _, ok := ParseAnswer("maybe"); ok {
+	if _, ok := parseAnswer("maybe"); ok {
 		t.Error("잘못된 답")
 	}
 }

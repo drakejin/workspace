@@ -212,7 +212,7 @@ func recoveryConfig(root string) config.Config {
 }
 
 // writeDoc 은 root 아래 디스크 이름 name 으로 content 를 쓰고, 그 문서(source_path 는 NFC)의 새 문서 변경분을 돌려준다.
-func writeDoc(t *testing.T, root, name, content string) DiffEntry {
+func writeDoc(t *testing.T, root, name, content string) diffEntry {
 	t.Helper()
 	abs := filepath.Join(root, filepath.FromSlash(name))
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
@@ -226,8 +226,8 @@ func writeDoc(t *testing.T, root, name, content string) DiffEntry {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return DiffEntry{
-		SourcePath: rel, Team: b.Meta.Team, Project: b.Meta.Repo, DocType: b.Meta.DocType, Kind: b.Meta.Kind, Change: ChangeNew,
+	return diffEntry{
+		SourcePath: rel, Team: b.Meta.Team, Project: b.Meta.Repo, DocType: b.Meta.DocType, Kind: b.Meta.Kind, Change: changeNew,
 		BodySHA: b.BodySHA, EventTime: b.EventTime, Title: b.Title, Body: b.Body, Supersedes: b.Meta.Supersedes,
 	}
 }

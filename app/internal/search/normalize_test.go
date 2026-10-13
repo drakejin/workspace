@@ -40,7 +40,7 @@ func TestFilterThatNormalizesToEmptyIsRejected(t *testing.T) {
 
 // RUN-5: 검색 입력의 주제·프로젝트도 NFC 로 맞춘다 — 색인 값(NFC)과 같은 꼴로 비교한다.
 func TestFilterValuesAreNFC(t *testing.T) {
-	q := BuildQuery(Request{Query: "x", Topic: norm.NFD.String("환불정책"), Project: " " + norm.NFD.String("결제 서비스") + " "})
+	q := buildQuery(Request{Query: "x", Topic: norm.NFD.String("환불정책"), Project: " " + norm.NFD.String("결제 서비스") + " "})
 	got, _ := json.Marshal(filterOf(t, q))
 	want := `[{"term":{"repo":{"case_insensitive":true,"value":"결제 서비스"}}},{"term":{"topic":"환불정책"}}]`
 	if string(got) != norm.NFC.String(want) {

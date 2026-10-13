@@ -46,8 +46,8 @@ var distillSchema = map[string]any{
 	"additionalProperties": false,
 }
 
-// DistillJob 은 증류할 문서 하나다.
-type DistillJob struct {
+// distillJob 은 증류할 문서 하나다.
+type distillJob struct {
 	Team       string
 	SourcePath string
 	BodySHA    string
@@ -55,12 +55,12 @@ type DistillJob struct {
 	Body       string
 }
 
-// DistillQueue 는 증류 큐(사이클 E)다. 캐시 키는 본문 sha — hit 면 LLM 0회, miss 면 로컬 claude 로
+// distillQueue 는 증류 큐(사이클 E)다. 캐시 키는 본문 sha — hit 면 LLM 0회, miss 면 로컬 claude 로
 // {summary, entities} 를 뽑아 .cache/distill 원장에 append 하고 인덱스에 반영한다.
 // 색인 사이클과 분리된 비동기 큐라 문서가 한꺼번에 바뀌어도 사이클이 막히지 않는다.
 // 실패는 그 문서만 건너뛰고, 백오프(distillRetryBase 부터 두 배씩, 최대 distillRetryMax)가 지난 뒤의 사이클이 다시 넣는다 —
 // 같은 본문은 distillMaxAttempts 번까지. 데몬이 다시 뜨면 부팅 백필(요약이 빈 문서)이 이어받는다.
-type DistillQueue struct {
+type distillQueue struct {
 	ctx   context.Context
 	os    opensearch.Client
 	cfg   config.Config
@@ -70,7 +70,7 @@ type DistillQueue struct {
 
 	mu     sync.Mutex
 	idle   *sync.Cond
-	queue  []DistillJob
+	queue  []distillJob
 	queued map[string]bool
 	active int
 	// failed 는 실패해 다시 시도를 기다리는 작업이다 (문서마다 마지막 본문 하나). now 는 그 백오프의 시계다
@@ -81,22 +81,22 @@ type DistillQueue struct {
 }
 
 // Applied 는 지금까지 인덱스에 반영한 증류 수다.
-func (q *DistillQueue) Applied() int64 { return q.applied.Load() }
+func (q *distillQueue) Applied() int64 { return q.applied.Load() }
 
-// NewDistillQueue 는 증류 큐다.
-func NewDistillQueue(ctx context.Context, os opensearch.Client, cfg config.Config, cache *state.DistillCache, ask llm.Asker, log func(string, ...any)) *DistillQueue {
-	q := &DistillQueue{ctx: ctx, os: os, cfg: cfg, cache: cache, ask: ask, log: log, queued: map[string]bool{}, failed: map[string]retryJob{}, now: time.Now}
+// newDistillQueue 는 증류 큐다.
+func newDistillQueue(ctx context.Context, os opensearch.Client, cfg config.Config, cache *state.DistillCache, ask llm.Asker, log func(string, ...any)) *distillQueue {
+	q := &distillQueue{ctx: ctx, os: os, cfg: cfg, cache: cache, ask: ask, log: log, queued: map[string]bool{}, failed: map[string]retryJob{}, now: time.Now}
 	q.idle = sync.NewCond(&q.mu)
 	return q
 }
 
-func jobKey(j DistillJob) string { return docKey(j.Team, j.SourcePath) + "\x00" + j.BodySHA }
+func jobKey(j distillJob) string { return docKey(j.Team, j.SourcePath) + "\x00" + j.BodySHA }
 
 func docKey(team, sourcePath string) string { return team + "\x00" + sourcePath }
 
 // retryJob 은 실패해 다시 시도를 기다리는 작업이다.
 type retryJob struct {
-	job      DistillJob
+	job      distillJob
 	attempts int
 	nextAt   time.Time
 }
@@ -108,11 +108,11 @@ func retryWait(attempts int) time.Duration {
 }
 
 // EnqueueDiff 는 변경분과, 다시 시도할 때가 된 실패분을 큐에 넣고 바로 돌아온다 (사이클마다 불린다).
-func (q *DistillQueue) EnqueueDiff(diff []DiffEntry) {
-	jobs := make([]DistillJob, 0, len(diff))
+func (q *distillQueue) EnqueueDiff(diff []diffEntry) {
+	jobs := make([]distillJob, 0, len(diff))
 	for _, d := range diff {
-		if d.Change != ChangeRemoved {
-			jobs = append(jobs, DistillJob{Team: d.Team, SourcePath: d.SourcePath, BodySHA: d.BodySHA, Title: d.Title, Body: d.Body})
+		if d.Change != changeRemoved {
+			jobs = append(jobs, distillJob{Team: d.Team, SourcePath: d.SourcePath, BodySHA: d.BodySHA, Title: d.Title, Body: d.Body})
 		}
 	}
 	q.Enqueue(append(q.dueRetries(diff), jobs...))
@@ -120,14 +120,14 @@ func (q *DistillQueue) EnqueueDiff(diff []DiffEntry) {
 
 // dueRetries 는 다시 시도할 때가 된 실패분이다. 이번 변경분에 든 문서(고쳤거나 지웠다)의 실패분은 옛 본문이라 버린다.
 // 꺼낸 작업도 목록에 남는다 — 성공해야 지워지고, 다시 실패하면 더 길게 기다린다 (recordLocked).
-func (q *DistillQueue) dueRetries(diff []DiffEntry) []DistillJob {
+func (q *distillQueue) dueRetries(diff []diffEntry) []distillJob {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	for _, d := range diff {
 		delete(q.failed, docKey(d.Team, d.SourcePath))
 	}
 	now := q.now()
-	var due []DistillJob
+	var due []distillJob
 	for _, r := range q.failed {
 		if !now.Before(r.nextAt) {
 			due = append(due, r.job)
@@ -148,7 +148,7 @@ type retryOutcome struct {
 // recordLocked 는 작업 결과를 다시 시도 목록에 반영한다: 성공이면 지우고, 실패면 백오프 뒤로 미루고, 같은 본문이
 // distillMaxAttempts 번 실패했으면 목록에서 빼고 포기한다. 종료 중(ctx 끝)의 실패는 미루지 않는다 — 다시 뜬 데몬의 부팅 백필이
 // 이어받는다.
-func (q *DistillQueue) recordLocked(job DistillJob, err error) retryOutcome {
+func (q *distillQueue) recordLocked(job distillJob, err error) retryOutcome {
 	key := docKey(job.Team, job.SourcePath)
 	if err == nil {
 		if r, ok := q.failed[key]; ok && r.job.BodySHA == job.BodySHA {
@@ -176,7 +176,7 @@ func (q *DistillQueue) recordLocked(job DistillJob, err error) retryOutcome {
 
 // Enqueue 는 작업을 넣는다. 같은 (팀, 경로, 본문) 은 한 번만. 본문이 없는 문서(빈 파일·frontmatter 만)는 요약할 것이
 // 없으니 넣지 않는다.
-func (q *DistillQueue) Enqueue(jobs []DistillJob) {
+func (q *distillQueue) Enqueue(jobs []distillJob) {
 	if !q.cfg.Distill.Enabled {
 		return
 	}
@@ -192,7 +192,7 @@ func (q *DistillQueue) Enqueue(jobs []DistillJob) {
 	q.mu.Unlock()
 }
 
-func (q *DistillQueue) pumpLocked() {
+func (q *distillQueue) pumpLocked() {
 	for q.active < q.cfg.Distill.Concurrency && len(q.queue) > 0 {
 		job := q.queue[0]
 		q.queue = q.queue[1:]
@@ -214,7 +214,7 @@ func (q *DistillQueue) pumpLocked() {
 }
 
 // logResult 는 실패한 작업의 처리(다시 시도·포기)를 알린다.
-func (q *DistillQueue) logResult(job DistillJob, err error, out retryOutcome) {
+func (q *distillQueue) logResult(job distillJob, err error, out retryOutcome) {
 	switch {
 	case out.gaveUp:
 		q.log("[distill] %s: %v — %d번 실패해 포기한다 (본문이 바뀌거나 데몬을 다시 띄우면 다시 시도한다)", job.SourcePath, err, out.attempts)
@@ -225,7 +225,7 @@ func (q *DistillQueue) logResult(job DistillJob, err error, out retryOutcome) {
 	}
 }
 
-func (q *DistillQueue) process(job DistillJob) error {
+func (q *distillQueue) process(job distillJob) error {
 	ctx := q.ctx
 	if err := ctx.Err(); err != nil {
 		return err
@@ -268,7 +268,7 @@ func (q *DistillQueue) process(job DistillJob) error {
 }
 
 // Settle 은 큐가 빌 때까지 기다린다 (--once 와 종료 때).
-func (q *DistillQueue) Settle() {
+func (q *distillQueue) Settle() {
 	q.mu.Lock()
 	for q.active > 0 || len(q.queue) > 0 {
 		q.idle.Wait()
@@ -277,7 +277,7 @@ func (q *DistillQueue) Settle() {
 }
 
 // Pending 은 대기·진행 중 작업 수다.
-func (q *DistillQueue) Pending() int {
+func (q *distillQueue) Pending() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return len(q.queue) + q.active

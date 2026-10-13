@@ -35,7 +35,7 @@ func TestFactsFromPath(t *testing.T) {
 		{"docs/feature/x/ADR-3.md", "", model.DocADR},
 	}
 	for _, c := range cases {
-		got := FactsFromPath(c.path)
+		got := factsFromPath(c.path)
 		if got.Repo != c.repo || got.DocType != c.typ {
 			t.Errorf("%s → %+v, want repo=%q type=%s", c.path, got, c.repo, c.typ)
 		}
@@ -56,8 +56,8 @@ func TestKindOf(t *testing.T) {
 		{model.DocNote, "docs/feature/a.md", model.KindEpisodic},
 	}
 	for _, c := range cases {
-		if got := KindOf(c.typ, c.path); got != c.want {
-			t.Errorf("KindOf(%s,%s) = %s", c.typ, c.path, got)
+		if got := kindOf(c.typ, c.path); got != c.want {
+			t.Errorf("kindOf(%s,%s) = %s", c.typ, c.path, got)
 		}
 	}
 }

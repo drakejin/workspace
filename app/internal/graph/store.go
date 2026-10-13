@@ -17,8 +17,8 @@ import (
 // ErrDisabled 는 그래프가 꺼져 있다는 뜻이다 (MEMORY_GRAPH_URI=off).
 var ErrDisabled = errors.New("그래프가 꺼져 있습니다 (MEMORY_GRAPH_URI=off)")
 
-// MaxDepth 는 이웃 탐색 깊이 상한이다.
-const MaxDepth = 3
+// maxDepth 는 이웃 탐색 깊이 상한이다.
+const maxDepth = 3
 
 // maxNeighbors 는 이웃 질의 결과 상한이다.
 const maxNeighbors = 50
@@ -118,7 +118,7 @@ func (s *store) Ping(ctx context.Context) error {
 // edgeTypes 는 Cypher 관계 종류다. 관계 종류는 파라미터로 넘길 수 없어 이 목록에 있는 것만 쿼리에 넣는다.
 var edgeTypes = []string{
 	string(model.LinkSupersedes), string(model.LinkDerivedFrom), string(model.LinkRelates), string(model.LinkLinksTo),
-	RelMentions, RelInRepo,
+	relMentions, relInRepo,
 }
 
 func (s *store) Replace(ctx context.Context, g Graph) error {
@@ -170,7 +170,7 @@ func (s *store) Replace(ctx context.Context, g Graph) error {
 }
 
 // nodeLabels 는 그래프가 만드는 노드 라벨 전부다.
-var nodeLabels = []string{LabelDoc, LabelEntity, LabelRepo}
+var nodeLabels = []string{LabelDoc, LabelEntity, labelRepo}
 
 // workspaceDeleteQueries 는 workspace 의 그래프를 비우는 질의다. 라벨마다 따로 지운다 — 라벨 없이 MATCH 하면 클러스터의
 // 모든 노드(다른 workspace 포함)를 훑는다.
@@ -184,8 +184,8 @@ func workspaceDeleteQueries() []string {
 
 // relEndpoints 는 문서 → 문서가 아닌 관계의 두 끝 라벨이다 (나머지 — 개정·근거·관련·링크 — 는 문서 → 문서).
 var relEndpoints = map[string][2]string{
-	RelMentions: {LabelDoc, LabelEntity},
-	RelInRepo:   {LabelDoc, LabelRepo},
+	relMentions: {LabelDoc, LabelEntity},
+	relInRepo:   {LabelDoc, labelRepo},
 }
 
 // relationshipQuery 는 typ 관계를 적재하는 질의다 (typ 은 edgeTypes 에 있는 것만). 끝점을 라벨로 MATCH 해야 라벨별 key 유일
@@ -219,8 +219,8 @@ func namedRows(nodes []Named) []map[string]any {
 }
 
 func (s *store) Neighbors(ctx context.Context, workspace, path string, depth int) ([]Neighbor, error) {
-	if depth < 1 || depth > MaxDepth {
-		return nil, fmt.Errorf("depth 는 1~%d 이어야 합니다: %d", MaxDepth, depth)
+	if depth < 1 || depth > maxDepth {
+		return nil, fmt.Errorf("depth 는 1~%d 이어야 합니다: %d", maxDepth, depth)
 	}
 	// 가변 길이 패턴의 상한은 파라미터로 넘길 수 없어 검증한 정수만 넣는다
 	q := fmt.Sprintf(`
@@ -237,7 +237,7 @@ RETURN n.path AS path, n.status AS status, length(p) AS hops,
        [r IN relationships(p) | type(r)] AS rels,
        [r IN relationships(p) | coalesce(r.why, '')] AS whys
 ORDER BY hops, path LIMIT %d`, depth, maxNeighbors)
-	res, err := neo4j.ExecuteQuery(ctx, s.driver, q, map[string]any{"key": Key(workspace, LabelDoc, path)},
+	res, err := neo4j.ExecuteQuery(ctx, s.driver, q, map[string]any{"key": key(workspace, LabelDoc, path)},
 		neo4j.EagerResultTransformer, neo4j.ExecuteQueryWithDatabase(s.database), neo4j.ExecuteQueryWithReadersRouting())
 	if err != nil {
 		return nil, fmt.Errorf("neo4j neighbors %s: %w", path, err)
@@ -255,7 +255,7 @@ ORDER BY hops, path LIMIT %d`, depth, maxNeighbors)
 
 func (s *store) HasDoc(ctx context.Context, workspace, path string) (bool, error) {
 	res, err := neo4j.ExecuteQuery(ctx, s.driver, `MATCH (d:Doc {key: $key}) RETURN count(d) > 0 AS found`,
-		map[string]any{"key": Key(workspace, LabelDoc, path)},
+		map[string]any{"key": key(workspace, LabelDoc, path)},
 		neo4j.EagerResultTransformer, neo4j.ExecuteQueryWithDatabase(s.database), neo4j.ExecuteQueryWithReadersRouting())
 	if err != nil {
 		return false, fmt.Errorf("neo4j doc %s: %w", path, err)

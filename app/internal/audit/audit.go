@@ -37,9 +37,9 @@ const (
 	StaleQuestion   Kind = "stale-question"   // 답을 오래 기다리는 판정 질문
 	CorruptedLedger Kind = "corrupted-ledger" // 원장에 읽을 수 없는 줄이 있다
 	PartialScan     Kind = "partial-scan"     // 읽지 못한 디렉토리가 있다 — 지우는 조치(orphan-index·orphan-chunks)를 건너뛴다
-	BadFrontmatter  Kind = "bad-frontmatter"  // frontmatter YAML 이 깨졌다(메타데이터 없이 색인) 또는 값이 잘못됐다(그 판은 색인하지 않는다)
-	SupersedesCycle Kind = "supersedes-cycle" // frontmatter supersedes 가 순환한다 — 수렴이 그 선언들을 버린다
-	SupersedesSelf  Kind = "supersedes-self"  // frontmatter supersedes 가 자기 자신을 가리킨다 — 수렴이 버린다
+	badFrontmatter  Kind = "bad-frontmatter"  // frontmatter YAML 이 깨졌다(메타데이터 없이 색인) 또는 값이 잘못됐다(그 판은 색인하지 않는다)
+	supersedesCycle Kind = "supersedes-cycle" // frontmatter supersedes 가 순환한다 — 수렴이 그 선언들을 버린다
+	supersedesSelf  Kind = "supersedes-self"  // frontmatter supersedes 가 자기 자신을 가리킨다 — 수렴이 버린다
 )
 
 var fixable = map[Kind]bool{OrphanIndex: true, Unindexed: true, StaleContent: true, OrphanChunks: true}

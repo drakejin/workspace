@@ -152,7 +152,7 @@ func TestValidateRejectsVeryLongQuery(t *testing.T) {
 // RUN-18: 프로젝트 필터는 대소문자를 가리지 않는다 (Alpha-API 로 alpha-api 를 찾는다 — 주제처럼). 색인 값은 그대로 두고
 // 질의의 term 에 case_insensitive 를 건다.
 func TestProjectFilterIgnoresCase(t *testing.T) {
-	q := BuildQuery(Request{Query: "x", Project: " Alpha-API "})
+	q := buildQuery(Request{Query: "x", Project: " Alpha-API "})
 
 	got, _ := json.Marshal(filterOf(t, q))
 

@@ -26,7 +26,7 @@ func TestBuild(t *testing.T) {
 	for _, d := range g.Docs {
 		status[d.Path] = d.Status
 	}
-	want := map[string]string{"docs/knowledge/v2.md": StatusHot, "docs/knowledge/v1.md": StatusSuperseded, "docs/specs/a.md": StatusDeprecated, "docs/missing.md": StatusUnindexed}
+	want := map[string]string{"docs/knowledge/v2.md": StatusHot, "docs/knowledge/v1.md": StatusSuperseded, "docs/specs/a.md": StatusDeprecated, "docs/missing.md": statusUnindexed}
 	if !reflect.DeepEqual(status, want) {
 		t.Errorf("status = %v", status)
 	}
@@ -34,12 +34,12 @@ func TestBuild(t *testing.T) {
 	for _, e := range g.Edges {
 		types[e.Type]++
 	}
-	wantTypes := map[string]int{"SUPERSEDES": 1, "DERIVED_FROM": 1, "LINKS_TO": 1, RelMentions: 2, RelInRepo: 1}
+	wantTypes := map[string]int{"SUPERSEDES": 1, "DERIVED_FROM": 1, "LINKS_TO": 1, relMentions: 2, relInRepo: 1}
 	if !reflect.DeepEqual(types, wantTypes) {
 		t.Errorf("edges = %v", types)
 	}
 	for _, e := range g.Edges {
-		if e.Type == "SUPERSEDES" && (e.From != Key("ws", LabelDoc, "docs/knowledge/v2.md") || e.To != Key("ws", LabelDoc, "docs/knowledge/v1.md")) {
+		if e.Type == "SUPERSEDES" && (e.From != key("ws", LabelDoc, "docs/knowledge/v2.md") || e.To != key("ws", LabelDoc, "docs/knowledge/v1.md")) {
 			t.Errorf("supersedes 방향 = %+v", e)
 		}
 	}
@@ -70,7 +70,7 @@ func TestFromHotTellsOutOfScopeFilesFromMissingOnes(t *testing.T) {
 	write(".claude/commands/compaction.md", "# compaction\n")
 	docs := map[string]ingest.IndexedDoc{"README.md": {SourcePath: "README.md", Team: "t", Kind: model.KindKnowledge}}
 
-	g := FromHot(root, "ws", docs)
+	g := fromHot(root, "ws", docs)
 
 	status := map[string]string{}
 	for _, d := range g.Docs {
@@ -78,10 +78,10 @@ func TestFromHotTellsOutOfScopeFilesFromMissingOnes(t *testing.T) {
 	}
 	want := map[string]string{
 		"README.md":                      StatusHot,
-		"scenarios/SCENARIOS.md":         StatusOutOfScope,
-		".claude/commands/compaction.md": StatusOutOfScope,
-		"scenarios/missing.md":           StatusUnindexed,
-		"docs/specs/old.md":              StatusUnindexed,
+		"scenarios/SCENARIOS.md":         statusOutOfScope,
+		".claude/commands/compaction.md": statusOutOfScope,
+		"scenarios/missing.md":           statusUnindexed,
+		"docs/specs/old.md":              statusUnindexed,
 	}
 	if !reflect.DeepEqual(status, want) {
 		t.Errorf("status\n got  %v\n want %v", status, want)

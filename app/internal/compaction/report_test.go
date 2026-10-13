@@ -14,7 +14,7 @@ func chunk(path, header, at string, kind model.Kind, text string) model.Chunk {
 
 func TestFindExpired(t *testing.T) {
 	cutoff := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
-	got := FindExpired([]model.Chunk{
+	got := findExpired([]model.Chunk{
 		chunk("old.md", "A", "2026-07-01T00:00:00Z", model.KindEpisodic, ""),
 		chunk("new.md", "B", "2026-10-01T00:00:00Z", model.KindEpisodic, ""),
 		chunk("fact.md", "C", "2026-01-01T00:00:00Z", model.KindKnowledge, ""),
@@ -27,7 +27,7 @@ func TestFindExpired(t *testing.T) {
 func TestFindConflicts(t *testing.T) {
 	superseded := chunk("z.md", "Z > 활성 광고 정의", "2026-09-01T00:00:00Z", model.KindEpisodic, "")
 	superseded.SupersededBy = "b.md"
-	got := FindConflicts([]model.Chunk{
+	got := findConflicts([]model.Chunk{
 		chunk("a.md", "ADR-1 > 활성 광고 정의", "2026-07-01T00:00:00Z", model.KindEpisodic, "노출 중인 광고"),
 		chunk("b.md", "PRD > 활성 광고 정의", "2026-09-01T00:00:00Z", model.KindEpisodic, "예산이   남은 광고"),
 		superseded,

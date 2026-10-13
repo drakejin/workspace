@@ -38,7 +38,7 @@ func ScanHot(root string, maxFileBytes int64) ([]ScannedFile, []Skipped, error) 
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
 		// 디스크의 이름(Finder 가 만든 NFD 일 수 있다)으로 걷되, 문서는 NFC rel 로 맞춘다. IO 는 실제 경로(Abs)로 한다
 		rel, _ := filepath.Rel(root, p)
-		rel = CanonicalRel(rel)
+		rel = canonicalRel(rel)
 		if walkErr != nil {
 			if p == root {
 				return walkErr
@@ -76,8 +76,8 @@ func ScanHot(root string, maxFileBytes int64) ([]ScannedFile, []Skipped, error) 
 
 const binarySniffBytes = 8000
 
-// IsProbablyBinary 는 앞부분에 NUL 바이트가 있으면 바이너리로 본다.
-func IsProbablyBinary(abs string) (bool, error) {
+// isProbablyBinary 는 앞부분에 NUL 바이트가 있으면 바이너리로 본다.
+func isProbablyBinary(abs string) (bool, error) {
 	f, err := os.Open(abs)
 	if err != nil {
 		return false, err
