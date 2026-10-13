@@ -134,8 +134,10 @@ func (s *store) Replace(ctx context.Context, g Graph) error {
 			return err
 		}
 		ws := map[string]any{"ws": g.Workspace}
-		if err := run("MATCH (n {workspace: $ws}) DETACH DELETE n", ws); err != nil {
-			return nil, err
+		for _, q := range workspaceDeleteQueries() {
+			if err := run(q, ws); err != nil {
+				return nil, err
+			}
 		}
 		if err := run(`UNWIND $rows AS r CREATE (n:Doc) SET n = r, n.workspace = $ws`, map[string]any{"ws": g.Workspace, "rows": docRows(g.Docs)}); err != nil {
 			return nil, err
@@ -155,8 +157,7 @@ func (s *store) Replace(ctx context.Context, g Graph) error {
 			if len(rows) == 0 {
 				continue
 			}
-			q := fmt.Sprintf(`UNWIND $rows AS r MATCH (a {key: r.from}), (b {key: r.to}) CREATE (a)-[:%s {why: r.why, source: r.source}]->(b)`, typ)
-			if err := run(q, map[string]any{"rows": rows}); err != nil {
+			if err := run(relationshipQuery(typ), map[string]any{"rows": rows}); err != nil {
 				return nil, err
 			}
 		}
@@ -166,6 +167,36 @@ func (s *store) Replace(ctx context.Context, g Graph) error {
 		return fmt.Errorf("neo4j replace %s: %w", g.Workspace, err)
 	}
 	return nil
+}
+
+// nodeLabels 는 그래프가 만드는 노드 라벨 전부다.
+var nodeLabels = []string{LabelDoc, LabelEntity, LabelRepo}
+
+// workspaceDeleteQueries 는 workspace 의 그래프를 비우는 질의다. 라벨마다 따로 지운다 — 라벨 없이 MATCH 하면 클러스터의
+// 모든 노드(다른 workspace 포함)를 훑는다.
+func workspaceDeleteQueries() []string {
+	out := make([]string, 0, len(nodeLabels))
+	for _, label := range nodeLabels {
+		out = append(out, fmt.Sprintf("MATCH (n:%s {workspace: $ws}) DETACH DELETE n", label))
+	}
+	return out
+}
+
+// relEndpoints 는 문서 → 문서가 아닌 관계의 두 끝 라벨이다 (나머지 — 개정·근거·관련·링크 — 는 문서 → 문서).
+var relEndpoints = map[string][2]string{
+	RelMentions: {LabelDoc, LabelEntity},
+	RelInRepo:   {LabelDoc, LabelRepo},
+}
+
+// relationshipQuery 는 typ 관계를 적재하는 질의다 (typ 은 edgeTypes 에 있는 것만). 끝점을 라벨로 MATCH 해야 라벨별 key 유일
+// 제약(인덱스)을 쓴다 — 라벨이 없으면 행마다 모든 노드를 두 번 훑는다.
+func relationshipQuery(typ string) string {
+	ends, ok := relEndpoints[typ]
+	if !ok {
+		ends = [2]string{LabelDoc, LabelDoc}
+	}
+	return fmt.Sprintf(`UNWIND $rows AS r MATCH (a:%s {key: r.from}), (b:%s {key: r.to}) CREATE (a)-[:%s {why: r.why, source: r.source}]->(b)`,
+		ends[0], ends[1], typ)
 }
 
 func docRows(docs []Doc) []map[string]any {

@@ -232,7 +232,7 @@ func TestSeedKeysAreReadByScripts(t *testing.T) {
 func TestAuditKindsAreDocumented(t *testing.T) {
 	guide := readDoc(t, "GUIDE.md")
 	for _, k := range []audit.Kind{
-		audit.OrphanIndex, audit.Unindexed, audit.StaleContent, audit.OrphanChunks, audit.BrokenLink,
+		audit.OrphanIndex, audit.Unindexed, audit.StaleContent, audit.OrphanChunks, audit.StrandedCold, audit.BrokenLink,
 		audit.UnsourcedFact, audit.StaleQuestion, audit.CorruptedLedger, audit.PartialScan,
 	} {
 		if !strings.Contains(guide, "| `"+string(k)+"` |") {

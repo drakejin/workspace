@@ -23,6 +23,7 @@ type Index struct {
 	Snapshots    []string // 이 인덱스를 담은 성공 스냅샷 전부 (오래된 것부터)
 	SnapshotTime string   // 가장 최근 스냅샷 시각
 	Restored     bool     // 복원본(auto_manage=false)이 열려 있다
+	Searchable   bool     // 복원본에 검색 alias 가 붙어 있다 (false 면 합치다 멈춘 복원 — restore 를 다시 해야 검색에 나온다)
 	Reopened     bool     // 같은 이름의 hot 인덱스가 다시 생겼다 (다음 tier 전까지 복원·archive 를 하지 않는다)
 }
 
@@ -84,6 +85,10 @@ func ListCold(ctx context.Context, c opensearch.Client, cfg config.Config, team 
 	if err != nil {
 		return nil, fmt.Errorf("list indices %s: %w", team, err)
 	}
+	searchable, err := searchAliased(ctx, c, team)
+	if err != nil {
+		return nil, err
+	}
 	sort.SliceStable(snaps, func(i, j int) bool { return snaps[i].StartTime < snaps[j].StartTime })
 	byName := map[string]Index{}
 	for _, s := range snaps {
@@ -97,7 +102,7 @@ func ListCold(ctx context.Context, c opensearch.Client, cfg config.Config, team 
 			if !seen {
 				settings, live := open[name]
 				unmanaged := opensearch.IsUnmanaged(settings)
-				entry = Index{Name: name, Restored: live && unmanaged, Reopened: live && !unmanaged}
+				entry = Index{Name: name, Restored: live && unmanaged, Searchable: live && unmanaged && searchable[name], Reopened: live && !unmanaged}
 			}
 			entry.Snapshots = append(entry.Snapshots, s.Name)
 			entry.SnapshotTime = s.StartTime
@@ -109,6 +114,27 @@ func ListCold(ctx context.Context, c opensearch.Client, cfg config.Config, team 
 		out = append(out, v)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// searchAliased 는 팀 인덱스 중 검색 alias(팀 hot alias)가 붙은 것이다. restore_cold 는 다 합친 뒤에야 alias 를 붙이므로,
+// alias 없는 복원본은 합치다 멈춘 것이다.
+func searchAliased(ctx context.Context, c opensearch.Client, team string) (map[string]bool, error) {
+	var current map[string]struct {
+		Aliases map[string]any `json:"aliases"`
+	}
+	err := c.Do(ctx, http.MethodGet, "/"+naming.TeamPattern(team)+"/_alias", nil, url.Values{"allow_no_indices": {"true"}}, &current)
+	if opensearch.IsStatus(err, http.StatusNotFound) {
+		return map[string]bool{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("aliases %s: %w", team, err)
+	}
+	out := make(map[string]bool, len(current))
+	for index, v := range current {
+		_, aliased := v.Aliases[naming.HotAlias(team)]
+		out[index] = aliased
+	}
 	return out, nil
 }
 
@@ -130,8 +156,8 @@ func TeamInWorkspace(ctx context.Context, c opensearch.Client, store Store, work
 	return len(keys) > 0, nil
 }
 
-// Archive 는 cold 로 간(스냅샷에 들어간) 월별 인덱스와 그 인덱스를 담은 성공 스냅샷 이름들이다 (복원 여부 무관).
-type Archive map[string][]string
+// Archive 는 cold 로 간(스냅샷에 들어간) 월별 인덱스와 그 인덱스를 담은 성공 스냅샷들이다 (복원 여부 무관).
+type Archive map[string][]Snapshot
 
 // Has 는 index 가 스냅샷에 있는가다.
 func (a Archive) Has(index string) bool { return len(a[index]) > 0 }
@@ -146,7 +172,7 @@ func ArchivedMonths(ctx context.Context, c opensearch.Client, cfg config.Config)
 	for _, s := range snaps {
 		for _, name := range s.Indices {
 			if naming.IsMonthly(name) {
-				out[name] = append(out[name], s.Name)
+				out[name] = append(out[name], s)
 			}
 		}
 	}
@@ -258,12 +284,12 @@ func Restore(ctx context.Context, c opensearch.Client, cfg config.Config, name s
 			continue
 		}
 		if target.Reopened {
-			return Index{}, Reopened(name)
+			return Index{}, Reopened(ctx, c, cfg, name)
 		}
 		if err := restoreSearchable(ctx, c, cfg, target, idx.Team); err != nil {
 			return Index{}, err
 		}
-		target.Restored = true
+		target.Restored, target.Searchable = true, true
 		return target, nil
 	}
 	return Index{}, fmt.Errorf("cold 에 %s 가 없습니다. list_cold 로 먼저 확인하세요", name)

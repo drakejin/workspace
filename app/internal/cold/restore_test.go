@@ -129,3 +129,32 @@ func TestRestoreMarksDeprecationsBeforeSearch(t *testing.T) {
 		t.Errorf("표시(%d)가 alias(%d)보다 먼저여야 한다 — 요청 = %+v", marked, searchable, fake.calls)
 	}
 }
+
+// R2-handoff-3: 예전 판이 뜬 스냅샷의 인덱스는 strict 매핑에 지금 판의 필드(pending_cycle 등)가 없다. 복원본에 지금 매핑을
+// 더해야 같은 세션의 ingest_path 가 그 달에 쓸 때 strict_dynamic_mapping_exception 이 나지 않는다 — 새로 열 때도, 이미 열려 있을 때도.
+func TestRestoreAllPutsTheCurrentMappingOnTheRestoredIndex(t *testing.T) {
+	for _, alreadyOpen := range []bool{false, true} {
+		cl := &restoreCluster{}
+		cl.open.Store(alreadyOpen)
+		fake := cl.fake()
+
+		err := RestoreAll(context.Background(), fake, tierConfig(t), restoreMonth, []string{restoreOlder, restoreNewest})
+
+		if err != nil {
+			t.Fatalf("open=%v: %v", alreadyOpen, err)
+		}
+		puts := fake.called(http.MethodPut, "/"+restoreMonth+"/_mapping")
+		if len(puts) != 1 {
+			t.Fatalf("open=%v: 복원본에 지금 매핑을 더한다 — 요청 = %+v", alreadyOpen, fake.calls)
+		}
+		body, _ := puts[0].Body.(map[string]any)
+		props, _ := body["properties"].(map[string]any)
+		if _, ok := props["pending_cycle"]; !ok {
+			t.Errorf("open=%v: 매핑에 pending_cycle 이 없다: %+v", alreadyOpen, body)
+		}
+		merged := callIndex(fake, http.MethodPost, "/_snapshot/mem-cold/"+restoreOlder+"/_restore")
+		if mapped := callIndex(fake, http.MethodPut, "/"+restoreMonth+"/_mapping"); mapped > merged {
+			t.Errorf("open=%v: 옛 스냅샷 문서를 옮기기 전에 매핑을 맞춘다 (mapping=%d merge=%d)", alreadyOpen, mapped, merged)
+		}
+	}
+}

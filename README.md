@@ -344,7 +344,8 @@ MATCH (e:Entity {workspace: 'workspace'})<-[:MENTIONS]-(d:Doc) RETURN e.type, e.
 ├── schedule/ · bench/ · coverage.out   # tier launchd 로그, bench 리포트, 커버리지 — 지워도 된다
 ```
 
-**`cold-store/` 와 `snapshots/` 는 지우면 안 된다.** tier 가 git 에서 지운 원본이 여기에만 있다. 오래 보관하려면 S3 로 둔다
+**`cold-store/` 와 `snapshots/` 는 지우면 안 된다.** cold 층의 정본(스냅샷, archive 로 고친 본문)이 여기에만 있다. tier 가 hot 에서 뺀 원본은
+git 히스토리에도 커밋된 판이 있다 — tier 는 커밋된 그대로인 원본만 git 에서 지운다 (GUIDE §4.6). 오래 보관하려면 S3 로 둔다
 (`COLD_STORE_S3_BUCKET`, `COLD_SNAPSHOT_TYPE=s3` — GUIDE §7).
 
 ```bash

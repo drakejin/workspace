@@ -252,6 +252,8 @@ func (h *Handlers) ListCold(ctx context.Context, in ListColdInput) (string, erro
 // coldMark 는 cold 인덱스의 지금 상태 표시다.
 func coldMark(c cold.Index) string {
 	switch {
+	case c.Restored && !c.Searchable:
+		return "  [복원 중단 — restore_cold 로 다시]" // 합치다 멈춘 복원본은 검색 alias 가 없어 검색에 나오지 않는다
 	case c.Restored:
 		return "  [현재 복원됨]"
 	case c.Reopened:

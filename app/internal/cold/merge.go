@@ -12,6 +12,7 @@ import (
 
 	"github.com/drakejin/workspace/app/internal/config"
 	"github.com/drakejin/workspace/app/internal/model"
+	"github.com/drakejin/workspace/app/internal/naming"
 	"github.com/drakejin/workspace/app/internal/opensearch"
 )
 
@@ -20,9 +21,41 @@ import (
 // 그 자리에서 스냅샷을 다시 쓰면 hot 내용만 남아 옛 스냅샷의 문서를 잃는다.
 var ErrReopened = errors.New("cold 로 간 달의 인덱스가 hot 에 다시 열려 있습니다")
 
-// Reopened 는 index 에 대한 ErrReopened 다.
-func Reopened(index string) error {
-	return fmt.Errorf("%w: %s — 다음 tier 가 이 달을 다시 cold 로 보낸 뒤에 하세요 (scripts/memory/run.sh tier)", ErrReopened, index)
+// Reopened 는 index 에 대한 ErrReopened 다. 언제 다시 할 수 있는지 함께 알린다 — 늦게 들어온 문서가 hot 기간 안이면 tier 도
+// 그 달을 hot 에 두므로(kept-hot) 그 문서의 유효 시각 + hot 기간이 지나야 tier 가 그 달을 다시 cold 로 보낸다.
+func Reopened(ctx context.Context, c opensearch.Client, cfg config.Config, index string) error {
+	return fmt.Errorf("%w: %s — %s", ErrReopened, index, reopenedAdvice(ctx, c, cfg, index))
+}
+
+// reopenedAdvice 는 다시 열린 달을 언제 복원·archive 할 수 있는지다.
+func reopenedAdvice(ctx context.Context, c opensearch.Client, cfg config.Config, index string) string {
+	ready, err := tierReadyAt(ctx, c, cfg, index)
+	if err != nil {
+		return fmt.Sprintf("다음 tier 가 이 달을 다시 cold 로 보낸 뒤에 하세요 (언제인지 읽지 못했습니다: %v)", err)
+	}
+	if time.Now().After(ready) {
+		return "지금 scripts/memory/run.sh tier 를 돌리면 이 달을 다시 cold 로 보냅니다. 그 뒤에 하세요"
+	}
+	loc := cfg.Location
+	if loc == nil {
+		loc = time.Local
+	}
+	return fmt.Sprintf("이 달에 늦게 들어온 문서가 hot 기간(%d일) 안이라 tier 는 %s 까지 이 달을 hot 에 둡니다(kept-hot). "+
+		"그 뒤 첫 tier(데몬의 tier-tick 이 하루 한 번 돈다)가 이 달을 다시 cold 로 보내면 하세요", cfg.HotDays, ready.In(loc).Format("2006-01-02 15:04"))
+}
+
+// tierReadyAt 은 tier 가 index 를 다시 옮길 수 있게 되는 시각이다 — 가장 최근 문서의 유효 시각 + hot 기간,
+// 빈 인덱스면 그 달 끝 + hot 기간 (tierOne·dropEmpty 와 같은 기준).
+func tierReadyAt(ctx context.Context, c opensearch.Client, cfg config.Config, index string) (time.Time, error) {
+	newest, err := newestEventTime(ctx, c, index)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if newest == "" {
+		idx, _ := naming.ParseIndex(index)
+		return idx.MonthStart.AddDate(0, 1, 0).Add(cfg.HotWindow()), nil
+	}
+	return model.ParseTime(newest).Add(cfg.HotWindow()), nil
 }
 
 // mergePrefix 는 옛 스냅샷을 잠깐 되살리는 임시 인덱스 이름의 머리다. mem-* 가 아니라 검색·데몬·ISM 이 보지 않는다.
@@ -56,7 +89,7 @@ func RestoreAll(ctx context.Context, c opensearch.Client, cfg config.Config, ind
 		return err
 	}
 	if hot {
-		return Reopened(index)
+		return Reopened(ctx, c, cfg, index)
 	}
 	rest := snapshots
 	if !restored {
@@ -68,10 +101,23 @@ func RestoreAll(ctx context.Context, c opensearch.Client, cfg config.Config, ind
 		}
 		rest = rest[:len(rest)-1]
 	}
+	if err := putCurrentMapping(ctx, c, index); err != nil {
+		return err
+	}
 	for i := len(rest) - 1; i >= 0; i-- {
 		if err := mergeSnapshot(ctx, c, cfg, index, rest[i]); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// putCurrentMapping 은 복원본에 지금 판의 매핑을 더한다 (추가만이라 안전). 예전 판이 뜬 스냅샷의 strict 매핑에는 지금 판의
+// 필드(pending_cycle 등)가 없어, 복원본에 그 필드를 쓰면 strict_dynamic_mapping_exception 이 난다 — 오래 도는 MCP 서버는
+// bootstrap 을 처음 한 번만 하므로 그 뒤에 복원한 인덱스는 bootstrap 의 매핑 갱신을 받지 못한다.
+func putCurrentMapping(ctx context.Context, c opensearch.Client, index string) error {
+	if err := c.Do(ctx, http.MethodPut, "/"+index+"/_mapping", map[string]any{"properties": opensearch.Properties()}, nil, nil); err != nil {
+		return fmt.Errorf("mapping %s: %w", index, err)
 	}
 	return nil
 }

@@ -229,7 +229,7 @@ func (s *Service) rewriteIndex(ctx context.Context, index, drop string, mutate f
 	case len(names) == 0:
 		return nil, mutate(index) // cold 로 간 적 없는 인덱스 — 그 자리에서 고치면 끝이다
 	case hot:
-		return nil, cold.Reopened(index)
+		return nil, cold.Reopened(ctx, s.OS, s.Config, index)
 	}
 	if !restored {
 		// 잠깐 복원한 인덱스는 어느 길로 끝나든 지운다 — 남으면 alias 없는 인덱스가 열린 채로 남고, 다음 조치가 그걸 hot 으로 착각한다
