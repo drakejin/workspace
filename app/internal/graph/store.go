@@ -26,7 +26,6 @@ const maxNeighbors = 50
 // Neighbor 는 문서에서 몇 걸음 떨어진 다른 문서다.
 type Neighbor struct {
 	Path   string
-	Title  string
 	Status string
 	Hops   int
 	Via    []string // 지나온 노드 (경로·entity 이름)
@@ -194,7 +193,7 @@ WITH n, p, reduce(w = 0, r IN relationships(p) |
        w + CASE type(r) WHEN 'SUPERSEDES' THEN 0 WHEN 'DERIVED_FROM' THEN 1 WHEN 'RELATES' THEN 2 WHEN 'LINKS_TO' THEN 3 ELSE 4 END) AS weight
 ORDER BY length(p), weight
 WITH n, collect(p)[0] AS p
-RETURN n.path AS path, n.title AS title, n.status AS status, length(p) AS hops,
+RETURN n.path AS path, n.status AS status, length(p) AS hops,
        [x IN nodes(p)[1..-1] | coalesce(x.path, x.name)] AS via,
        [r IN relationships(p) | type(r)] AS rels,
        [r IN relationships(p) | coalesce(r.why, '')] AS whys
@@ -208,7 +207,7 @@ ORDER BY hops, path LIMIT %d`, depth, maxNeighbors)
 	for _, r := range res.Records {
 		m := r.AsMap()
 		out = append(out, Neighbor{
-			Path: str(m["path"]), Title: str(m["title"]), Status: str(m["status"]), Hops: int(num(m["hops"])),
+			Path: str(m["path"]), Status: str(m["status"]), Hops: int(num(m["hops"])),
 			Via: strs(m["via"]), Rels: strs(m["rels"]), Whys: strs(m["whys"]),
 		})
 	}

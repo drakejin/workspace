@@ -60,7 +60,7 @@ func TestRenderStatusRunning(t *testing.T) {
 	now := time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)
 	sum := state.CycleSummary{Scanned: 9, ColdOwned: 2, Refused: true, Partial: true}
 	_ = state.WriteStatus(root, state.Status{
-		PID: 1, StartedAt: "s", HeartbeatAt: now.Add(-10 * time.Minute).Format(time.RFC3339Nano), IntervalSeconds: 60, Cycles: 4,
+		StartedAt: "s", HeartbeatAt: now.Add(-10 * time.Minute).Format(time.RFC3339Nano), IntervalSeconds: 60, Cycles: 4,
 		LastCycle: &state.CycleRecord{Trigger: "timer", At: "a", Summary: &sum, Graph: "docs=4 entities=2 edges=3"},
 	})
 	_ = state.NewJudgeState(root).Ledger.Append("t", state.JudgeRecord{PairKey: "k", Decision: state.DecisionQuestion})

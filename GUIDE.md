@@ -443,7 +443,7 @@ team=demo cold 인덱스 2개 (repository mem-cold)
 - mem-demo-2026.06  snapshot=cold-mem-demo-2026.06-20261013t003025-064934000  at=2026-10-13T00:30:25.062Z
 - mem-demo-2026.08  snapshot=cold-mem-demo-2026.08-20261013t003025-237458000  at=2026-10-13T00:30:25.062Z
 
-mem-demo-2026.06 을(를) snapshot cold-mem-demo-2026.06-20261013t003025-064934000 에서 hot 으로 복원했습니다. 이제 search_memory 에 포함됩니다 (ISM 자동 관리 제외).
+mem-demo-2026.06 을(를) snapshot cold-mem-demo-2026.06-20261013t003025-064934000 에서 hot 으로 복원했습니다. 이제 검색(search_memory, CLI: search)에 포함됩니다 (ISM 자동 관리 제외).
 
 [1] docs/repository/order-api/prd/2026-06-order-launch.md › 주문 API 1차 출시 PRD > 활성 주문 정의  (prd, project=order-api, 2026-06-15; score 3.03)
 ```

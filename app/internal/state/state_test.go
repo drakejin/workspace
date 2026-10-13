@@ -225,7 +225,7 @@ func TestLockStatusAndTick(t *testing.T) {
 		t.Error("holder 가 죽으면(락이 풀리면) 돌고 있지 않다")
 	}
 	sum := CycleSummary{Scanned: 3}
-	if err := WriteStatus(root, Status{PID: 1, Cycles: 2, LastCycle: &CycleRecord{Trigger: "boot", Summary: &sum}}); err != nil {
+	if err := WriteStatus(root, Status{Cycles: 2, LastCycle: &CycleRecord{Trigger: "boot", Summary: &sum}}); err != nil {
 		t.Fatal(err)
 	}
 	if s := ReadStatus(root); s == nil || s.Cycles != 2 || s.LastCycle.Summary.Scanned != 3 {

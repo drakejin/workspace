@@ -72,7 +72,7 @@ func validateNames(r Request) error {
 		}
 	}
 	if r.Topic != "" && document.NormalizeTopic(r.Topic) == "" {
-		return fmt.Errorf("topic 에 글자·숫자가 없습니다: %q (search_filters 로 쓸 수 있는 주제를 확인하세요)", r.Topic)
+		return fmt.Errorf("topic 에 글자·숫자가 없습니다: %q (%s 로 쓸 수 있는 주제를 확인하세요)", r.Topic, FiltersHint)
 	}
 	if r.Project != "" && document.NormalizeProject(r.Project) == "" {
 		return fmt.Errorf("project 가 공백뿐입니다: %q", r.Project)
@@ -97,7 +97,6 @@ func boundFilter(op, v, timeZone string) map[string]any {
 type Hit struct {
 	Team         string
 	Score        float64
-	Index        string
 	SourcePath   string
 	HeaderPath   string
 	Project      string
@@ -131,8 +130,13 @@ type Result struct {
 	Total int
 }
 
-// ErrEmptyQuery 는 질의어도 필터도 없다는 뜻이다.
-var ErrEmptyQuery = errors.New("query 가 비어 있습니다 (질의어 없이 가져오려면 date·time_range·project·topic·doc_type 중 하나를 주세요)")
+// FiltersHint 는 필터 값을 보는 방법이다. 안내문은 MCP 도구와 CLI 명령(scripts/memory/run.sh <command>)이 같이 보므로
+// 두 이름을 함께 적는다.
+const FiltersHint = "search_filters(CLI: filters)"
+
+// ErrEmptyQuery 는 질의어도 필터도 없다는 뜻이다. MCP 입력 이름과 CLI 플래그를 함께 적는다.
+var ErrEmptyQuery = errors.New("query 가 비어 있습니다 (질의어 없이 가져오려면 필터를 하나 이상 주세요 — " +
+	"MCP: date·time_range·project·topic·doc_type, CLI: -date·-from/-to·-project·-topic·-type)")
 
 // BuildQuery 는 BM25 multi_match + 필터 질의다.
 func BuildQuery(r Request) map[string]any {
@@ -217,7 +221,7 @@ func Search(ctx context.Context, c opensearch.Client, r Request) (Result, error)
 		s := h.Source
 		hits = append(hits, Hit{
 			Team:  s.Team,
-			Score: h.Score, Index: h.Index, SourcePath: s.SourcePath, HeaderPath: s.HeaderPath, Project: s.Repo, Topic: s.Topic,
+			Score: h.Score, SourcePath: s.SourcePath, HeaderPath: s.HeaderPath, Project: s.Repo, Topic: s.Topic,
 			DocType: s.DocType, EventTime: s.EventTime, EventDay: s.EventDay, GitSHA: s.GitSHA, Text: s.Text, Summary: s.Summary, SupersededBy: s.SupersededBy, Deprecated: s.Deprecated,
 		})
 	}

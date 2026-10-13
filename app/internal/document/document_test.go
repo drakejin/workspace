@@ -129,7 +129,7 @@ func TestBuildKeepsChunkZeroForABlankBody(t *testing.T) {
 			got := b.Chunks[0]
 			if got.ChunkIndex != 0 || got.ID != ChunkID("ws", "ads", in.SourcePath, 0) || got.Text != "" || got.ContentSHA != b.ContentSHA ||
 				got.BodySHA != b.BodySHA || got.MtimeMs != 1000 || got.Size != 42 || got.IndexVersion != model.IndexVersion ||
-				got.Title != c.title || got.HeaderPath != c.title || got.EventDay != b.EventDay {
+				got.Title != c.title || got.HeaderPath != c.title || got.EventDay != b.EventTime.UTC().Format("2006-01-02") {
 				t.Errorf("chunk 0 = %+v", got)
 			}
 		})
@@ -272,7 +272,7 @@ func TestEventDay(t *testing.T) {
 	}
 	// frontmatter 에 시각까지 적었으면 그 시각을 시간대로 본다
 	b, _ = Build(Input{Workspace: "ws", SourcePath: "docs/c.md", Content: "---\ndate: 2026-10-06T23:30:00Z\n---\n# C", DefaultTeam: "t", Now: time.Now(), Location: seoul})
-	if b.Chunks[0].EventDay != "2026-10-07" || b.EventDay != "2026-10-07" {
+	if b.Chunks[0].EventDay != "2026-10-07" {
 		t.Errorf("frontmatter 시각 = %q", b.Chunks[0].EventDay)
 	}
 }

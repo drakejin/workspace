@@ -151,7 +151,7 @@ claude mcp add drakejin-workspace-memory-mcp -s user -- bash ~/Workspace/drakeji
 | `related_docs(path, depth?)` | knowledge graph 에서 이어진 문서 — supersedes·derived_from·relates·링크·같은 entity·같은 repo |
 | `docs_by_entity(entity)` | 증류가 뽑은 entity(`service:order-api` 등)를 다루는 문서 |
 | `ingest_path(path, team?)` | 데몬이 아직 잡지 못한 파일·디렉토리를 바로 색인. 경로는 디스크의 철자(대소문자·NFC)로 맞추고, 데몬과 같은 게이트로 바이너리·`MEMORY_MAX_FILE_BYTES` 초과는 건너뛴다고 알린다. 적재한 문서는 다음 데몬 사이클이 판정·증류·그래프로 넘긴다 |
-| `list_cold(team?)` | 60일이 지나 cold 로 간 인덱스 목록 (인덱스마다 그 인덱스를 담은 스냅샷 전부). 이 meta-repo 의 팀만 — 다른 workspace 의 팀이면 거부한다 |
+| `list_cold(team?)` | 60일이 지나 cold 로 간 인덱스 목록 (인덱스마다 그 인덱스를 담은 스냅샷 전부). `team` 은 팀 이름만 받는다(org 는 받지 않는다). 이 meta-repo 의 팀만 — 다른 workspace 의 팀이면 거부한다 |
 | `restore_cold(index, confirmed?)` | cold 인덱스 복원 (그 인덱스를 담은 스냅샷 전부를 합친다). `confirmed=true` 가 없으면 "사용자에게 먼저 물으라" 고 돌려준다 |
 
 발표의 넷(`search_memory`·`ingest_path`·`list_cold`·`restore_cold`)은 발표 그대로이고, `search_filters` 는 필터 값을 고르려고, 그래프 둘(`related_docs`·`docs_by_entity`)은 Neo4j 를 붙이며 더했다. 그래프를 끄면(`MEMORY_GRAPH_URI=off`) 그래프 도구는 "꺼져 있다" 를,
@@ -390,10 +390,11 @@ cat .cache/daemon/status.json | jq .lastCycle         # 마지막 사이클
 | `scripts/memory/run.sh audit [-apply]` | 정합성 감사 (고칠 수 있는 것: 고아 색인·미색인·내용 불일치·고아 청크) |
 | `scripts/memory/run.sh archive <deprecate\|undeprecate\|purge\|edit> [-team T] -by B -reason R [-superseded-by P] [-file F] <path>` | cold 문서 조치 |
 | `scripts/memory/run.sh graph <neighbors [-depth N] <path> \| entity <name> \| stats \| rebuild>` | knowledge graph 조회 / 재구축 (LLM 0회) |
-| `scripts/memory/run.sh bench -questions F [-model M] [-modes with,without] [-runs N] [-max-turns N] [-mcp-script P]` | memory-mcp 유무 비교 측정 → `.cache/bench/*.md` (F 는 meta-repo 밖. `-max-turns` 질문당 최대 턴, 기본 15 · `-mcp-script` MCP 서버 진입점, 기본 이 레포의 `scripts/mcp/run.sh`) |
+| `scripts/memory/run.sh bench -questions F [-model M] [-modes with,without] [-runs N] [-max-turns N] [-mcp-script P]` | memory-mcp 유무 비교 측정 → `.cache/bench/*.md` (F 는 meta-repo 밖). `-max-turns` 는 질문당 최대 턴(기본 15), `-mcp-script` 는 with 조건이 부를 `scripts/mcp/run.sh` 절대 경로(기본: 이 레포의 것) |
 
 전체 목록은 `scripts/memory/run.sh help` — 위 표에 없는 명령(`list-cold`, `restore`, `reload`, `ingest`, `bootstrap`, `tier-tick` …)도
 이 진입점으로 부른다 (`.env` 를 읽고, 바뀐 게 있으면 빌드한다. `.cache/bin/memory-mcp` 를 직접 부르면 `.env` 가 빠진다).
+명령마다 받는 플래그와 설명·기본값은 `scripts/memory/run.sh <command> -h` 로 본다 (OpenSearch 가 꺼져 있어도 나온다). 사용법이 틀리면 같은 표를 보이고 exit 2 로 끝난다.
 
 ### 5.3 app/Makefile — Go 개발 (`make -C app <타겟>`)
 
@@ -404,7 +405,6 @@ cat .cache/daemon/status.json | jq .lastCycle         # 마지막 사이클
 | `make test-e2e` | 실제 스택(루트의 `make memory-init`)에 붙는 e2e + 커버리지 (`../.cache/coverage.out`) |
 | `make test-e2e-slow` | ISM 이 실제 시간으로 인덱스를 cold 로 옮기는 e2e (6~15분, 루트의 `make memory-init` 스택 필요) |
 | `make test-e2e-s3` | cold 층을 S3(LocalStack)에 두는 e2e — 전용 스택을 올렸다 내린다 |
-| `make mcp` | MCP 서버 (stdio) 수동 실행 (`scripts/mcp/run.sh` 와 같다) |
 
 테스트 타겟은 모두 `app/test/run.sh` 를 부른다.
 
@@ -434,7 +434,7 @@ cat .cache/daemon/status.json | jq .lastCycle         # 마지막 사이클
 │   ├── sample-workspace/   # 체험용 가상 meta-repo (GUIDE.md §4)
 │   └── sample-bench.yaml   # 샘플용 bench 질문 (meta-repo 밖에 둔다)
 ├── app/                    # Go 모듈 전부 (github.com/drakejin/workspace/app)
-│   ├── Makefile            # Go 개발 — build test test-e2e test-e2e-slow test-e2e-s3 mcp (§5.3)
+│   ├── Makefile            # Go 개발 — build test test-e2e test-e2e-slow test-e2e-s3 (§5.3)
 │   ├── go.mod · go.sum · mise.toml
 │   ├── memory-mcp/         # MCP 서버(stdio) + 운영 CLI      → .cache/bin/memory-mcp
 │   ├── daemon/             # reconcile 데몬                  → .cache/bin/memory-daemon
