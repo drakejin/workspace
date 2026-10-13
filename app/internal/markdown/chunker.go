@@ -15,8 +15,8 @@ type Chunk struct {
 // HeaderSeparator 는 header_path 구분자다.
 const HeaderSeparator = " > "
 
-// DefaultMaxChars 를 넘는 섹션은 문단 경계에서 더 나눈다. 문단 하나가 넘으면 줄 → 문장 → 글자 경계로 더 나눈다.
-const DefaultMaxChars = 4000
+// defaultMaxChars 를 넘는 섹션은 문단 경계에서 더 나눈다. 문단 하나가 넘으면 줄 → 문장 → 글자 경계로 더 나눈다.
+const defaultMaxChars = 4000
 
 var (
 	// headerLine 은 ATX 제목 줄이다. 닫는 # 은 앞에 스페이스·탭이 있을 때만 뺀다 (CommonMark) — "C#"·"F#" 의 # 은 제목의 일부다
@@ -40,7 +40,7 @@ type section struct {
 // rootTitle 은 헤더 앞 머리말의 이름이다.
 func ChunkMarkdown(body, rootTitle string, maxChars int) []Chunk {
 	if maxChars <= 0 {
-		maxChars = DefaultMaxChars
+		maxChars = defaultMaxChars
 	}
 	var out []Chunk
 	for _, s := range splitSections(body) {

@@ -58,10 +58,13 @@ func TestRemoveHotOriginalsKeepsFilesGitCannotRestore(t *testing.T) {
 		docs = append(docs, sourceDoc{team: "t", sourcePath: rel, contentSHA: document.SHA256(string(body))})
 	}
 
-	removed, kept, err := removeHotOriginals(ctx, store, root, docs)
+	removed, kept, byGit, err := removeHotOriginals(ctx, store, root, docs)
 
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !byGit {
+		t.Errorf("git 레포에서는 git rm 으로 지웠다고 알린다 (커밋해야 한다)")
 	}
 	if strings.Join(removed, ",") != "docs/specs/committed.md" {
 		t.Errorf("지운 원본 = %v (HEAD 와 같은 파일만)", removed)
@@ -104,10 +107,10 @@ func TestRemoveHotOriginalsUsesTheOnDiskSpelling(t *testing.T) {
 			if !hotOriginalExists(root, c.sourcePath) {
 				t.Errorf("디스크의 철자로 원본을 찾아야 한다")
 			}
-			removed, kept, err := removeHotOriginals(ctx, store, root, []sourceDoc{doc})
+			removed, kept, byGit, err := removeHotOriginals(ctx, store, root, []sourceDoc{doc})
 
-			if err != nil || strings.Join(removed, ",") != c.sourcePath || len(kept) != 0 {
-				t.Errorf("removed=%v kept=%v err=%v (커밋된 그대로인 원본은 지운다)", removed, kept, err)
+			if err != nil || strings.Join(removed, ",") != c.sourcePath || len(kept) != 0 || !byGit {
+				t.Errorf("removed=%v kept=%v byGit=%v err=%v (커밋된 그대로인 원본은 git rm 으로 지운다)", removed, kept, byGit, err)
 			}
 			if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(c.disk))); !os.IsNotExist(err) {
 				t.Errorf("디스크의 원본이 남았다: %v", err)
@@ -124,10 +127,10 @@ func TestRemoveHotOriginalsOutsideGitRemovesVerifiedCopies(t *testing.T) {
 	writeHot(t, root, "docs/specs/a.md", "# a\n")
 	mustDo(t, store.Put(ctx, RawKey("t", "docs/specs/a.md"), "# a\n"))
 
-	removed, kept, err := removeHotOriginals(ctx, store, root, []sourceDoc{{team: "t", sourcePath: "docs/specs/a.md", contentSHA: document.SHA256("# a\n")}})
+	removed, kept, byGit, err := removeHotOriginals(ctx, store, root, []sourceDoc{{team: "t", sourcePath: "docs/specs/a.md", contentSHA: document.SHA256("# a\n")}})
 
-	if err != nil || strings.Join(removed, ",") != "docs/specs/a.md" || len(kept) != 0 {
-		t.Errorf("removed=%v kept=%v err=%v", removed, kept, err)
+	if err != nil || strings.Join(removed, ",") != "docs/specs/a.md" || len(kept) != 0 || byGit {
+		t.Errorf("removed=%v kept=%v byGit=%v err=%v (git 이 다루지 않으므로 파일만 지운다 — git rm 이 아니다)", removed, kept, byGit, err)
 	}
 }
 
@@ -152,6 +155,9 @@ func TestPruneReportsOriginalsKeptForGit(t *testing.T) {
 	decisions, err = pruneArchived(context.Background(), fake, store, cfg, "t", map[string]bool{})
 	if err != nil || len(decisions) != 1 || decisions[0].Action != TierPruned || len(decisions[0].RemovedFiles) != len(hot) {
 		t.Errorf("커밋한 뒤에는 치운다: %+v %v", decisions, err)
+	}
+	if len(decisions) == 1 && !decisions[0].GitRemoved {
+		t.Errorf("git 레포에서 치운 원본은 git rm 으로 지웠다고 결정에 남긴다 (커밋해야 한다): %+v", decisions[0])
 	}
 }
 
@@ -250,10 +256,10 @@ func TestRemoveHotOriginalsKeepsFilesWhenGitRefusesTheRepo(t *testing.T) {
 	docs := verifiedDocs(t, store, root, "docs/specs/untracked.md")
 	t.Setenv("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1") // git 이 이 레포의 소유자를 믿지 않는다
 
-	removed, kept, err := removeHotOriginals(ctx, store, root, docs)
+	removed, kept, byGit, err := removeHotOriginals(ctx, store, root, docs)
 
-	if err == nil || len(removed) != 0 || len(kept) != 0 {
-		t.Errorf("git 이 레포를 거부하면 지우지 않고 알린다: removed=%v kept=%v err=%v", removed, kept, err)
+	if err == nil || len(removed) != 0 || len(kept) != 0 || byGit {
+		t.Errorf("git 이 레포를 거부하면 지우지 않고 알린다: removed=%v kept=%v byGit=%v err=%v", removed, kept, byGit, err)
 	}
 	if _, statErr := os.Stat(filepath.Join(root, "docs/specs/untracked.md")); statErr != nil {
 		t.Errorf("커밋 안 된 원본을 지웠다: %v", statErr)
@@ -275,10 +281,10 @@ func TestRemoveHotOriginalsInsideAnEnclosingRepo(t *testing.T) {
 		writeHot(t, root, "docs/specs/a.md", "# a\n")
 		store := NewLocalStore(t.TempDir())
 
-		removed, kept, err := removeHotOriginals(ctx, store, root, verifiedDocs(t, store, root, "docs/specs/a.md"))
+		removed, kept, byGit, err := removeHotOriginals(ctx, store, root, verifiedDocs(t, store, root, "docs/specs/a.md"))
 
-		if err != nil || strings.Join(removed, ",") != "docs/specs/a.md" || len(kept) != 0 {
-			t.Errorf("git 레포가 아닌 meta-repo 처럼 지운다: removed=%v kept=%v err=%v", removed, kept, err)
+		if err != nil || strings.Join(removed, ",") != "docs/specs/a.md" || len(kept) != 0 || byGit {
+			t.Errorf("git 레포가 아닌 meta-repo 처럼 지운다: removed=%v kept=%v byGit=%v err=%v", removed, kept, byGit, err)
 		}
 	})
 	t.Run("바깥 레포가 meta-repo 를 추적한다", func(t *testing.T) {
@@ -291,10 +297,48 @@ func TestRemoveHotOriginalsInsideAnEnclosingRepo(t *testing.T) {
 		writeHot(t, root, "docs/specs/untracked.md", "# 커밋한 적 없다\n")
 		store := NewLocalStore(t.TempDir())
 
-		removed, kept, err := removeHotOriginals(ctx, store, root, verifiedDocs(t, store, root, "docs/specs/committed.md", "docs/specs/untracked.md"))
+		removed, kept, byGit, err := removeHotOriginals(ctx, store, root, verifiedDocs(t, store, root, "docs/specs/committed.md", "docs/specs/untracked.md"))
 
-		if err != nil || strings.Join(removed, ",") != "docs/specs/committed.md" || strings.Join(kept, ",") != "docs/specs/untracked.md" {
-			t.Errorf("git 이 되살릴 수 있는 원본만 지운다: removed=%v kept=%v err=%v", removed, kept, err)
+		if err != nil || strings.Join(removed, ",") != "docs/specs/committed.md" || strings.Join(kept, ",") != "docs/specs/untracked.md" || !byGit {
+			t.Errorf("git 이 되살릴 수 있는 원본만 git rm 으로 지운다: removed=%v kept=%v byGit=%v err=%v", removed, kept, byGit, err)
 		}
 	})
+}
+
+// R5-final-daemon-5: GitState 는 KeptByGit 의 답을 바꾸는 일(커밋, add·rm --cached 로 추적이 바뀜)이 있을 때만 바뀐다 — 데몬은 이 값이
+// 그대로면 남긴 원본을 git 으로 다시 보지 않는다. git 레포가 아니면 그렇다는 값이다.
+func TestGitStateChangesOnlyWhenKeptByGitCan(t *testing.T) {
+	ctx := context.Background()
+	outside, err := GitState(ctx, t.TempDir())
+	if err != nil || outside != gitStateNone {
+		t.Errorf("git 레포가 아니다: %q %v", outside, err)
+	}
+	root := t.TempDir()
+	gitIn(t, root, "init", "-q")
+	writeHot(t, root, "docs/specs/a.md", "# a\n")
+	state := func() string {
+		t.Helper()
+		s, err := GitState(ctx, root)
+		mustDo(t, err)
+		return s
+	}
+
+	empty := state()
+	if again := state(); again != empty {
+		t.Errorf("바뀐 것이 없는데 다르다: %q → %q", empty, again)
+	}
+	gitIn(t, root, "add", "docs/specs/a.md")
+	staged := state()
+	gitIn(t, root, "commit", "-q", "-m", "a")
+	committed := state()
+	gitIn(t, root, "rm", "-q", "--cached", "docs/specs/a.md")
+	untracked := state()
+
+	seen := map[string]bool{}
+	for _, s := range []string{empty, staged, committed, untracked} {
+		if seen[s] {
+			t.Errorf("add·commit·rm --cached 뒤에도 같은 값이 나왔다: %q", []string{empty, staged, committed, untracked})
+		}
+		seen[s] = true
+	}
 }

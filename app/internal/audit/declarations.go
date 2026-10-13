@@ -18,14 +18,14 @@ func (r *runner) badFrontmatterValue(rel string, err error) {
 	if !errors.As(err, &fe) {
 		return
 	}
-	r.add(BadFrontmatter, rel, "frontmatter 값이 잘못됐다 — 이 판은 색인하지 않는다 (색인에는 고치기 전 판이 남는다): "+fe.Error(), false)
+	r.add(badFrontmatter, rel, "frontmatter 값이 잘못됐다 — 이 판은 색인하지 않는다 (색인에는 고치기 전 판이 남는다): "+fe.Error(), false)
 }
 
 // noteFrontmatter 는 Prepare 한 파일의 frontmatter 를 본다: YAML 이 깨졌으면 알리고(메타데이터 없이 원문 전체가 본문으로
 // 색인된다), supersedes 선언은 순환 검사(supersedesDeclarations)를 위해 모은다.
 func (r *runner) noteFrontmatter(rel string, b document.Built) {
 	if b.FrontmatterErr != nil {
-		r.add(BadFrontmatter, rel, "frontmatter YAML 이 깨졌다 — 메타데이터(team·date·supersedes …) 없이 원문 전체를 본문으로 색인한다: "+b.FrontmatterErr.Error(), false)
+		r.add(badFrontmatter, rel, "frontmatter YAML 이 깨졌다 — 메타데이터(team·date·supersedes …) 없이 원문 전체를 본문으로 색인한다: "+b.FrontmatterErr.Error(), false)
 	}
 	if b.Meta.Supersedes == "" {
 		return
@@ -36,7 +36,7 @@ func (r *runner) noteFrontmatter(rel string, b document.Built) {
 	r.declared[rel] = b.Meta.Supersedes
 }
 
-// supersedesDeclarations 는 수렴(DesiredSupersededBy)이 말없이 버리는 supersedes 선언을 알린다: 자기 자신을 가리키는 선언,
+// supersedesDeclarations 는 수렴(daemon 의 desiredSupersededBy)이 말없이 버리는 supersedes 선언을 알린다: 자기 자신을 가리키는 선언,
 // 순환하는 선언(A↔B — 어느 쪽도 밀리지 않고 그래프에도 관계가 없다). 고리 하나는 한 번만, 가장 앞선 경로로 알린다.
 func (r *runner) supersedesDeclarations(_ context.Context) error {
 	starts := make([]string, 0, len(r.declared))
@@ -47,7 +47,7 @@ func (r *runner) supersedesDeclarations(_ context.Context) error {
 	reported := map[string]bool{}
 	for _, start := range starts {
 		if r.declared[start] == start {
-			r.add(SupersedesSelf, start, "frontmatter supersedes 가 자기 자신을 가리킨다 — 선언을 무시한다", false)
+			r.add(supersedesSelf, start, "frontmatter supersedes 가 자기 자신을 가리킨다 — 선언을 무시한다", false)
 			continue
 		}
 		cycle := cycleFrom(r.declared, start)
@@ -58,7 +58,7 @@ func (r *runner) supersedesDeclarations(_ context.Context) error {
 			reported[rel] = true
 		}
 		loop := strings.Join(append(cycle, start), " → ")
-		r.add(SupersedesCycle, start, fmt.Sprintf("frontmatter supersedes 가 순환한다 (%s) — 순환한 선언은 모두 무시돼 어느 쪽도 밀리지 않는다", loop), false)
+		r.add(supersedesCycle, start, fmt.Sprintf("frontmatter supersedes 가 순환한다 (%s) — 순환한 선언은 모두 무시돼 어느 쪽도 밀리지 않는다", loop), false)
 	}
 	return nil
 }

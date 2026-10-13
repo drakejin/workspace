@@ -46,12 +46,12 @@ func TestInputValidationBeforeIO(t *testing.T) {
 }
 
 func TestFormatIngest(t *testing.T) {
-	out := FormatIngest([]ingest.Result{{SourcePath: "docs/a.md", Index: "mem-a-2026.10", Chunks: 3}})
+	out := formatIngest([]ingest.Result{{SourcePath: "docs/a.md", Index: "mem-a-2026.10", Chunks: 3}})
 	if out != "1개 문서 적재\n- docs/a.md → mem-a-2026.10 (3 chunks)" {
 		t.Errorf("= %q", out)
 	}
 	// RUN-7: 게이트에 걸린 파일은 적재한 수에 넣지 않고 건너뛴 사유와 함께 따로 적는다
-	out = FormatIngest([]ingest.Result{
+	out = formatIngest([]ingest.Result{
 		{SourcePath: "docs/a.md", Index: "mem-a-2026.10", Chunks: 3},
 		{SourcePath: "docs/bin.md", Skipped: "binary content"},
 		{SourcePath: "docs/big.md", Skipped: "size 2300271 > 2097152"},

@@ -17,7 +17,7 @@ not json
 {"type":"result","subtype":"success","duration_ms":6929,"num_turns":3,"total_cost_usd":0.06,"result":"재시도는 5회, 근거 docs/feature/payment-retry/2026-10-06-retry-policy.md","usage":{"input_tokens":18,"cache_creation_input_tokens":100,"cache_read_input_tokens":200,"output_tokens":319}}`
 
 func TestParseStream(t *testing.T) {
-	r := ParseStream(stream)
+	r := parseStream(stream)
 	if r.TotalTools() != 3 || r.MemoryTools() != 1 || r.Turns != 3 || r.DurationMs != 6929 || r.InputTokens != 318 || r.OutputTokens != 319 || r.CostUSD != 0.06 {
 		t.Errorf("parsed = %+v", r)
 	}

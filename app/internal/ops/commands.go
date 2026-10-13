@@ -219,7 +219,7 @@ func runQuestions(_ context.Context, c *CLI, args []string) (string, error) {
 	if _, err := newFlags("questions").parse(args); err != nil {
 		return "", err
 	}
-	return RenderQuestions(c.Config.MetaRepoRoot)
+	return renderQuestions(c.Config.MetaRepoRoot)
 }
 
 func runAnswer(_ context.Context, c *CLI, args []string) (string, error) {
@@ -231,7 +231,7 @@ func runAnswer(_ context.Context, c *CLI, args []string) (string, error) {
 	if len(rest) != 2 {
 		return "", f.usageErr()
 	}
-	a, ok := ParseAnswer(rest[1])
+	a, ok := parseAnswer(rest[1])
 	if !ok {
 		return "", f.usageErr()
 	}
@@ -362,20 +362,27 @@ func renderTier(decisions []cold.TierDecision) string {
 		return "대상 인덱스 없음"
 	}
 	var b strings.Builder
-	removed, kept := 0, 0
+	gitRemoved, fileRemoved, kept := 0, 0, 0
 	for _, d := range decisions {
 		fmt.Fprintf(&b, "%-16s %s  newest=%s\n", d.Action, d.Index, orDash(d.NewestEvent))
 		for _, f := range d.RemovedFiles {
 			fmt.Fprintf(&b, "  - hot 에서 뺌: %s\n", f)
-			removed++
+		}
+		if d.GitRemoved {
+			gitRemoved += len(d.RemovedFiles)
+		} else {
+			fileRemoved += len(d.RemovedFiles)
 		}
 		for _, f := range d.KeptFiles {
 			fmt.Fprintf(&b, "  - hot 에 남김: %s (git 에 커밋된 내용이 아니다)\n", f)
 			kept++
 		}
 	}
-	if removed > 0 {
-		fmt.Fprintf(&b, "\nhot 원본 %d개를 cold 로 넘겼습니다 (git rm). 원본은 cold store raw 와 스냅샷에 있습니다 — 'git commit' 하세요.", removed)
+	if gitRemoved > 0 {
+		fmt.Fprintf(&b, "\nhot 원본 %d개를 cold 로 넘겼습니다 (git rm). 원본은 cold store raw 와 스냅샷에 있습니다 — 'git commit' 하세요.", gitRemoved)
+	}
+	if fileRemoved > 0 {
+		fmt.Fprintf(&b, "\nhot 원본 %d개를 cold 로 넘겼습니다 (파일 삭제 — git 이 다루지 않는 meta-repo). 원본은 이제 cold store raw 와 스냅샷에만 있습니다.", fileRemoved)
 	}
 	if kept > 0 {
 		fmt.Fprintf(&b, "\nhot 원본 %d개는 git 이 되살릴 수 없어(커밋하지 않았거나 커밋 뒤 고쳤다) 남겼습니다 — 커밋하면 다음 tier 가 hot 에서 뺍니다.", kept)

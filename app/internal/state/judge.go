@@ -56,7 +56,7 @@ type JudgeState struct{ Ledger *Ledger[JudgeRecord] }
 
 // NewJudgeState 는 root 의 판정 원장이다.
 func NewJudgeState(root string) *JudgeState {
-	return &JudgeState{Ledger: NewLedger[JudgeRecord](filepath.Join(CacheDir(root), "judge"))}
+	return &JudgeState{Ledger: newLedger[JudgeRecord](filepath.Join(CacheDir(root), "judge"))}
 }
 
 // records 는 팀 원장 전체다. 경로는 NFC 로 맞춰 읽는다 — 문서의 정체(source_path)가 NFC 로 바뀌기 전에 NFD 경로

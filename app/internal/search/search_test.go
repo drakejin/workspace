@@ -14,7 +14,7 @@ import (
 )
 
 func TestBuildQuery(t *testing.T) {
-	q := BuildQuery(Request{Workspace: "ws", Team: "ads", Query: "dedup", TimeRange: model.TimeRange{From: "now-30d"}, Project: "attribution", DocType: model.DocADR, Size: 500})
+	q := buildQuery(Request{Workspace: "ws", Team: "ads", Query: "dedup", TimeRange: model.TimeRange{From: "now-30d"}, Project: "attribution", DocType: model.DocADR, Size: 500})
 	if q["size"] != MaxSize {
 		t.Errorf("size = %v", q["size"])
 	}
@@ -22,11 +22,11 @@ func TestBuildQuery(t *testing.T) {
 	if len(b["filter"].([]any)) != 4 || b["must_not"] == nil {
 		t.Errorf("bool = %v", b)
 	}
-	plain := BuildQuery(Request{Team: "a", Query: "x", IncludeSuperseded: true})["query"].(map[string]any)["bool"].(map[string]any)
+	plain := buildQuery(Request{Team: "a", Query: "x", IncludeSuperseded: true})["query"].(map[string]any)["bool"].(map[string]any)
 	if len(plain["filter"].([]any)) != 0 || plain["must_not"] != nil {
 		t.Errorf("plain = %v", plain)
 	}
-	if BuildQuery(Request{Query: "x"})["size"] != defaultSize {
+	if buildQuery(Request{Query: "x"})["size"] != defaultSize {
 		t.Error("default size")
 	}
 }
@@ -99,7 +99,7 @@ func TestSearchOrgAlias(t *testing.T) {
 	if _, err := Search(context.Background(), os, Request{Org: "Bad Org", Query: "x"}); err == nil {
 		t.Error("잘못된 org")
 	}
-	q := BuildQuery(Request{Query: "x"})["query"].(map[string]any)["bool"].(map[string]any)
+	q := buildQuery(Request{Query: "x"})["query"].(map[string]any)["bool"].(map[string]any)
 	if len(q["must_not"].([]any)) != 2 {
 		t.Error("밀린 문서와 deprecated 를 숨긴다")
 	}
@@ -112,20 +112,20 @@ func filterOf(t *testing.T, q map[string]any) []any {
 
 func TestFiltersDateRangeTopicProject(t *testing.T) {
 	// 날짜는 문서의 날(event_day: frontmatter 날짜 그대로, 아니면 설정한 시간대의 날)로 맞춘다
-	q := BuildQuery(Request{Query: "x", Date: "2026-10-06", Topic: "Payments", Project: "alpha-api"})
+	q := buildQuery(Request{Query: "x", Date: "2026-10-06", Topic: "Payments", Project: "alpha-api"})
 	got, _ := json.Marshal(filterOf(t, q))
 	want := `[{"term":{"event_day":"2026-10-06"}},{"term":{"repo":{"case_insensitive":true,"value":"alpha-api"}}},{"term":{"topic":"payments"}}]`
 	if string(got) != want {
 		t.Errorf("date·project·topic\n got  %s\n want %s", got, want)
 	}
 	// 날짜만 준 범위는 그날 전체를 포함한다 (event_day 끼리 비교)
-	q = BuildQuery(Request{Query: "x", TimeRange: model.TimeRange{From: "2026-10-01", To: "2026-10-05"}})
+	q = buildQuery(Request{Query: "x", TimeRange: model.TimeRange{From: "2026-10-01", To: "2026-10-05"}})
 	got, _ = json.Marshal(filterOf(t, q))
 	if string(got) != `[{"range":{"event_day":{"gte":"2026-10-01"}}},{"range":{"event_day":{"lte":"2026-10-05"}}}]` {
 		t.Errorf("range = %s", got)
 	}
 	// date math 는 유효 시각에 시간대를 붙여 (now-3d/d 같은 반올림이 그 시간대의 하루가 되게)
-	q = BuildQuery(Request{Query: "x", TimeZone: "+09:00", TimeRange: model.TimeRange{From: "now-7d", To: "2026-10-05"}})
+	q = buildQuery(Request{Query: "x", TimeZone: "+09:00", TimeRange: model.TimeRange{From: "now-7d", To: "2026-10-05"}})
 	got, _ = json.Marshal(filterOf(t, q))
 	if string(got) != `[{"range":{"event_time":{"gte":"now-7d","time_zone":"+09:00"}}},{"range":{"event_day":{"lte":"2026-10-05"}}}]` {
 		t.Errorf("date math = %s", got)
@@ -136,7 +136,7 @@ func TestFiltersDateRangeTopicProject(t *testing.T) {
 // 9시간 이르다 — 경계보다 이른 문서가 조용히 섞였다). epoch 기준은 같은 시각의 UTC 표기로 바꿔 보낸다: 시간대를 적은 시각은
 // OpenSearch 가 그대로 읽고, 뒤의 date math 만 time_zone 에서 계산한다 — 다른 경계와 같다.
 func TestEpochBoundIsSentAsUTCInstant(t *testing.T) {
-	q := BuildQuery(Request{Query: "x", TimeZone: "Asia/Seoul", TimeRange: model.TimeRange{From: "1759312800000", To: "1759312800000||+1d/d"}})
+	q := buildQuery(Request{Query: "x", TimeZone: "Asia/Seoul", TimeRange: model.TimeRange{From: "1759312800000", To: "1759312800000||+1d/d"}})
 
 	got, _ := json.Marshal(filterOf(t, q))
 
@@ -151,7 +151,7 @@ func TestEpochBoundIsSentAsUTCInstant(t *testing.T) {
 // 도 같은 순서다. 연도를 epoch 로 바꿔 보내면 1970-01-01T00:00:02.026Z 가 되어 조용히 엉뚱한 문서가 나온다.
 func TestYearBoundIsSentAsTyped(t *testing.T) {
 	for _, v := range []string{"2026", "2026||+1M", "9999||/y"} {
-		q := BuildQuery(Request{Query: "x", TimeZone: "Asia/Seoul", TimeRange: model.TimeRange{From: v}})
+		q := buildQuery(Request{Query: "x", TimeZone: "Asia/Seoul", TimeRange: model.TimeRange{From: v}})
 
 		got, _ := json.Marshal(filterOf(t, q))
 
@@ -163,7 +163,7 @@ func TestYearBoundIsSentAsTyped(t *testing.T) {
 }
 
 func TestFilterOnlyListingIsOneHitPerDocumentNewestFirst(t *testing.T) {
-	q := BuildQuery(Request{Project: "beta-web"})
+	q := buildQuery(Request{Project: "beta-web"})
 	b := q["query"].(map[string]any)["bool"].(map[string]any)
 	if _, scored := b["must"]; scored {
 		t.Error("질의가 없으면 점수 없이 필터만")
@@ -217,7 +217,7 @@ func TestFacets(t *testing.T) {
 
 // 주제·프로젝트 이름도 질의어로 맞는다 — topic 이 frontmatter 에만 있는 문서도 "onboarding" 질의로 찾게
 func TestQueryAlsoMatchesTopicAndProjectNames(t *testing.T) {
-	q := BuildQuery(Request{Query: "onboarding"})
+	q := buildQuery(Request{Query: "onboarding"})
 	mm := q["query"].(map[string]any)["bool"].(map[string]any)["must"].([]any)[0].(map[string]any)["multi_match"].(map[string]any)
 	fields := strings.Join(mm["fields"].([]string), ",")
 	if !strings.Contains(fields, "topic.text") || !strings.Contains(fields, "repo.text") {

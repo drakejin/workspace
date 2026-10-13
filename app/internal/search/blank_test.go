@@ -16,7 +16,7 @@ func TestBuildQueryLeavesOutBlankDocuments(t *testing.T) {
 		"질의어 검색":       {Workspace: "ws", Team: "t", Query: "배송비"},
 		"밀린 문서도 함께 보기": {Team: "t", Query: "배송비", IncludeSuperseded: true},
 	} {
-		if got := BuildQuery(r)["post_filter"]; !reflect.DeepEqual(got, hasTextFilter) {
+		if got := buildQuery(r)["post_filter"]; !reflect.DeepEqual(got, hasTextFilter) {
 			t.Errorf("%s: text 가 있는 청크만 돌려주지 않는다: %v", name, got)
 		}
 	}

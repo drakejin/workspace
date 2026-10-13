@@ -8,7 +8,7 @@ import (
 // endpointLabels 는 관계 종류마다 두 끝의 노드 라벨이다 (Build 가 만드는 그대로).
 var endpointLabels = map[string][2]string{
 	"SUPERSEDES": {LabelDoc, LabelDoc}, "DERIVED_FROM": {LabelDoc, LabelDoc}, "RELATES": {LabelDoc, LabelDoc}, "LINKS_TO": {LabelDoc, LabelDoc},
-	RelMentions: {LabelDoc, LabelEntity}, RelInRepo: {LabelDoc, LabelRepo},
+	relMentions: {LabelDoc, LabelEntity}, relInRepo: {LabelDoc, labelRepo},
 }
 
 // OPS-11: 관계를 적재할 때 끝점을 라벨로 MATCH 해야 라벨별 key 유일 제약(인덱스)을 쓴다 — 라벨이 없으면 행마다 클러스터의

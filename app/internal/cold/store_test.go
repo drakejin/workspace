@@ -109,7 +109,7 @@ func (f *fakeS3) DeleteObject(_ context.Context, in *s3.DeleteObjectInput, _ ...
 
 func TestS3Store(t *testing.T) {
 	fake := &fakeS3{objects: map[string]string{}}
-	store := NewS3Store(fake, "bucket", "/memory/ws/")
+	store := newS3Store(fake, "bucket", "/memory/ws/")
 	exercise(t, store)
 	if store.Location() != "s3://bucket/memory/ws" {
 		t.Errorf("location = %s", store.Location())

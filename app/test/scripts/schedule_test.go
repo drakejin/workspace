@@ -1,6 +1,7 @@
 package scripts
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -102,7 +103,7 @@ func legacyTierPlist(checkout string) string {
 func assertLegacyKept(t *testing.T, sb *sandbox, launchctlLog string, r result) {
 	t.Helper()
 	if !exists(sb.agentPlist(legacyTierLabel)) {
-		t.Errorf("다른 meta-repo 의 예전 잡을 지웠다:\n%s", r.output())
+		t.Errorf("남겨야 할 예전 잡(다른 meta-repo 의 것, 어느 것인지 모르는 것, checkout 에 닿지 못한 것)을 지웠다:\n%s", r.output())
 	}
 	for _, c := range calls(t, launchctlLog) {
 		if strings.Contains(c, legacyTierLabel) {
@@ -111,8 +112,9 @@ func assertLegacyKept(t *testing.T, sb *sandbox, launchctlLog string, r result) 
 	}
 }
 
-// FILE-9 · R4-ops-scripts-1: 예전 고정 이름(com.drakejin.workspace.tier)의 잡은 그 잡이 돌던 meta-repo 에 install·uninstall 할 때
-// 내리고 지운다. 무엇을 내렸는지(그 잡이 돌던 meta-repo) 알린다.
+// FILE-9 · R4-ops-scripts-1 · R5-final-docs-3: 예전 고정 이름(com.drakejin.workspace.tier)의 잡은 그 잡이 돌던 meta-repo 에
+// install·uninstall 할 때 내리고 지운다. 무엇을 내렸는지(그 잡이 돌던 meta-repo) 그 잡을 내렸다는 줄에서 알린다 — install 이 늘
+// 찍는 'installed … root=<root>' 줄로는 알 수 없다.
 func TestScheduleMigratesLegacyJob(t *testing.T) {
 	for _, action := range []string{"install", "uninstall"} {
 		t.Run(action, func(t *testing.T) {
@@ -128,8 +130,8 @@ func TestScheduleMigratesLegacyJob(t *testing.T) {
 			if !containsCall(calls(t, launchctlLog), "unload "+legacy) {
 				t.Errorf("예전 잡을 launchd 에서 내리지 않았다: %v", calls(t, launchctlLog))
 			}
-			if !strings.Contains(r.stdout, legacyTierLabel) || !strings.Contains(r.stdout, root) {
-				t.Errorf("예전 잡과 그 잡이 돌던 meta-repo(%s)를 알려야 한다:\n%s", root, r.output())
+			if line := lineContaining(r.stdout, legacyTierLabel); !strings.Contains(line, "meta-repo "+root) {
+				t.Errorf("예전 잡을 내린 줄이 그 잡이 돌던 meta-repo(%s)를 알려야 한다: %q\n%s", root, line, r.output())
 			}
 		})
 	}
@@ -186,6 +188,7 @@ func TestScheduleMigratesLegacyJobByItsCheckoutEnv(t *testing.T) {
 func TestScheduleStatusNamesLegacyJobsMetaRepo(t *testing.T) {
 	sb, root, _ := tierSandbox(t, "copy")
 	realws := filepath.Join(sb.dir, "realws")
+	writeFile(t, filepath.Join(realws, "scripts", "memory", "run.sh"), "#!/usr/bin/env bash\n")
 	writeFile(t, sb.agentPlist(legacyTierLabel), legacyTierPlist(realws))
 
 	r := sb.mustBash(nil, scheduleScript(root), "status")
@@ -218,6 +221,102 @@ func TestScheduleUninstallFindsInstalledJobAfterRename(t *testing.T) {
 	if exists(sb.tierPlist("meta")) {
 		t.Errorf("이름이 바뀐 뒤 uninstall 이 깔린 잡(%s)을 찾지 못했다:\n%s", tierLabel("meta"), r.output())
 	}
+}
+
+// R5-final-docs-1: 예전 잡이 부르는 checkout 이 없어졌으면 그 잡은 어디서도 돌 수 없다 — 어느 meta-repo 에서 install·uninstall
+// 하든 내리고 지우며 그렇다고 알린다. 없어진 경로로 install 하라고 하지 않는다 (그 install 은 없는 meta-repo 의 잡을 깐다).
+func TestScheduleRetiresLegacyJobWhoseCheckoutIsGone(t *testing.T) {
+	for _, action := range []string{"install", "uninstall"} {
+		t.Run(action, func(t *testing.T) {
+			sb, root, launchctlLog := tierSandbox(t, "copy")
+			gone := filepath.Join(sb.dir, "gone-wt")
+			legacy := sb.agentPlist(legacyTierLabel)
+			writeFile(t, legacy, legacyTierPlist(gone))
+
+			r := sb.mustBash(nil, scheduleScript(root), action)
+
+			if exists(legacy) || !containsCall(calls(t, launchctlLog), "unload "+legacy) {
+				t.Errorf("checkout 이 없는 예전 잡을 내리고 지워야 한다:\n%s", r.output())
+			}
+			line := lineContaining(r.stdout, legacyTierLabel)
+			if !strings.Contains(line, gone) || !strings.Contains(line, "없") {
+				t.Errorf("예전 잡의 checkout(%s)이 없어 내렸다고 알려야 한다: %q", gone, line)
+			}
+			if strings.Contains(r.stdout, "META_REPO_ROOT="+gone) {
+				t.Errorf("없어진 경로로 install 하라고 한다:\n%s", r.output())
+			}
+			if exists(filepath.Join(gone, ".cache")) {
+				t.Errorf("없어진 checkout 에 .cache 를 만들었다")
+			}
+		})
+	}
+}
+
+// R5-final-docs-1: status 는 checkout 이 없어진 예전 잡을 그대로 알리되, 없어진 경로의 meta-repo 로 install 하라고 하지 않는다.
+func TestScheduleStatusNamesLegacyJobWhoseCheckoutIsGone(t *testing.T) {
+	sb, root, launchctlLog := tierSandbox(t, "copy")
+	gone := filepath.Join(sb.dir, "gone-wt")
+	writeFile(t, sb.agentPlist(legacyTierLabel), legacyTierPlist(gone))
+
+	r := sb.mustBash(nil, scheduleScript(root), "status")
+
+	assertLegacyKept(t, sb, launchctlLog, r)
+	line := lineContaining(r.stdout, legacyTierLabel)
+	if !strings.Contains(line, gone) || !strings.Contains(line, "없") || strings.Contains(line, "그 meta-repo 로 install") {
+		t.Errorf("status 가 checkout 이 없는 예전 잡을 알려야 한다 (install 안내 없이): %q", line)
+	}
+}
+
+// R5-final-docs-1: checkout 이 없는지 확인할 수 없으면(그 위 디렉토리에 닿지 못한다 — 빠진 볼륨, 읽을 권한이 없는 디렉토리)
+// 지워진 것인지 모르므로 예전 잡을 내리지도 지우지도 않는다. 대신 지워진 것이면 직접 내리는 명령을 알린다 (없는 경로로 install 하라고 하지 않는다).
+func TestScheduleKeepsLegacyJobWhoseCheckoutIsUnreachable(t *testing.T) {
+	cases := map[string]func(t *testing.T, dir string) string{
+		"unmounted-volume": func(t *testing.T, dir string) string {
+			return filepath.Join(dir, "Volumes", "ext", "wt")
+		},
+		"unreadable-parent": func(t *testing.T, dir string) string {
+			locked := filepath.Join(dir, "locked")
+			if err := os.MkdirAll(filepath.Join(locked, "wt"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(locked, 0); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+			return filepath.Join(locked, "wt")
+		},
+	}
+	for name, checkoutAt := range cases {
+		for _, action := range []string{"install", "uninstall", "status"} {
+			t.Run(name+"/"+action, func(t *testing.T) {
+				sb, root, launchctlLog := tierSandbox(t, "copy")
+				checkout := checkoutAt(t, sb.dir)
+				legacy := sb.agentPlist(legacyTierLabel)
+				writeFile(t, legacy, legacyTierPlist(checkout))
+
+				r := sb.mustBash(nil, scheduleScript(root), action)
+
+				assertLegacyKept(t, sb, launchctlLog, r)
+				line := lineContaining(r.stdout, legacyTierLabel)
+				if !strings.Contains(line, checkout) || !strings.Contains(line, "launchctl unload '"+legacy+"'") {
+					t.Errorf("닿지 못한 checkout(%s)과 직접 내리는 명령을 알려야 한다: %q", checkout, line)
+				}
+				if strings.Contains(r.stdout, "META_REPO_ROOT="+checkout) || strings.Contains(line, "그 meta-repo 로 install") {
+					t.Errorf("닿지 못한 경로로 install 하라고 한다:\n%s", r.output())
+				}
+			})
+		}
+	}
+}
+
+// lineContaining 은 out 에서 fragment 가 든 첫 줄이다 (없으면 "").
+func lineContaining(out, fragment string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, fragment) {
+			return line
+		}
+	}
+	return ""
 }
 
 func containsCall(got []string, want string) bool {

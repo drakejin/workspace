@@ -69,7 +69,7 @@ func TestAuditReportsBadFrontmatter(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := findingsOf(r.findings, BadFrontmatter)
+	got := findingsOf(r.findings, badFrontmatter)
 	paths := make([]string, 0, len(got))
 	for p := range got {
 		paths = append(paths, p)
@@ -108,14 +108,14 @@ func TestAuditReportsSupersedesCyclesAndSelfReferences(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := findingsOf(r.findings, SupersedesCycle, SupersedesSelf)
+	got := findingsOf(r.findings, supersedesCycle, supersedesSelf)
 	if len(got) != 2 {
 		t.Fatalf("findings = %v (순환 하나·자기 참조 하나)", got)
 	}
-	if d := got["docs/specs/cyc/a.md"]; !strings.HasPrefix(d, string(SupersedesCycle)) || !strings.Contains(d, "docs/specs/cyc/a.md → docs/specs/cyc/b.md → docs/specs/cyc/a.md") {
+	if d := got["docs/specs/cyc/a.md"]; !strings.HasPrefix(d, string(supersedesCycle)) || !strings.Contains(d, "docs/specs/cyc/a.md → docs/specs/cyc/b.md → docs/specs/cyc/a.md") {
 		t.Errorf("순환 = %q", d)
 	}
-	if d := got["docs/specs/cyc/self.md"]; !strings.HasPrefix(d, string(SupersedesSelf)) {
+	if d := got["docs/specs/cyc/self.md"]; !strings.HasPrefix(d, string(supersedesSelf)) {
 		t.Errorf("자기 참조 = %q", d)
 	}
 }

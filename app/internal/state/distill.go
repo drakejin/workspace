@@ -25,7 +25,7 @@ type DistillCache struct {
 
 // NewDistillCache 는 root 의 증류 캐시다. Load 전에는 비어 있다.
 func NewDistillCache(root string) *DistillCache {
-	return &DistillCache{Ledger: NewLedger[DistillRecord](filepath.Join(CacheDir(root), "distill")), byTeam: map[string]map[string]DistillRecord{}}
+	return &DistillCache{Ledger: newLedger[DistillRecord](filepath.Join(CacheDir(root), "distill")), byTeam: map[string]map[string]DistillRecord{}}
 }
 
 // Load 는 원장을 메모리에 올린다.

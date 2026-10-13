@@ -71,7 +71,7 @@ OpenSearch `localhost:9202`, Neo4j bolt `7689` · 브라우저 `7476`, (선택) 
 | `make memory-daemon-start` | 데몬을 로그인 때 띄우고 죽으면 다시 띄운다 (launchd `com.drakejin.memory.<workspace>.daemon`, RunAtLoad + KeepAlive — meta-repo 마다 따로라 `META_REPO_ROOT=… make memory-daemon-start` 로 다른 meta-repo 의 데몬도 따로 띄운다. start 때의 메모리 설정을 잡에 담는다(비밀은 빼고 — 표 아래 참고)). launchd 가 없으면 nohup 백그라운드 — 머신을 다시 켜면 다시 start 한다. 이미 돌고 있으면 그대로 둔다 |
 | `make memory-daemon-stop` | launchd 에서 내리고(plist 삭제) 떠 있는 데몬에 SIGTERM — 끝날 때까지 최대 60초 기다린다 |
 | `scripts/memory-daemon/run.sh run` | 데몬을 포그라운드로 (로그를 터미널에서 볼 때. launchd 가 부르는 진입점이기도 하다 — 이 레포의 Go 코드가 컴파일되지 않으면 경고를 남기고 기존 `.cache/bin` 바이너리로 뜬다) |
-| `scripts/schedule/run.sh install` / `uninstall` | 6시간마다 깨워 하루 한 번 tier(60일 지난 episodic → cold) + 감사 보고 (launchd `com.drakejin.memory.<workspace>.tier` — 데몬처럼 meta-repo 마다 따로라 `META_REPO_ROOT=… scripts/schedule/run.sh install` 로 다른 meta-repo 의 tier 도 따로 건다. install 때의 메모리 설정을 데몬과 같은 규칙으로 잡에 담는다. 예전 고정 이름 `com.drakejin.workspace.tier` 는 그 잡이 돌던 meta-repo — 그 plist 가 부르는 checkout 의 `.env` 로 정한다 — 에 install·uninstall 할 때 내리고, 다른 meta-repo 의 것이면 그대로 두고 그 meta-repo 를 알린다) |
+| `scripts/schedule/run.sh install` / `uninstall` | 6시간마다 깨워 하루 한 번 tier(60일 지난 episodic → cold) + 감사 보고 (launchd `com.drakejin.memory.<workspace>.tier` — 데몬처럼 meta-repo 마다 따로라 `META_REPO_ROOT=… scripts/schedule/run.sh install` 로 다른 meta-repo 의 tier 도 따로 건다. install 때의 메모리 설정을 데몬과 같은 규칙으로 잡에 담는다. 예전 고정 이름 `com.drakejin.workspace.tier` 는 그 잡이 돌던 meta-repo — 그 plist 가 부르는 checkout 의 `.env` 로 정한다 — 에 install·uninstall 할 때 내리고, 다른 meta-repo 의 것이면 그대로 두고 그 meta-repo 를 알린다. 그 checkout 이 없어졌으면 돌 수 없는 잡이라 어느 install·uninstall 에서든 내린다 — 볼륨이 빠졌거나 읽을 권한이 없어 닿지 못할 뿐이면 그대로 두고 직접 내리는 명령을 알린다) |
 
 로그는 대상 meta-repo 의 데몬 `.cache/daemon/daemon.log`, tier `.cache/schedule/tier.log`. 데몬은 하나만 돈다 — start 는 떠 있으면 그대로 두고, 두 번째 `run` 은 `데몬이 이미 돌고 있습니다 (pid …)` 로 거부되며, `once`(와 `make memory-init` 의 최초 색인)는 `[reconcile] 데몬(pid …)이 돌고 있어 1회 색인을 건너뜁니다` 를 찍고 넘어간다.
 데몬은 start 때의 메모리 설정(`.env` 와 명령줄의 `META_REPO_ROOT`·`OPENSEARCH_URL`·`OS_PORT`·`MEMORY_*`·`COLD_*`·`AWS_REGION`·`AWS_PROFILE`·`AWS_ENDPOINT_URL_S3`, `NEO4J_*` 는 포트만)을 launchd 잡에 담아 돈다.
@@ -449,6 +449,7 @@ repo 를 추가하면 `make init` 을 다시 실행한다 — 이미 있는 repo
 
 - Go 1.25 (`app/mise.toml`). 모든 Go 코드는 `app/` 아래 한 모듈. `gofmt`, `go vet` 통과
 - 외부 세계(OpenSearch, Neo4j, S3, 파일, LLM)에 닿는 컴포넌트는 작은 인터페이스 + unexported 구현, 생성자 주입
+- `internal/` 의 exported 식별자(패키지 수준 func·const·var·type)는 다른 패키지(테스트·e2e 포함)가 쓰는 것만 둔다 — 자기 패키지 안에서만 쓰면 비공개로 (`app/test/code` 가 `make -C app test` 에서 확인한다)
 - Go 개발 명령은 `app/Makefile` 에 있다 (`make -C app <타겟>`, §5.3). 테스트 타겟은 `app/test/run.sh` 를 부른다
 - `make -C app test` = `go test -race ./...` (스택 없이). `make -C app test-e2e`·`test-e2e-slow` 는 루트의 `make memory-init` 으로 스택이 떠 있어야 하고, test-e2e 는 `.cache/coverage.out` 에 커버리지를 남긴다
 - e2e 는 고유 팀·workspace 로 돌고 끝나면 자기 인덱스·스냅샷·그래프만 지운다 — 실제 메모리와 같은 스택을 써도 섞이지 않는다

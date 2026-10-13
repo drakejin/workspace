@@ -71,8 +71,8 @@ func IsStatus(err error, status int) bool {
 	return errors.As(err, &e) && e.Status == status
 }
 
-// HasType 은 err 가 해당 타입의 OpenSearch 에러인가 (예: resource_already_exists_exception).
-func HasType(err error, typ string) bool {
+// hasType 은 err 가 해당 타입의 OpenSearch 에러인가 (예: resource_already_exists_exception).
+func hasType(err error, typ string) bool {
 	var e *Error
 	return errors.As(err, &e) && e.Type == typ
 }

@@ -54,7 +54,7 @@ func TestClientDoAndErrors(t *testing.T) {
 		t.Fatalf("Do = %v %+v", err, out)
 	}
 	err := c.Do(ctx, http.MethodPut, "/typed", nil, nil, nil)
-	if !HasType(err, "resource_already_exists_exception") || !IsStatus(err, 400) || !strings.Contains(err.Error(), "exists") {
+	if !hasType(err, "resource_already_exists_exception") || !IsStatus(err, 400) || !strings.Contains(err.Error(), "exists") {
 		t.Errorf("typed err = %v", err)
 	}
 	err = c.Do(ctx, http.MethodGet, "/plain", nil, nil, nil)
@@ -105,7 +105,7 @@ func TestBootstrapToleratesConcurrentPolicyWrite(t *testing.T) {
 			return map[string]int{"_seq_no": 1, "_primary_term": 1}, nil
 		case method == http.MethodPut && strings.Contains(path, HotColdPolicy):
 			return nil, &Error{Status: http.StatusConflict, Op: "PUT", Reason: "version conflict"}
-		case method == http.MethodGet && strings.Contains(path, KeepPolicy):
+		case method == http.MethodGet && strings.Contains(path, keepPolicy):
 			return nil, &Error{Status: http.StatusNotFound}
 		}
 		return map[string]any{}, nil
@@ -175,7 +175,7 @@ func TestEnsureIndexIgnoresExisting(t *testing.T) {
 }
 
 func TestSchemaShape(t *testing.T) {
-	tpl := IndexTemplate()
+	tpl := indexTemplate()
 	if tpl["index_patterns"].([]string)[0] != "mem-*" {
 		t.Error("pattern")
 	}
@@ -185,7 +185,7 @@ func TestSchemaShape(t *testing.T) {
 			t.Errorf("필드 %s 없음", f)
 		}
 	}
-	keep := KeepPolicyBody()["policy"].(map[string]any)["ism_template"].([]any)[0].(map[string]any)
+	keep := keepPolicyBody()["policy"].(map[string]any)["ism_template"].([]any)[0].(map[string]any)
 	if keep["priority"].(int) <= 100 {
 		t.Error("keep 정책이 hot-cold 를 이겨야 한다")
 	}
@@ -227,7 +227,7 @@ func TestSyncOrgAliases(t *testing.T) {
 		}, nil
 	}}
 	cfg := config.Config{Workspace: "ws", TeamOrgs: map[string]string{"a": "ads", "b": "ads"}}
-	if err := SyncOrgAliases(context.Background(), os, cfg); err != nil {
+	if err := syncOrgAliases(context.Background(), os, cfg); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := json.Marshal(actions)
@@ -243,7 +243,7 @@ func TestScanPagesAndUpdateDocAllowlist(t *testing.T) {
 		b := body.(map[string]any)
 		if b["search_after"] == nil {
 			pages++
-			hits := make([]any, ScanPageSize)
+			hits := make([]any, scanPageSize)
 			for i := range hits {
 				hits[i] = map[string]any{"_id": fmt.Sprint(i), "_source": map[string]any{}, "sort": []any{i}}
 			}
@@ -254,7 +254,7 @@ func TestScanPagesAndUpdateDocAllowlist(t *testing.T) {
 	}}
 	n := 0
 	err := Scan(context.Background(), os, "mem-*", map[string]any{}, nil, ChunkSort, func(Hit[map[string]any]) error { n++; return nil })
-	if err != nil || n != ScanPageSize+1 || pages != 2 {
+	if err != nil || n != scanPageSize+1 || pages != 2 {
 		t.Errorf("scan n=%d pages=%d err=%v", n, pages, err)
 	}
 	if err := UpdateDoc(context.Background(), os, []string{"i"}, "ws", "p", map[string]any{"evil'];": 1}); err == nil {
@@ -302,7 +302,7 @@ func TestSnapshotRepositoryIsLeftAloneWhenUnchanged(t *testing.T) {
 }
 
 // RUN-10 / API-3: 400 의 원인은 error.root_cause 에만 있다 — 최상위 reason 은 "all shards failed" 뿐이라, 그것만 보이면
-// 에이전트는 무엇을 고칠지 모른다. 원인(type: reason)을 붙이고, 최상위 type 은 그대로 둔다 (HasType 이 그것으로 판단한다).
+// 에이전트는 무엇을 고칠지 모른다. 원인(type: reason)을 붙이고, 최상위 type 은 그대로 둔다 (hasType 이 그것으로 판단한다).
 func TestErrorCarriesRootCause(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -325,7 +325,7 @@ func TestErrorCarriesRootCause(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			err := parseError("POST /mem-a-hot/_search", http.StatusBadRequest, []byte(c.payload))
 
-			if !HasType(err, c.typ) || !IsStatus(err, http.StatusBadRequest) {
+			if !hasType(err, c.typ) || !IsStatus(err, http.StatusBadRequest) {
 				t.Errorf("type/status = %v", err)
 			}
 			for _, want := range c.want {

@@ -83,14 +83,14 @@ func scratchIndex(t *testing.T) (opensearch.Client, string) {
 	return c, index
 }
 
-// explainBound 는 BuildQuery 가 v 로 만든 경계(gte, roundUp 이면 lte)를 OpenSearch 가 읽은 시각이다.
+// explainBound 는 buildQuery 가 v 로 만든 경계(gte, roundUp 이면 lte)를 OpenSearch 가 읽은 시각이다.
 func explainBound(t *testing.T, c opensearch.Client, index, v, zone string, roundUp bool) time.Time {
 	t.Helper()
 	tr, side := model.TimeRange{From: v}, 1
 	if roundUp {
 		tr, side = model.TimeRange{To: v}, 2
 	}
-	q := BuildQuery(Request{Query: "x", TimeRange: tr, TimeZone: zone})
+	q := buildQuery(Request{Query: "x", TimeRange: tr, TimeZone: zone})
 	var out struct {
 		Valid        bool `json:"valid"`
 		Explanations []struct {

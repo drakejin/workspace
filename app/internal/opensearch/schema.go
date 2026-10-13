@@ -7,12 +7,12 @@ import (
 )
 
 const (
-	// TemplateName 은 모든 mem-* 인덱스에 붙는 인덱스 템플릿이다.
-	TemplateName = "mem-template"
+	// templateName 은 모든 mem-* 인덱스에 붙는 인덱스 템플릿이다.
+	templateName = "mem-template"
 	// HotColdPolicy 는 episodic 월별 인덱스의 ISM 정책이다: hot → 스냅샷 → 삭제.
 	HotColdPolicy = "mem-hot-cold"
-	// KeepPolicy 는 knowledge 인덱스의 ISM 정책이다: 노화하지 않는다. 우선순위가 높아 HotColdPolicy 를 이긴다.
-	KeepPolicy = "mem-knowledge-keep"
+	// keepPolicy 는 knowledge 인덱스의 ISM 정책이다: 노화하지 않는다. 우선순위가 높아 HotColdPolicy 를 이긴다.
+	keepPolicy = "mem-knowledge-keep"
 	// AutoManageSetting 이 false 면 ISM 이 인덱스를 관리하지 않는다 (restore_cold 로 복원한 인덱스).
 	AutoManageSetting = "index.plugins.index_state_management.auto_manage"
 
@@ -70,10 +70,10 @@ func Properties() map[string]any {
 	}
 }
 
-// IndexTemplate 은 mem-* 인덱스 템플릿이다. 임베딩 없이 BM25(기본 similarity)만 쓴다.
+// indexTemplate 은 mem-* 인덱스 템플릿이다. 임베딩 없이 BM25(기본 similarity)만 쓴다.
 // 식별자 분할 analyzer: `ClickDeduplicator.window`, `click_dedup_window` 를 원형과 조각 모두로 색인해
 // 함수명·필드명 질의가 맞게 한다 (기본 standard analyzer 는 이걸 토큰 하나로 묶어 0건이 나왔다).
-func IndexTemplate() map[string]any {
+func indexTemplate() map[string]any {
 	return map[string]any{
 		"index_patterns": []string{naming.AllPattern},
 		"priority":       100,
@@ -124,8 +124,8 @@ func HotColdPolicyBody(hotDays int, repository string) map[string]any {
 	}}
 }
 
-// KeepPolicyBody 는 knowledge 인덱스를 노화시키지 않는 정책이다.
-func KeepPolicyBody() map[string]any {
+// keepPolicyBody 는 knowledge 인덱스를 노화시키지 않는 정책이다.
+func keepPolicyBody() map[string]any {
 	return map[string]any{"policy": map[string]any{
 		"description":   "memory knowledge: never ages (supersedes 로만 밀린다)",
 		"default_state": "keep",

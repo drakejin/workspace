@@ -38,10 +38,10 @@ func TestScanHot(t *testing.T) {
 	if len(skipped) != 1 || skipped[0].Rel != "docs/a/big.md" {
 		t.Errorf("skipped = %v", skipped)
 	}
-	if bin, _ := IsProbablyBinary(filepath.Join(root, "docs/a/big.md")); !bin {
+	if bin, _ := isProbablyBinary(filepath.Join(root, "docs/a/big.md")); !bin {
 		t.Error("NUL 바이트면 바이너리")
 	}
-	if bin, _ := IsProbablyBinary(filepath.Join(root, "README.md")); bin {
+	if bin, _ := isProbablyBinary(filepath.Join(root, "README.md")); bin {
 		t.Error("텍스트")
 	}
 	if _, _, err := ScanHot(filepath.Join(root, "missing"), 100); err == nil {

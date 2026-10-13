@@ -40,7 +40,7 @@ func assertDesired(t *testing.T, s *state.JudgeState, docs []ingest.IndexedDoc, 
 	for _, d := range docs {
 		byPath[d.SourcePath] = d
 	}
-	got, err := DesiredSupersededBy(byPath, s)
+	got, err := desiredSupersededBy(byPath, s)
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Errorf("desired = %v %v, want %v", got, err, want)
 	}
@@ -71,7 +71,7 @@ func TestDesiredSupersededByNeverFlipsIdenticalCopies(t *testing.T) {
 	}
 }
 
-// R1-judge-2: 결론은 판정이 견주는 범위(BestNeighbor: 같은 팀의 episodic, 같은 프로젝트·같은 문서 종류) 안에서만 내용을
+// R1-judge-2: 결론은 판정이 견주는 범위(bestNeighbor: 같은 팀의 episodic, 같은 프로젝트·같은 문서 종류) 안에서만 내용을
 // 따라간다. knowledge 는 유사도로 판정하지 않고(GUIDE 5.3), 다른 프로젝트·종류의 사본은 이긴 쪽과 견준 적이 없다.
 func TestDesiredSupersededByStaysInTheJudgedScope(t *testing.T) {
 	s := supersededLedger(t, supersedes("docs/feature/l.md", "sha-l", "docs/feature/w.md", "sha-w"))

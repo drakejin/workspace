@@ -147,6 +147,19 @@ func TestGraphURIQueryOnBoltNamesTheQuery(t *testing.T) {
 	}
 }
 
+// R5-final-query-3: unix 소켓 주소(bolt+unix://)는 neo4j:// 로 바꿀 수 없다 — 소켓은 routing 주소가 아니다. 그 query 는
+// 빼라고만 알린다 (neo4j:// 로 바꾸라는 안내는 TCP 주소인 bolt 계열에만 맞다).
+func TestGraphURIQueryOnUnixSocketOnlySaysRemoveTheQuery(t *testing.T) {
+	_, err := Load(env(map[string]string{"META_REPO_ROOT": "/m", "MEMORY_GRAPH_URI": "bolt+unix:///tmp/x.sock?a=b"}))
+
+	if err == nil || !strings.Contains(err.Error(), "query(?a=b)") || !strings.Contains(err.Error(), "query 를 빼") {
+		t.Fatalf("unix 소켓 주소의 query 를 짚어 빼라고 알린다: %v", err)
+	}
+	if strings.Contains(err.Error(), "neo4j://") {
+		t.Errorf("unix 소켓 주소에 neo4j:// 로 바꾸라고 하지 않는다: %v", err)
+	}
+}
+
 // API-13: OpenSearch time_zone 에는 IANA 이름을 넘긴다 — 지금 시각의 고정 오프셋을 넘기면 DST 를 넘는 date math(now-90d/d)가
 // 한 시간 어긋난다. 이름이 없는 시간대(이름을 못 찾은 time.Local)만 그 시각의 오프셋이다.
 func TestQueryTimeZoneUsesIANAName(t *testing.T) {

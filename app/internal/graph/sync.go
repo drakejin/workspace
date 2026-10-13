@@ -9,9 +9,9 @@ import (
 	"github.com/drakejin/workspace/app/internal/ingest"
 )
 
-// FromHot 은 지금 색인에 있는 문서(hot)와 그 파일의 링크로 그래프를 만든다.
+// fromHot 은 지금 색인에 있는 문서(hot)와 그 파일의 링크로 그래프를 만든다.
 // 파일을 읽지 못한 문서는 링크 없이 노드만 둔다.
-func FromHot(root, workspace string, docs map[string]ingest.IndexedDoc) Graph {
+func fromHot(root, workspace string, docs map[string]ingest.IndexedDoc) Graph {
 	inputs := make([]Input, 0, len(docs))
 	for _, d := range docs {
 		in := Input{
@@ -61,6 +61,6 @@ func outOfScope(root string, inputs []Input) map[string]bool {
 
 // Rebuild 는 hot 문서로 workspace 그래프를 통째로 다시 만든다 (LLM 0회).
 func Rebuild(ctx context.Context, s Store, root, workspace string, docs map[string]ingest.IndexedDoc) (Graph, error) {
-	g := FromHot(root, workspace, docs)
+	g := fromHot(root, workspace, docs)
 	return g, s.Replace(ctx, g)
 }

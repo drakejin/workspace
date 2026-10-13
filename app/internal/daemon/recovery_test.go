@@ -22,9 +22,9 @@ const (
 
 var errSearchDown = errors.New("search down")
 
-func newRecoveryJudge(t *testing.T, root string, fos *routedOS) *Judge {
+func newRecoveryJudge(t *testing.T, root string, fos *routedOS) *judge {
 	t.Helper()
-	return &Judge{OS: fos, Config: recoveryConfig(root), State: state.NewJudgeState(root), Ask: &stubAsker{}, Log: t.Logf}
+	return &judge{OS: fos, Config: recoveryConfig(root), State: state.NewJudgeState(root), Ask: &stubAsker{}, Log: t.Logf}
 }
 
 // IDX-11·IDX-4: 판정이 오류로 실패한 문서는 다음 Run 이 다시 판정한다. 그 사이 같은 문서가 또 바뀌면 최신 본문 하나만 남긴다.
@@ -36,11 +36,11 @@ func TestJudgeRetriesAFailedJudgmentOnTheNextRun(t *testing.T) {
 	fos.setFail("-hot/_search", errSearchDown)
 	j := newRecoveryJudge(t, root, fos)
 
-	if _, err := j.Run(ctx, []DiffEntry{first}); err == nil {
+	if _, err := j.Run(ctx, []diffEntry{first}); err == nil {
 		t.Fatal("이웃 검색이 실패하면 오류다")
 	}
 	edited := writeDoc(t, root, docA, editedA)
-	if _, err := j.Run(ctx, []DiffEntry{edited}); err == nil {
+	if _, err := j.Run(ctx, []diffEntry{edited}); err == nil {
 		t.Fatal("이웃 검색이 실패하면 오류다")
 	}
 	if len(j.retry) != 1 || j.retry[0].BodySHA != edited.BodySHA {
@@ -65,7 +65,7 @@ func TestJudgePendingSurvivesARestart(t *testing.T) {
 	fos := &routedOS{indices: []string{recoveryIndex}}
 	stopped, cancel := context.WithCancel(context.Background())
 	cancel() // 종료 신호 — 진행 중 호출이 끊긴다
-	if _, err := newRecoveryJudge(t, root, fos).Run(stopped, []DiffEntry{entry, other}); err == nil {
+	if _, err := newRecoveryJudge(t, root, fos).Run(stopped, []diffEntry{entry, other}); err == nil {
 		t.Fatal("끊긴 판정은 오류다")
 	}
 	writeDoc(t, root, "docs/specs/pay/b.md", "# 다른 문서\n고친 본문\n")
@@ -101,7 +101,7 @@ func (a *cancellingAsker) Ask(context.Context, llm.Input) (json.RawMessage, bool
 }
 
 // neighborHit 은 팀 hot alias 의 이웃 검색 결과 한 건이다.
-func neighborHit(d DiffEntry, score float64, eventTime string) map[string]any {
+func neighborHit(d diffEntry, score float64, eventTime string) map[string]any {
 	return map[string]any{"_index": recoveryIndex, "_score": score, "_source": map[string]any{
 		"source_path": d.SourcePath, "body_sha": d.BodySHA, "event_time": eventTime, "text": d.Body,
 	}}
@@ -121,9 +121,9 @@ func TestJudgeLeavesThePairPendingWhenShutdownCutsTheLLMCall(t *testing.T) {
 	defer cancel()
 	ask := &cancellingAsker{cancel: cancel}
 	logs := &logSink{}
-	j := &Judge{OS: fos, Config: recoveryConfig(root), State: state.NewJudgeState(root), Ask: ask, Log: logs.Logf}
+	j := &judge{OS: fos, Config: recoveryConfig(root), State: state.NewJudgeState(root), Ask: ask, Log: logs.Logf}
 
-	sum, err := j.Run(ctx, []DiffEntry{entry})
+	sum, err := j.Run(ctx, []diffEntry{entry})
 
 	if ask.calls != 1 {
 		t.Fatalf("LLM 호출 %d번 (이웃과 견주는 판정이 LLM 까지 가야 한다)\n%s", ask.calls, logs)
@@ -151,7 +151,7 @@ func TestJudgeRestoreIsQuietWhenJudgeIsDisabled(t *testing.T) {
 	cfg := recoveryConfig(root)
 	cfg.Judge.Enabled = false
 	logs := &logSink{}
-	j := &Judge{OS: &routedOS{}, Config: cfg, State: state.NewJudgeState(root), Ask: &stubAsker{}, Log: logs.Logf}
+	j := &judge{OS: &routedOS{}, Config: cfg, State: state.NewJudgeState(root), Ask: &stubAsker{}, Log: logs.Logf}
 
 	if err := j.Restore(); err != nil {
 		t.Fatal(err)
@@ -183,10 +183,10 @@ func TestDistillRetriesAFailedJobOnALaterCycle(t *testing.T) {
 			ask := &stubAsker{raw: fail.raw, ok: fail.ok}
 			cache := state.NewDistillCache(root)
 			logs := &logSink{}
-			q := NewDistillQueue(ctx, fos, recoveryConfig(root), cache, ask, logs.Logf)
+			q := newDistillQueue(ctx, fos, recoveryConfig(root), cache, ask, logs.Logf)
 			q.now = clock.Now
 
-			q.EnqueueDiff([]DiffEntry{entry})
+			q.EnqueueDiff([]diffEntry{entry})
 			q.Settle()
 			q.EnqueueDiff(nil) // 바로 다음 사이클 — 아직 기다린다
 			q.Settle()
@@ -223,10 +223,10 @@ func TestDistillGivesUpAfterMaxAttempts(t *testing.T) {
 	clock := &fakeClock{t: time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)}
 	ask := &stubAsker{raw: `{"summary":"  ","entities":[]}`, ok: true}
 	logs := &logSink{}
-	q := NewDistillQueue(ctx, fos, recoveryConfig(root), state.NewDistillCache(root), ask, logs.Logf)
+	q := newDistillQueue(ctx, fos, recoveryConfig(root), state.NewDistillCache(root), ask, logs.Logf)
 	q.now = clock.Now
 
-	q.EnqueueDiff([]DiffEntry{entry})
+	q.EnqueueDiff([]diffEntry{entry})
 	q.Settle()
 	for range distillMaxAttempts * 2 { // 매번 백오프 상한만큼 기다린 사이클
 		clock.Advance(distillRetryMax)
@@ -241,7 +241,7 @@ func TestDistillGivesUpAfterMaxAttempts(t *testing.T) {
 		t.Errorf("포기를 알려야 한다\n%s", logs)
 	}
 	edited := writeDoc(t, root, docA, editedA)
-	q.EnqueueDiff([]DiffEntry{edited})
+	q.EnqueueDiff([]diffEntry{edited})
 	q.Settle()
 	if ask.calls != distillMaxAttempts+1 {
 		t.Errorf("calls = %d (새 본문은 다시 시도한다)", ask.calls)
@@ -256,14 +256,14 @@ func TestDistillDropsAStaleRetryWhenTheDocumentChanges(t *testing.T) {
 	fos := &routedOS{indices: []string{recoveryIndex}}
 	clock := &fakeClock{t: time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)}
 	ask := &stubAsker{ok: false}
-	q := NewDistillQueue(ctx, fos, recoveryConfig(root), state.NewDistillCache(root), ask, t.Logf)
+	q := newDistillQueue(ctx, fos, recoveryConfig(root), state.NewDistillCache(root), ask, t.Logf)
 	q.now = clock.Now
-	q.EnqueueDiff([]DiffEntry{first})
+	q.EnqueueDiff([]diffEntry{first})
 	q.Settle()
 
 	edited := writeDoc(t, root, docA, editedA)
 	*ask = stubAsker{raw: `{"summary":"새 요약","entities":[]}`, ok: true, calls: ask.calls}
-	q.EnqueueDiff([]DiffEntry{edited})
+	q.EnqueueDiff([]diffEntry{edited})
 	q.Settle()
 	clock.Advance(distillRetryMax)
 	q.EnqueueDiff(nil)
@@ -298,11 +298,11 @@ func TestMissingDistillUsesOnlyTheBodyOfTheIndexedSHA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := map[string]DistillJob{}
+	got := map[string]distillJob{}
 	for _, j := range jobs {
 		got[j.SourcePath] = j
 	}
-	for _, want := range []DiffEntry{same, nfd} {
+	for _, want := range []diffEntry{same, nfd} {
 		if j, ok := got[want.SourcePath]; !ok || j.Body != want.Body || j.BodySHA != want.BodySHA {
 			t.Errorf("%s 백필 = %+v", want.SourcePath, j)
 		}
@@ -329,7 +329,7 @@ func TestCycleContinuesAfterAConvergeError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.judge.retry = []DiffEntry{entry} // 지난 사이클에 판정하지 못한 문서
+	d.judge.retry = []diffEntry{entry} // 지난 사이클에 판정하지 못한 문서
 
 	d.cycle("test")
 

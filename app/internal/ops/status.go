@@ -16,9 +16,9 @@ import (
 	"github.com/drakejin/workspace/app/internal/state"
 )
 
-// ComposeProject 는 docker-compose.yml 의 name 이다. META_REPO_ROOT 가 다른 meta-repo 를 가리켜도
+// composeProject 는 docker-compose.yml 의 name 이다. META_REPO_ROOT 가 다른 meta-repo 를 가리켜도
 // 스택을 이 이름으로 찾는다.
-const ComposeProject = "drakejin-workspace-memory"
+const composeProject = "drakejin-workspace-memory"
 
 // heartbeatStaleFactor 는 heartbeat 가 interval 의 몇 배를 넘으면 멈춘 것으로 볼지다.
 const heartbeatStaleFactor = 3
@@ -55,7 +55,7 @@ func NewProbe(cfg config.Config, os opensearch.Client, g graph.Store) Probe {
 func (p *liveProbe) Containers(ctx context.Context) (map[string]string, bool) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "docker", "compose", "-p", ComposeProject, "ps", "--format", "{{.Service}} {{.State}}").Output()
+	out, err := exec.CommandContext(ctx, "docker", "compose", "-p", composeProject, "ps", "--format", "{{.Service}} {{.State}}").Output()
 	if err != nil {
 		return nil, false
 	}
@@ -246,13 +246,16 @@ func statusDaemon(s *screen, cfg config.Config, status *state.Status, now time.T
 		if c.Partial {
 			flags += " PARTIAL-SCAN"
 		}
-		s.add("last cycle: %s trigger=%s scanned=%d indexed=%d stat_updated=%d removed=%d skipped=%d failed=%d cold_owned=%d took=%dms%s",
-			last.At, last.Trigger, c.Scanned, c.Indexed, c.StatUpdated, c.Removed, c.Skipped, c.Failed, c.ColdOwned, c.TookMs, flags)
+		s.add("last cycle: %s trigger=%s scanned=%d indexed=%d stat_updated=%d removed=%d skipped=%d failed=%d cold_owned=%d cold_kept=%d took=%dms%s",
+			last.At, last.Trigger, c.Scanned, c.Indexed, c.StatUpdated, c.Removed, c.Skipped, c.Failed, c.ColdOwned, c.ColdKept, c.TookMs, flags)
 		if c.Failed > 0 {
 			s.hint(fmt.Sprintf("색인에 실패한 파일 %d개 — 데몬 로그의 '[reconcile] fail' 줄을 보세요 (다음 사이클이 다시 시도한다)", c.Failed))
 		}
 		if c.ColdOwned > 0 {
 			s.hint(fmt.Sprintf("cold 로 넘어간 hot 원본 %d개 — 'scripts/memory/run.sh tier' 가 정리한다", c.ColdOwned))
+		}
+		if c.ColdKept > 0 {
+			s.hint(fmt.Sprintf("git 에 커밋된 내용이 아니라 tier 가 hot 에 남긴 cold 원본 %d개 — 커밋하면 다음 tier 가 정리한다", c.ColdKept))
 		}
 	}
 	if last.Graph != "" {

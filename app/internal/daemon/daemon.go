@@ -57,13 +57,13 @@ type Daemon struct {
 	log       func(format string, args ...any)
 	now       func() time.Time
 	retry     []time.Duration
-	judge     *Judge
+	judge     *judge
 	cache     *state.DistillCache
 	store     cold.Store
 	ix        ingest.Indexer
-	rec       *Reconciler
-	distill   *DistillQueue
-	serial    *Serial
+	rec       *reconciler
+	distill   *distillQueue
+	serial    *serial
 	auditTk   state.Tick
 
 	mu           sync.Mutex
@@ -116,20 +116,20 @@ func New(ctx context.Context, d Deps) (*Daemon, error) {
 	cache := state.NewDistillCache(cfg.MetaRepoRoot)
 	judgeState.Ledger.OnCorrupt, archiveState.Ledger.OnCorrupt, cache.Ledger.OnCorrupt = corrupt, corrupt, corrupt
 
-	rec := &Reconciler{OS: d.OS, Config: cfg, Cold: d.Cold, Judge: judgeState, Archive: archiveState, Log: d.Log}
+	rec := &reconciler{OS: d.OS, Config: cfg, Cold: d.Cold, Judge: judgeState, Archive: archiveState, Log: d.Log}
 	ix := ingest.New(ingest.Deps{OS: d.OS, Cold: d.Cold, Config: cfg, Now: d.Now, Distilled: cache.Get, SupersededBy: rec.SupersededBy})
 	rec.Indexer = warnIndexer{Indexer: ix, log: d.Log}
-	distill := NewDistillQueue(ctx, d.OS, cfg, cache, d.Ask, d.Log)
+	distill := newDistillQueue(ctx, d.OS, cfg, cache, d.Ask, d.Log)
 	distill.now = d.Now // 실패한 증류의 다시 시도 백오프도 같은 시계로
 	dm := &Daemon{
 		ctx: ctx, cfg: cfg, os: d.OS, graph: d.Graph, ownsGraph: ownsGraph, log: d.Log, now: d.Now, retry: d.RetryDelays,
 		cache: cache, store: d.Cold, ix: ix, rec: rec,
-		judge:     &Judge{OS: d.OS, Config: cfg, State: judgeState, Ask: d.Ask, Log: d.Log, Now: d.Now},
+		judge:     &judge{OS: d.OS, Config: cfg, State: judgeState, Ask: d.Ask, Log: d.Log, Now: d.Now},
 		distill:   distill,
 		auditTk:   state.NewTick(cfg.MetaRepoRoot, "audit"),
 		startedAt: d.Now(),
 	}
-	dm.serial = NewSerial(dm.cycle)
+	dm.serial = newSerial(dm.cycle)
 	return dm, nil
 }
 
@@ -257,7 +257,7 @@ func (d *Daemon) cycle(trigger string) {
 }
 
 // judgeStep 은 변경분(과 지난 실패분)을 판정하고, 판정이 숨긴 문서를 같은 사이클 안에서 인덱스에 반영한다. 바꾼 표시 수를 돌려준다.
-func (d *Daemon) judgeStep(ctx context.Context, rec *state.CycleRecord, diff []DiffEntry) int {
+func (d *Daemon) judgeStep(ctx context.Context, rec *state.CycleRecord, diff []diffEntry) int {
 	judged, err := d.judge.Run(ctx, diff)
 	if err != nil {
 		d.log("[judge] 일부 실패 — 다음 사이클에 다시: %v", err)
@@ -337,7 +337,7 @@ func (d *Daemon) Heartbeat() error {
 	return state.WriteStatus(d.cfg.MetaRepoRoot, s)
 }
 
-func (d *Daemon) missingDistill(ctx context.Context) ([]DistillJob, error) {
+func (d *Daemon) missingDistill(ctx context.Context) ([]distillJob, error) {
 	indices, err := managedIndices(ctx, d.os, d.cfg)
 	if err != nil {
 		return nil, err
@@ -346,7 +346,7 @@ func (d *Daemon) missingDistill(ctx context.Context) ([]DistillJob, error) {
 	if err != nil {
 		return nil, err
 	}
-	var jobs []DistillJob
+	var jobs []distillJob
 	for _, doc := range docs {
 		if doc.Summary != "" || doc.BodySHA == "" {
 			continue
@@ -356,7 +356,7 @@ func (d *Daemon) missingDistill(ctx context.Context) ([]DistillJob, error) {
 		if !ok {
 			continue
 		}
-		jobs = append(jobs, DistillJob{Team: doc.Team, SourcePath: doc.SourcePath, BodySHA: doc.BodySHA, Title: document.Title(body, doc.SourcePath), Body: body})
+		jobs = append(jobs, distillJob{Team: doc.Team, SourcePath: doc.SourcePath, BodySHA: doc.BodySHA, Title: document.Title(body, doc.SourcePath), Body: body})
 	}
 	return jobs, nil
 }
@@ -417,7 +417,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 }
 
 // triggerAsync 는 사이클을 별도 goroutine 에서 돌린다. 이벤트 루프는 계속 종료 신호를 본다.
-// 여러 번 불려도 Serial 이 재실행 1회로 합친다.
+// 여러 번 불려도 serial 이 재실행 1회로 합친다.
 func (d *Daemon) triggerAsync(reason string) {
 	d.inflight.Add(1)
 	go func() {

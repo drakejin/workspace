@@ -18,23 +18,23 @@ import (
 	"github.com/drakejin/workspace/app/internal/state"
 )
 
-// Change 는 문서 변화 종류다.
-type Change string
+// changeKind 는 문서 변화 종류다.
+type changeKind string
 
 const (
-	ChangeNew      Change = "new"
-	ChangeModified Change = "modified"
-	ChangeRemoved  Change = "removed"
+	changeNew      changeKind = "new"
+	changeModified changeKind = "modified"
+	changeRemoved  changeKind = "removed"
 )
 
-// DiffEntry 는 이번 사이클에 내용이 바뀐 문서다. 판정·증류·그래프의 입력이다 (메모리 전달만, 영속 없음).
-type DiffEntry struct {
+// diffEntry 는 이번 사이클에 내용이 바뀐 문서다. 판정·증류·그래프의 입력이다 (메모리 전달만, 영속 없음).
+type diffEntry struct {
 	SourcePath string
 	Team       string
 	Project    string
 	DocType    model.DocType
 	Kind       model.Kind
-	Change     Change
+	Change     changeKind
 	BodySHA    string
 	EventTime  time.Time
 	Title      string
@@ -42,15 +42,15 @@ type DiffEntry struct {
 	Supersedes string
 }
 
-func diffFrom(rel string, b document.Built, change Change) DiffEntry {
-	return DiffEntry{
+func diffFrom(rel string, b document.Built, change changeKind) diffEntry {
+	return diffEntry{
 		SourcePath: rel, Team: b.Meta.Team, Project: b.Meta.Repo, DocType: b.Meta.DocType, Kind: b.Meta.Kind, Change: change, BodySHA: b.BodySHA,
 		EventTime: b.EventTime, Title: b.Title, Body: b.Body, Supersedes: b.Meta.Supersedes,
 	}
 }
 
-// Reconciler 는 수렴 사이클 A 다.
-type Reconciler struct {
+// reconciler 는 수렴 사이클 A 다.
+type reconciler struct {
 	OS      opensearch.Client
 	Config  config.Config
 	Indexer ingest.Indexer
@@ -62,6 +62,8 @@ type Reconciler struct {
 	mu sync.Mutex
 	// coldOwned 는 cold 가 소유한 hot 파일이다. stat 이 그대로면 다음 사이클에 다시 읽지 않는다.
 	coldOwned map[string]coldOwnedFile
+	// gitWarned 는 마지막으로 알린, 남긴 원본을 git 으로 확인하지 못한 까닭이다 (같은 까닭은 되풀이하지 않는다)
+	gitWarned string
 
 	flagsMu    sync.RWMutex
 	desired    map[string]string // 마지막으로 계산한 superseded_by (재색인 때 숨김 표시와 위치 유지)
@@ -76,23 +78,25 @@ type statKey struct {
 func statOf(f ingest.ScannedFile) statKey { return statKey{f.MtimeMs, f.Size} }
 
 // coldOwnedFile 은 cold 소유로 본 hot 파일이다. kept 면 git 이 되살릴 수 없어(커밋하지 않았거나 커밋 뒤 고쳤다) tier 가 hot 에 남기는
-// 원본이다 — 다음 tier 가 정리할 원본(cold_owned)과 따로 센다(cold_kept).
+// 원본이다 — 다음 tier 가 정리할 원본(cold_owned)과 따로 센다(cold_kept). gitState 는 kept 를 git 으로 정한 때의 git 상태다
+// (cold.GitState — 비면 아직 git 으로 정하지 못했다).
 type coldOwnedFile struct {
-	stat statKey
-	kept bool
+	stat     statKey
+	kept     bool
+	gitState string
 }
 
 // SupersededBy 는 마지막으로 계산한 숨김 표시(superseded_by, deprecated)다. Indexer 의 Deps.SupersededBy 로 꽂는다 — 사이클이 파일을
 // 다시 쓰기 전에(loadState) 정본에서 계산해 두므로, 다시 쓴 문서가 수렴 전에 기본 검색에 드러나거나 knowledge 인덱스를 오가지 않는다.
-func (r *Reconciler) SupersededBy(sourcePath string) (string, bool) {
+func (r *reconciler) SupersededBy(sourcePath string) (string, bool) {
 	r.flagsMu.RLock()
 	defer r.flagsMu.RUnlock()
 	return r.desired[sourcePath], r.deprecated[sourcePath]
 }
 
 // refreshFlags 는 docs 로 정본 숨김 표시를 계산해 SupersededBy 가 돌려줄 값으로 둔다.
-func (r *Reconciler) refreshFlags(docs map[string]ingest.IndexedDoc) (map[string]string, map[string]bool, error) {
-	desired, err := DesiredSupersededBy(docs, r.Judge)
+func (r *reconciler) refreshFlags(docs map[string]ingest.IndexedDoc) (map[string]string, map[string]bool, error) {
+	desired, err := desiredSupersededBy(docs, r.Judge)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -108,7 +112,7 @@ func (r *Reconciler) refreshFlags(docs map[string]ingest.IndexedDoc) (map[string
 
 // keepFlags 는 정본을 읽지 못한 사이클의 숨김 표시다 — 지난번에 계산한 값을 그대로 두고, 아직 계산한 적이 없으면(boot) 색인에
 // 있는 표시를 쓴다 (다시 쓴 문서가 숨김 표시 없이 기본 검색에 드러나지 않게).
-func (r *Reconciler) keepFlags(docs map[string]ingest.IndexedDoc) {
+func (r *reconciler) keepFlags(docs map[string]ingest.IndexedDoc) {
 	r.flagsMu.Lock()
 	defer r.flagsMu.Unlock()
 	if r.desired != nil {
@@ -135,6 +139,8 @@ type cycleState struct {
 	restored map[string]ingest.IndexedDoc
 	// partial 이면 스캔이 일부만 됐다 — 보지 못한 파일을 지워진 것으로 보면 안 된다.
 	partial bool
+	// git 은 tier 가 hot 에 남긴 cold 원본을 다시 볼 때 이 사이클에 한 번만 읽는 git 상태다
+	git *gitProbe
 }
 
 // Once 는 hot(git working tree)과 인덱스를 맞춘다. 매 사이클이 곧 풀 싱크라 첫 기동 분기가 없다.
@@ -144,7 +150,7 @@ type cycleState struct {
 //  5. 이번 스캔에서 보지 못한 문서는 인덱스에서 지운다(tombstone) — 디스크에 없는 파일, 게이트(크기·바이너리)에 걸린 파일,
 //     색인 범위 밖이 된 경로. 스캔이 일부만 됐으면 지우지 않는다
 //  6. superseded_by·deprecated 를 원장·선언대로 수렴
-func (r *Reconciler) Once(ctx context.Context) (state.CycleSummary, []DiffEntry, error) {
+func (r *reconciler) Once(ctx context.Context) (state.CycleSummary, []diffEntry, error) {
 	start := time.Now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -185,7 +191,7 @@ func (r *Reconciler) Once(ctx context.Context) (state.CycleSummary, []DiffEntry,
 	return sum, diff, err
 }
 
-func (r *Reconciler) loadState(ctx context.Context) (cycleState, error) {
+func (r *reconciler) loadState(ctx context.Context) (cycleState, error) {
 	indices, restoredIdx, err := ingest.WorkspaceIndices(ctx, r.OS, r.Config.Workspace, r.Config.DefaultTeam)
 	if err != nil {
 		return cycleState{}, fmt.Errorf("list indices: %w", err)
@@ -209,7 +215,7 @@ func (r *Reconciler) loadState(ctx context.Context) (cycleState, error) {
 		r.Log("[reconcile] 숨김 표시의 정본(원장)을 읽지 못했습니다 — 지난 표시를 이어 다시 쓴다: %v", err)
 		r.keepFlags(existing)
 	}
-	return cycleState{indices: indices, existing: existing, owner: cold.NewOwnership(archived, r.Cold), restored: restored}, nil
+	return cycleState{indices: indices, existing: existing, owner: cold.NewOwnership(archived, r.Cold), restored: restored, git: &gitProbe{}}, nil
 }
 
 // managedIndices 는 이 workspace 팀의 인덱스 가운데 데몬이 맞추는 것이다 (restore_cold 로 복원한 인덱스는 뺀다). 그래프·증류 백필·
@@ -222,7 +228,7 @@ func managedIndices(ctx context.Context, c opensearch.Client, cfg config.Config)
 
 // synced 는 파일들을 색인과 맞춘 결과다.
 type synced struct {
-	diff []DiffEntry
+	diff []diffEntry
 	// seen 은 디스크에 있고 색인 범위 안인 파일이다 — tombstone 은 색인에 있는데 여기 없는 문서를 지운다
 	seen map[string]bool
 	// gated 는 게이트(바이너리)에 걸린 파일과 사유다 — 색인 범위 밖이라 seen 이 아니다 (크기 게이트는 스캔이 이미 거른다)
@@ -232,7 +238,7 @@ type synced struct {
 // syncFiles 는 스캔한 파일을 하나씩 맞춘다. 파일 하나의 실패(다른 workspace 의 팀, 일시적인 _bulk 실패, frontmatter 오류 …)가
 // 나머지 파일·tombstone·수렴을 막지 않게 넘긴다 — 청크 0 을 마지막에 쓰므로 그 파일은 다음 사이클이 다시 시도하고, 그동안 색인에
 // 있던 판은 그대로 둔다 (seen).
-func (r *Reconciler) syncFiles(ctx context.Context, files []ingest.ScannedFile, st cycleState, sum *state.CycleSummary) (synced, error) {
+func (r *reconciler) syncFiles(ctx context.Context, files []ingest.ScannedFile, st cycleState, sum *state.CycleSummary) (synced, error) {
 	out := synced{seen: make(map[string]bool, len(files)), gated: map[string]string{}}
 	for _, f := range files {
 		if err := ctx.Err(); err != nil {
@@ -258,19 +264,19 @@ func (r *Reconciler) syncFiles(ctx context.Context, files []ingest.ScannedFile, 
 
 // fileResult 는 파일 하나를 맞춘 결과다.
 type fileResult struct {
-	entry *DiffEntry // 판정·증류·그래프로 넘길 변경분 (없으면 nil)
+	entry *diffEntry // 판정·증류·그래프로 넘길 변경분 (없으면 nil)
 	gated string     // 게이트에 걸린 사유 (걸리지 않았으면 "")
 }
 
 // syncFile 은 파일 하나를 색인과 맞춘다. 내용이 바뀌어 다시 썼거나, 데몬 밖에서 쓴 문서(넘김 표시)면 변경분을 돌려준다.
 // 인자로 받은 색인 상태(st)는 읽기만 한다.
-func (r *Reconciler) syncFile(ctx context.Context, f ingest.ScannedFile, st cycleState, sum *state.CycleSummary) (fileResult, error) {
+func (r *reconciler) syncFile(ctx context.Context, f ingest.ScannedFile, st cycleState, sum *state.CycleSummary) (fileResult, error) {
 	ex, known := st.existing[f.Rel]
 	if upToDate(f, ex, known, st.restored) {
 		return fileResult{}, nil
 	}
 	if c, ok := r.coldOwned[f.Rel]; !known && ok && c.stat == statOf(f) {
-		r.countColdOwned(ctx, f, c, sum) // 지난 사이클에 cold 소유로 본 stat 그대로다
+		r.countColdOwned(ctx, f, c, st.git, sum) // 지난 사이클에 cold 소유로 본 stat 그대로다
 		return fileResult{}, nil
 	}
 	// Prepare 가 게이트(바이너리·크기 — ingest_path 와 같은 규칙)를 거친다
@@ -288,7 +294,7 @@ func (r *Reconciler) syncFile(ctx context.Context, f ingest.ScannedFile, st cycl
 		return fileResult{entry: entry}, err
 	}
 	if !known {
-		owned, err := r.claimColdOwned(ctx, f, prepared.Built, st.owner, sum)
+		owned, err := r.claimColdOwned(ctx, f, prepared.Built, st, sum)
 		if err != nil || owned {
 			return fileResult{}, err
 		}
@@ -314,25 +320,20 @@ func isCurrent(ex ingest.IndexedDoc) bool {
 }
 
 // claimColdOwned 는 처음 보는 파일이 cold 소유인지 보고, 그렇다면 그 stat 을 기억해 다음 사이클에 다시 읽지 않는다.
-func (r *Reconciler) claimColdOwned(ctx context.Context, f ingest.ScannedFile, b document.Built, owner *cold.Ownership, sum *state.CycleSummary) (bool, error) {
-	owned, err := r.isColdOwned(ctx, b, owner)
+func (r *reconciler) claimColdOwned(ctx context.Context, f ingest.ScannedFile, b document.Built, st cycleState, sum *state.CycleSummary) (bool, error) {
+	owned, err := r.isColdOwned(ctx, b, st.owner)
 	if err != nil || !owned {
 		return false, err
 	}
-	r.countColdOwned(ctx, f, coldOwnedFile{stat: statOf(f), kept: true}, sum)
+	r.countColdOwned(ctx, f, coldOwnedFile{stat: statOf(f), kept: true}, st.git, sum)
 	return true, nil
 }
 
 // countColdOwned 는 cold 소유 파일 하나를 센다: 다음 tier 가 정리할 원본은 cold_owned, git 이 되살릴 수 없어 tier 가 hot 에 남기는
-// 원본은 cold_kept. 남기는 원본(처음 보는 파일 포함 — kept 로 넘긴다)은 git 으로 다시 본다 — 커밋해도 stat 이 그대로라 기억한
-// 값으로는 알 수 없다.
-func (r *Reconciler) countColdOwned(ctx context.Context, f ingest.ScannedFile, c coldOwnedFile, sum *state.CycleSummary) {
+// 원본은 cold_kept. 남기는 원본(처음 보는 파일 포함 — kept 로 넘긴다)은 git 상태가 바뀌었으면 git 으로 다시 본다 (recheckKept).
+func (r *reconciler) countColdOwned(ctx context.Context, f ingest.ScannedFile, c coldOwnedFile, git *gitProbe, sum *state.CycleSummary) {
 	if c.kept {
-		kept, err := cold.KeptByGit(ctx, r.Config.MetaRepoRoot, f.Rel)
-		if err != nil {
-			r.Log("[reconcile] cold 소유 원본 %s 의 커밋 여부를 git 으로 확인하지 못했습니다 — tier 도 지우지 않는다: %v", f.Rel, err)
-		}
-		c.kept = kept
+		c = r.recheckKept(ctx, f.Rel, c, git)
 	}
 	r.coldOwned[f.Rel] = c
 	if c.kept {
@@ -343,15 +344,15 @@ func (r *Reconciler) countColdOwned(ctx context.Context, f ingest.ScannedFile, c
 }
 
 // rewrite 는 내용이 바뀐(또는 처음 보는) 문서를 다시 쓰고 변경분을 돌려준다.
-func (r *Reconciler) rewrite(ctx context.Context, rel string, p ingest.Prepared, known bool, sum *state.CycleSummary) (*DiffEntry, error) {
+func (r *reconciler) rewrite(ctx context.Context, rel string, p ingest.Prepared, known bool, sum *state.CycleSummary) (*diffEntry, error) {
 	delete(r.coldOwned, rel)
 	if _, err := r.Indexer.Write(ctx, p); err != nil {
 		return nil, err
 	}
 	sum.Indexed++
-	change := ChangeNew
+	change := changeNew
 	if known {
-		change = ChangeModified
+		change = changeModified
 	}
 	entry := diffFrom(rel, p.Built, change)
 	return &entry, nil
@@ -361,8 +362,8 @@ func (r *Reconciler) rewrite(ctx context.Context, rel string, p ingest.Prepared,
 // 걸쳐 있으면 다시 쓰기만 한다 — 내용 변경이 아니므로 판정·증류·그래프에 넘기지 않고(아무도 고치지 않은 문서가 latest-wins 로
 // 숨지 않게), 밀린·deprecate 표시는 색인에 있던 그대로 잇는다. 다만 데몬 밖(ingest_path, audit -apply)에서 쓴 문서(넘김 표시)는
 // 그 쓰기가 판정·증류·그래프를 거치지 않았으므로 변경분으로 넘기고 표시를 지운다 (다시 쓰면 데몬의 쓰기가 표시 없이 덮는다).
-func (r *Reconciler) syncSameContent(ctx context.Context, f ingest.ScannedFile, ex ingest.IndexedDoc, prepared ingest.Prepared,
-	indices []string, sum *state.CycleSummary) (*DiffEntry, error) {
+func (r *reconciler) syncSameContent(ctx context.Context, f ingest.ScannedFile, ex ingest.IndexedDoc, prepared ingest.Prepared,
+	indices []string, sum *state.CycleSummary) (*diffEntry, error) {
 	if isCurrent(ex) {
 		if err := r.refreshStat(ctx, f, ex, indices, sum); err != nil {
 			return nil, err
@@ -379,13 +380,13 @@ func (r *Reconciler) syncSameContent(ctx context.Context, f ingest.ScannedFile, 
 		return nil, nil
 	}
 	r.Log("[reconcile] handoff %s (데몬 밖에서 색인한 문서 — 판정·증류·그래프로 넘긴다)", f.Rel)
-	entry := diffFrom(f.Rel, prepared.Built, ChangeModified)
+	entry := diffFrom(f.Rel, prepared.Built, changeModified)
 	return &entry, nil
 }
 
 // refreshStat 은 내용이 그대로인 문서의 stat 을 고치고 넘김 표시를 지운다. 색인에 있던 내용(content_sha)의 청크에만 —
 // 그 사이 데몬 밖에서 새 내용을 썼으면(새 표시가 붙는다) 건드리지 않는다.
-func (r *Reconciler) refreshStat(ctx context.Context, f ingest.ScannedFile, ex ingest.IndexedDoc, indices []string, sum *state.CycleSummary) error {
+func (r *reconciler) refreshStat(ctx context.Context, f ingest.ScannedFile, ex ingest.IndexedDoc, indices []string, sum *state.CycleSummary) error {
 	fields := map[string]any{}
 	statChanged := ex.MtimeMs != f.MtimeMs || ex.Size != f.Size
 	if statChanged {
@@ -409,7 +410,7 @@ func (r *Reconciler) refreshStat(ctx context.Context, f ingest.ScannedFile, ex i
 
 // isColdOwned 는 이 workspace 의 cold store 에 지금과 같은 내용이 보관돼 있고, 그 내용이 들어갔던 인덱스가
 // cold(스냅샷)로 간 경우다. 처음 보는 문서·내용이 바뀐 문서는 색인한다 — 다음 tier 가 다시 cold 로 보낸다.
-func (r *Reconciler) isColdOwned(ctx context.Context, b document.Built, owner *cold.Ownership) (bool, error) {
+func (r *reconciler) isColdOwned(ctx context.Context, b document.Built, owner *cold.Ownership) (bool, error) {
 	if len(b.Chunks) == 0 {
 		return false, nil
 	}
@@ -427,7 +428,7 @@ func (r *Reconciler) isColdOwned(ctx context.Context, b document.Built, owner *c
 // reportGated 는 게이트(크기·바이너리)에 걸린 파일을 알리고, 색인에 있어 tombstone 이 지울 것의 사유를 돌려준다. 둘 다 색인 범위
 // 밖이다 — 색인에 있던 문서는 tombstone 이 이 사유와 함께 색인에서 빼며 remove 로 알리고, 색인에 없던 파일(또는 스캔이 일부만 돼
 // 지우지 않는 사이클)은 여기서 skip 으로 알린다. 지우지 않는 것만 skip 이라고 쓴다. 읽지 못한 디렉토리(스캔이 일부만 됐다)도 skip 이다.
-func (r *Reconciler) reportGated(scanSkipped []ingest.Skipped, binary map[string]string, st cycleState) map[string]string {
+func (r *reconciler) reportGated(scanSkipped []ingest.Skipped, binary map[string]string, st cycleState) map[string]string {
 	all := make(map[string]string, len(scanSkipped)+len(binary))
 	for _, s := range scanSkipped {
 		all[s.Rel] = s.Reason
@@ -448,7 +449,7 @@ func (r *Reconciler) reportGated(scanSkipped []ingest.Skipped, binary map[string
 
 // tombstone 은 색인에는 있는데 이번 스캔에서 보지 못한(seen 이 아닌) 문서를 지운다 — 디스크에 없는 파일, 게이트에 걸린 파일(gated),
 // 색인 규칙이 바뀌어 범위 밖이 된 경로. 정말 지운 것만 변경분(removed)으로 센다. 스캔이 일부만 됐으면 지우지 않는다.
-func (r *Reconciler) tombstone(ctx context.Context, st cycleState, seen map[string]bool, gated map[string]string) ([]DiffEntry, error) {
+func (r *reconciler) tombstone(ctx context.Context, st cycleState, seen map[string]bool, gated map[string]string) ([]diffEntry, error) {
 	gone := unseen(st.existing, seen)
 	if st.partial {
 		if len(gone) > 0 {
@@ -456,7 +457,7 @@ func (r *Reconciler) tombstone(ctx context.Context, st cycleState, seen map[stri
 		}
 		return nil, nil
 	}
-	var removed []DiffEntry
+	var removed []diffEntry
 	for _, d := range gone {
 		n, err := r.Indexer.RemoveFile(ctx, d.SourcePath, st.indices)
 		if err != nil {
@@ -466,7 +467,7 @@ func (r *Reconciler) tombstone(ctx context.Context, st cycleState, seen map[stri
 			continue // 그 사이 다른 writer 가 지웠다
 		}
 		r.Log("[reconcile] remove %s (%s)", d.SourcePath, removeReason(d.SourcePath, gated))
-		removed = append(removed, DiffEntry{SourcePath: d.SourcePath, Team: d.Team, Kind: d.Kind, Change: ChangeRemoved, BodySHA: d.BodySHA})
+		removed = append(removed, diffEntry{SourcePath: d.SourcePath, Team: d.Team, Kind: d.Kind, Change: changeRemoved, BodySHA: d.BodySHA})
 	}
 	return removed, nil
 }
@@ -498,7 +499,7 @@ func removeReason(rel string, gated map[string]string) string {
 // 판정 원장(.cache/judge), cold 문서 조치 원장(.cache/archive)이다. 인덱스 값은 파생물이라 매 사이클 다시 맞춘다
 // (인덱스를 지워도 같은 결과로 재구축된다). knowledge 가 밀리면 자기 날짜의 월별 인덱스로 옮겨 노화시킨다.
 // 문서 하나가 실패해도 나머지 문서는 마저 맞추고, 실패는 모아 돌려준다 (실패한 문서는 다음 사이클이 다시 맞춘다).
-func (r *Reconciler) Converge(ctx context.Context) (int, error) {
+func (r *reconciler) Converge(ctx context.Context) (int, error) {
 	indices, err := managedIndices(ctx, r.OS, r.Config)
 	if err != nil {
 		return 0, fmt.Errorf("converge: %w", err)
@@ -525,7 +526,7 @@ func (r *Reconciler) Converge(ctx context.Context) (int, error) {
 
 // convergeDoc 은 문서 하나의 숨김 표시를 맞추고 바꾼 수를 돌려준다. 그 문서의 쓰기 락 안에서 — 데몬 밖의 Write 와 엇갈려
 // 일부 청크만 표시가 바뀌지 않게.
-func (r *Reconciler) convergeDoc(ctx context.Context, indices []string, d ingest.IndexedDoc, wantBy string, wantDep bool) (int, error) {
+func (r *reconciler) convergeDoc(ctx context.Context, indices []string, d ingest.IndexedDoc, wantBy string, wantDep bool) (int, error) {
 	if d.SupersededBy == wantBy && d.Deprecated == wantDep {
 		return 0, nil
 	}
@@ -550,7 +551,7 @@ func (r *Reconciler) convergeDoc(ctx context.Context, indices []string, d ingest
 	return changed, nil
 }
 
-func (r *Reconciler) deprecatedPaths(docs map[string]ingest.IndexedDoc) (map[string]bool, error) {
+func (r *reconciler) deprecatedPaths(docs map[string]ingest.IndexedDoc) (map[string]bool, error) {
 	out := map[string]bool{}
 	if r.Archive == nil {
 		return out, nil
@@ -573,7 +574,7 @@ func (r *Reconciler) deprecatedPaths(docs map[string]ingest.IndexedDoc) (map[str
 
 // applySuperseded 는 문서의 superseded_by 를 바꾼다. knowledge 는 플래그에 따라 인덱스가 달라지므로
 // 청크를 새 인덱스로 옮기고 cold store 청크도 다시 쓴다. episodic 은 제자리에서 고친다.
-func (r *Reconciler) applySuperseded(ctx context.Context, indices []string, d ingest.IndexedDoc, want string) error {
+func (r *reconciler) applySuperseded(ctx context.Context, indices []string, d ingest.IndexedDoc, want string) error {
 	if want == "" {
 		r.Log("[judge] superseded_by %s → (해제)", d.SourcePath)
 	} else {
@@ -621,9 +622,9 @@ func (r *Reconciler) applySuperseded(ctx context.Context, indices []string, d in
 	return nil
 }
 
-// DesiredSupersededBy 는 문서별로 있어야 할 superseded_by 다. 사람의 선언이 판정보다 우선하고,
+// desiredSupersededBy 는 문서별로 있어야 할 superseded_by 다. 사람의 선언이 판정보다 우선하고,
 // A→B→C 처럼 이어지면 마지막 판(C)을 가리키게 압축한다.
-func DesiredSupersededBy(docs map[string]ingest.IndexedDoc, judge *state.JudgeState) (map[string]string, error) {
+func desiredSupersededBy(docs map[string]ingest.IndexedDoc, judge *state.JudgeState) (map[string]string, error) {
 	direct := map[string]string{}
 	for team, judged := range judgedDocsByTeam(docs) {
 		m, err := judge.SupersededMap(team, judged)
@@ -645,7 +646,7 @@ func DesiredSupersededBy(docs map[string]ingest.IndexedDoc, judge *state.JudgeSt
 }
 
 // judgedDocsByTeam 은 팀 → (경로 → 본문 sha·판정 범위) 다. 판정 원장이 팀별이고 판정은 episodic 끼리만 하므로
-// (knowledge 는 유사도로 판정하지 않는다), 결론을 옮길 문서도 같은 팀의 episodic 에서, BestNeighbor 가 견주는 범위 안에서만 찾는다.
+// (knowledge 는 유사도로 판정하지 않는다), 결론을 옮길 문서도 같은 팀의 episodic 에서, bestNeighbor 가 견주는 범위 안에서만 찾는다.
 func judgedDocsByTeam(docs map[string]ingest.IndexedDoc) map[string]map[string]state.JudgedDoc {
 	out := map[string]map[string]state.JudgedDoc{}
 	for _, d := range docs {

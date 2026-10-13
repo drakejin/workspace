@@ -71,7 +71,7 @@ func Build(in Input) (Built, error) {
 	}
 	rootTitle := strings.TrimSuffix(path.Base(in.SourcePath), path.Ext(in.SourcePath))
 	title := Title(body, in.SourcePath)
-	meta.Links = append(meta.Links, MarkdownLinks(body, in.SourcePath)...)
+	meta.Links = append(meta.Links, markdownLinks(body, in.SourcePath)...)
 	built := Built{
 		Meta:       meta,
 		EventTime:  eventTime,
@@ -152,9 +152,9 @@ func Title(body, sourcePath string) string {
 
 var markdownLink = regexp.MustCompile(`\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)`)
 
-// MarkdownLinks 는 본문의 상대 경로 마크다운 링크(.md)다. 대상은 meta-repository 기준 경로(NFC — source_path 와 같은 꼴)로 바꾼다.
+// markdownLinks 는 본문의 상대 경로 마크다운 링크(.md)다. 대상은 meta-repository 기준 경로(NFC — source_path 와 같은 꼴)로 바꾼다.
 // 외부 URL·앵커만 있는 링크·meta-repository 밖을 가리키는 링크는 버린다.
-func MarkdownLinks(body, sourcePath string) []model.Link {
+func markdownLinks(body, sourcePath string) []model.Link {
 	seen := map[string]bool{}
 	var links []model.Link
 	for _, m := range markdownLink.FindAllStringSubmatch(body, -1) {
@@ -191,5 +191,5 @@ func Links(content, sourcePath string) []model.Link {
 	if s := CanonicalPath(firstString(fm, "supersedes")); s != "" {
 		links = append(links, model.Link{Type: model.LinkSupersedes, To: s, Why: "frontmatter supersedes"})
 	}
-	return append(links, MarkdownLinks(body, sourcePath)...)
+	return append(links, markdownLinks(body, sourcePath)...)
 }

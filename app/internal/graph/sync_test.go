@@ -24,7 +24,7 @@ func TestFromHotReadsLinksOfAnNFDNamedFile(t *testing.T) {
 	if err := os.WriteFile(abs, []byte("# plan\n[근거](./spec.md)\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	g := FromHot(root, "ws", map[string]ingest.IndexedDoc{rel: {SourcePath: rel, Team: "t"}})
+	g := fromHot(root, "ws", map[string]ingest.IndexedDoc{rel: {SourcePath: rel, Team: "t"}})
 	for _, e := range g.Edges {
 		if e.Type == string(model.LinkLinksTo) && strings.HasSuffix(e.To, "docs/specs/결제/spec.md") {
 			return

@@ -21,8 +21,8 @@ import (
 	"github.com/drakejin/workspace/app/internal/state"
 )
 
-// Verdict 는 LLM 판정이다.
-type Verdict struct {
+// verdict 는 LLM 판정이다.
+type verdict struct {
 	Contradicts bool   `json:"contradicts"`
 	Winner      string `json:"winner"` // old | new
 	Confident   bool   `json:"confident"`
@@ -51,10 +51,10 @@ var judgeSchema = map[string]any{
 	"additionalProperties": false,
 }
 
-// Judge 는 판정 게이트(사이클 D)다. 같은 workspace·팀 안에서 episodic 끼리만 유사도로 판정한다.
+// judge 는 판정 게이트(사이클 D)다. 같은 workspace·팀 안에서 episodic 끼리만 유사도로 판정한다.
 // knowledge 는 유사도로 판정하지 않는다 — 개정판의 supersedes 선언만 믿는다(오판정 0).
 // 1단 latest-wins(유효 시각 차 > windowDays) → 2단 로컬 claude → 3단 질문(저확신·LLM 불가).
-type Judge struct {
+type judge struct {
 	OS     opensearch.Client
 	Config config.Config
 	State  *state.JudgeState
@@ -65,20 +65,20 @@ type Judge struct {
 	// retry 는 지난 Run 에서 오류로 판정하지 못한 변경분이다 (문서마다 하나). 변경분은 그 사이클에만 있으므로 여기 두지 않으면
 	// 문서가 다시 바뀔 때까지 판정되지 않는다. 디스크(.cache/daemon/judge-pending.json)에도 남겨 재시작한 boot 가 이어 판정한다
 	// (Restore). 사이클은 직렬로 돌아 잠금이 필요 없다.
-	retry []DiffEntry
+	retry []diffEntry
 	// saved 면 디스크의 대기 목록이 비어 있지 않다
 	saved bool
 }
 
 // Run 은 변경분을 판정한다. 한 문서의 실패는 나머지를 막지 않는다 — 실패분은 다음 Run 이 다시 판정하고, 오류는 모아 돌려준다.
 // 판정할 목록은 먼저 디스크에 적어 둔다 — 판정 도중 종료·크래시가 와도 다음 boot 가 이어 판정한다.
-func (j *Judge) Run(ctx context.Context, diff []DiffEntry) (state.JudgeSummary, error) {
+func (j *judge) Run(ctx context.Context, diff []diffEntry) (state.JudgeSummary, error) {
 	var sum state.JudgeSummary
 	if !j.Config.Judge.Enabled {
 		return sum, nil
 	}
-	var work []DiffEntry
-	for _, d := range latestByPath(append(append([]DiffEntry{}, j.retry...), diff...)) {
+	var work []diffEntry
+	for _, d := range latestByPath(append(append([]diffEntry{}, j.retry...), diff...)) {
 		if judgeable(d) {
 			work = append(work, d)
 		}
@@ -88,7 +88,7 @@ func (j *Judge) Run(ctx context.Context, diff []DiffEntry) (state.JudgeSummary, 
 		errs = append(errs, err)
 	}
 	seen := map[string]bool{}
-	var failed []DiffEntry
+	var failed []diffEntry
 	for _, d := range work {
 		if err := j.judgeOne(ctx, d, seen, &sum); err != nil {
 			failed = append(failed, d)
@@ -102,8 +102,8 @@ func (j *Judge) Run(ctx context.Context, diff []DiffEntry) (state.JudgeSummary, 
 	return sum, errors.Join(errs...)
 }
 
-func (j *Judge) judgeOne(ctx context.Context, d DiffEntry, seen map[string]bool, sum *state.JudgeSummary) error {
-	n, err := BestNeighbor(ctx, j.OS, d, j.Config.Workspace, j.Config.Judge.MinScore)
+func (j *judge) judgeOne(ctx context.Context, d diffEntry, seen map[string]bool, sum *state.JudgeSummary) error {
+	n, err := bestNeighbor(ctx, j.OS, d, j.Config.Workspace, j.Config.Judge.MinScore)
 	if err != nil {
 		return err
 	}
@@ -154,7 +154,7 @@ type side struct {
 
 // Decide 는 쌍 하나를 판정한다. 종료 신호(ctx)가 LLM 호출을 끊었으면 판정하지 않고 오류다 — LLM 이 판정하지 못한 것(폴백 질문)이
 // 아니므로 원장에 남기지 않고, 호출자가 대기분으로 남겨 다음 boot 가 이어 판정한다.
-func (j *Judge) Decide(ctx context.Context, pairKey string, older, newer side) (state.JudgeRecord, error) {
+func (j *judge) Decide(ctx context.Context, pairKey string, older, newer side) (state.JudgeRecord, error) {
 	now := time.Now
 	if j.Now != nil {
 		now = j.Now
@@ -171,7 +171,7 @@ func (j *Judge) Decide(ctx context.Context, pairKey string, older, newer side) (
 	if !ok && ctx.Err() != nil {
 		return state.JudgeRecord{}, fmt.Errorf("판정 중 종료 — 대기분으로 남긴다: %w", ctx.Err())
 	}
-	var v Verdict
+	var v verdict
 	if !ok || json.Unmarshal(raw, &v) != nil || (v.Winner != "old" && v.Winner != "new") {
 		base.Decision, base.By, base.Reason = state.DecisionQuestion, "fallback", "LLM 판정 불가 — 사람이 답한다"
 		return base, nil
@@ -217,8 +217,8 @@ func documentTag(texts ...string) string {
 	}
 }
 
-// Neighbor 는 가장 비슷한 다른 episodic 문서다.
-type Neighbor struct {
+// neighbor 는 가장 비슷한 다른 episodic 문서다.
+type neighbor struct {
 	SourcePath string
 	BodySHA    string
 	EventTime  string
@@ -227,8 +227,8 @@ type Neighbor struct {
 	RelativeScore float64
 }
 
-// BestNeighbor 는 같은 workspace·팀 hot 영역에서 가장 비슷한 다른 episodic 문서다. 이미 밀린 문서와는 재판정하지 않는다.
-func BestNeighbor(ctx context.Context, c opensearch.Client, d DiffEntry, workspace string, minScore float64) (*Neighbor, error) {
+// bestNeighbor 는 같은 workspace·팀 hot 영역에서 가장 비슷한 다른 episodic 문서다. 이미 밀린 문서와는 재판정하지 않는다.
+func bestNeighbor(ctx context.Context, c opensearch.Client, d diffEntry, workspace string, minScore float64) (*neighbor, error) {
 	filter := []any{
 		map[string]any{"term": map[string]any{"memory_kind": model.KindEpisodic}},
 		map[string]any{"term": map[string]any{"workspace": workspace}},
@@ -269,7 +269,7 @@ func BestNeighbor(ctx context.Context, c opensearch.Client, d DiffEntry, workspa
 		return nil, err
 	}
 	self := 0.0
-	best := map[string]Neighbor{}
+	best := map[string]neighbor{}
 	for _, h := range out.Hits.Hits {
 		s := h.Source
 		if s.SourcePath == d.SourcePath {
@@ -280,13 +280,13 @@ func BestNeighbor(ctx context.Context, c opensearch.Client, d DiffEntry, workspa
 			continue // 빈 청크 0 은 본문이 없는 문서다 — 판정 이웃이 아니다
 		}
 		if prev, ok := best[s.SourcePath]; !ok || prev.RelativeScore < h.Score {
-			best[s.SourcePath] = Neighbor{SourcePath: s.SourcePath, BodySHA: s.BodySHA, EventTime: s.EventTime, Text: s.Text, RelativeScore: h.Score}
+			best[s.SourcePath] = neighbor{SourcePath: s.SourcePath, BodySHA: s.BodySHA, EventTime: s.EventTime, Text: s.Text, RelativeScore: h.Score}
 		}
 	}
 	if self == 0 || len(best) == 0 {
 		return nil, nil
 	}
-	list := make([]Neighbor, 0, len(best))
+	list := make([]neighbor, 0, len(best))
 	for _, n := range best {
 		n.RelativeScore /= self
 		list = append(list, n)
@@ -298,7 +298,7 @@ func BestNeighbor(ctx context.Context, c opensearch.Client, d DiffEntry, workspa
 	return &list[0], nil
 }
 
-// neighborScope 는 BestNeighbor 가 견주는 범위(같은 프로젝트·같은 문서 종류)의 키다. 판정 결론도 이 범위 안에서만
+// neighborScope 는 bestNeighbor 가 견주는 범위(같은 프로젝트·같은 문서 종류)의 키다. 판정 결론도 이 범위 안에서만
 // 내용을 따라간다 — 다른 프로젝트·종류의 사본은 판정이 짝지은 적이 없다.
 func neighborScope(project string, docType model.DocType) string {
 	return project + "\x00" + string(docType)

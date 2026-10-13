@@ -34,8 +34,8 @@ type Ledger[T any] struct {
 	OnCorrupt func(file string, line int)
 }
 
-// NewLedger 는 dir 아래 {team}.jsonl 원장이다.
-func NewLedger[T any](dir string) *Ledger[T] { return &Ledger[T]{dir: dir} }
+// newLedger 는 dir 아래 {team}.jsonl 원장이다.
+func newLedger[T any](dir string) *Ledger[T] { return &Ledger[T]{dir: dir} }
 
 func (l *Ledger[T]) file(team string) string { return filepath.Join(l.dir, team+".jsonl") }
 

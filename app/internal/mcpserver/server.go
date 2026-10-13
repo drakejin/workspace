@@ -20,8 +20,8 @@ import (
 	"github.com/drakejin/workspace/app/internal/search"
 )
 
-// Version 은 서버 버전이다.
-const Version = "0.2.0"
+// version 은 서버 버전이다.
+const version = "0.2.0"
 
 // 안내문은 MCP 도구와 CLI 명령(scripts/memory/run.sh <command>)이 같은 Handlers 로 보므로, 도구 이름 옆에 CLI 명령을 함께 적는다.
 const (
@@ -190,13 +190,13 @@ func (h *Handlers) Ingest(ctx context.Context, in IngestInput) (string, error) {
 		return in.Path + ": 색인 대상 문서가 없습니다 (루트 문서, docs/, main/{repo}/docs/ 아래 .md 만 대상)", nil
 	}
 	if in.Team != "" {
-		return FormatIngest(results) + "\n" + fmt.Sprintf(oneOffTeamNote, in.Team, in.Team), nil
+		return formatIngest(results) + "\n" + fmt.Sprintf(oneOffTeamNote, in.Team, in.Team), nil
 	}
-	return FormatIngest(results), nil
+	return formatIngest(results), nil
 }
 
-// FormatIngest 는 적재 결과 목록이다. 게이트(바이너리·MEMORY_MAX_FILE_BYTES 초과)에 걸린 파일은 건너뛴 것으로 따로 적는다.
-func FormatIngest(results []ingest.Result) string {
+// formatIngest 는 적재 결과 목록이다. 게이트(바이너리·MEMORY_MAX_FILE_BYTES 초과)에 걸린 파일은 건너뛴 것으로 따로 적는다.
+func formatIngest(results []ingest.Result) string {
 	var indexed, skipped []ingest.Result
 	for _, r := range results {
 		if r.Skipped != "" {
@@ -468,12 +468,12 @@ func (h *Handlers) team(t string) (string, error) {
 	return t, naming.ValidateTeam(t)
 }
 
-// ServerName 은 MCP 서버 이름이다. .mcp.json 에도 같은 이름으로 등록한다 (도구는 mcp__drakejin-workspace-memory-mcp__*).
-const ServerName = "drakejin-workspace-memory-mcp"
+// serverName 은 MCP 서버 이름이다. .mcp.json 에도 같은 이름으로 등록한다 (도구는 mcp__drakejin-workspace-memory-mcp__*).
+const serverName = "drakejin-workspace-memory-mcp"
 
 // NewServer 는 도구 일곱 개를 단 MCP 서버다.
 func NewServer(h *Handlers) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: ServerName, Version: Version}, nil)
+	server := mcp.NewServer(&mcp.Implementation{Name: serverName, Version: version}, nil)
 	readOnly := &mcp.ToolAnnotations{ReadOnlyHint: true}
 
 	mcp.AddTool(server, &mcp.Tool{

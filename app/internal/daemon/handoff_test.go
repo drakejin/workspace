@@ -109,7 +109,7 @@ func TestSyncFileHandsOverADocumentWrittenOutsideTheDaemon(t *testing.T) {
 			ctx := context.Background()
 			fos := &handoffOS{hits: c.hits}
 			cfg := config.Config{MetaRepoRoot: root, Workspace: "ws", DefaultTeam: "t", Reconcile: config.Reconcile{MaxFileBytes: 1 << 20}}
-			r := &Reconciler{OS: fos, Config: cfg, Log: t.Logf, coldOwned: map[string]coldOwnedFile{}}
+			r := &reconciler{OS: fos, Config: cfg, Log: t.Logf, coldOwned: map[string]coldOwnedFile{}}
 			r.Indexer = ingest.New(ingest.Deps{OS: fos, Cold: cold.NewLocalStore(t.TempDir()), Config: cfg, SupersededBy: r.SupersededBy})
 			indices := []string{"mem-t-2026.09", "mem-t-2026.10"}
 			existing, err := ingest.FetchIndexedDocs(ctx, fos, indices, "ws")
@@ -125,7 +125,7 @@ func TestSyncFileHandsOverADocumentWrittenOutsideTheDaemon(t *testing.T) {
 			if (entry != nil) != c.handed {
 				t.Fatalf("diff = %+v, want handed=%v", entry, c.handed)
 			}
-			if entry != nil && (entry.SourcePath != rel || entry.Change != ChangeModified || entry.Team != "t" || !strings.Contains(entry.Body, "HandoffShipFee")) {
+			if entry != nil && (entry.SourcePath != rel || entry.Change != changeModified || entry.Team != "t" || !strings.Contains(entry.Body, "HandoffShipFee")) {
 				t.Errorf("diff = %+v", entry)
 			}
 			if got := fos.bulks > 0; got != c.rewritten {

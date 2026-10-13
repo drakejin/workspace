@@ -62,11 +62,11 @@ type Status struct {
 	DistillPending  int          `json:"distillPending"`
 }
 
-// RuntimeDir 은 데몬 런타임 파일 디렉토리다 (.cache/daemon — git 에 들어가지 않는다).
-func RuntimeDir(root string) string { return filepath.Join(CacheDir(root), "daemon") }
+// runtimeDir 은 데몬 런타임 파일 디렉토리다 (.cache/daemon — git 에 들어가지 않는다).
+func runtimeDir(root string) string { return filepath.Join(CacheDir(root), "daemon") }
 
-func statusFile(root string) string { return filepath.Join(RuntimeDir(root), "status.json") }
-func pidFile(root string) string    { return filepath.Join(RuntimeDir(root), "daemon.pid") }
+func statusFile(root string) string { return filepath.Join(runtimeDir(root), "status.json") }
+func pidFile(root string) string    { return filepath.Join(runtimeDir(root), "daemon.pid") }
 
 // writeJSON 은 rename 으로 바꿔 끼워 읽는 쪽이 반쯤 쓴 파일을 보지 않게 한다.
 func writeJSON(path string, v any) error {
@@ -107,7 +107,7 @@ func ReadStatus(root string) *Status {
 
 // lockFile 은 데몬 락이다. flock 은 커널이 쥐고 프로세스가 죽으면 풀어 주므로, 낡은 pid 파일이나 재사용된 pid 에
 // 속지 않고 잡기도 원자적이다. pid 파일은 보여 주기용이다.
-func lockFile(root string) string { return filepath.Join(RuntimeDir(root), "daemon.lock") }
+func lockFile(root string) string { return filepath.Join(runtimeDir(root), "daemon.lock") }
 
 var (
 	heldMu sync.Mutex
@@ -167,7 +167,7 @@ func AcquireLock(root string) error {
 	if held[root] != nil {
 		return nil
 	}
-	if err := os.MkdirAll(RuntimeDir(root), 0o755); err != nil {
+	if err := os.MkdirAll(runtimeDir(root), 0o755); err != nil {
 		return fmt.Errorf("daemon lock: %w", err)
 	}
 	f, err := os.OpenFile(lockFile(root), os.O_RDWR|os.O_CREATE, 0o644)
@@ -239,7 +239,7 @@ const (
 func docLockFile(root, sourcePath string) string {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(sourcePath)) // hash.Hash 의 Write 는 실패하지 않는다
-	return filepath.Join(RuntimeDir(root), "doc-locks", fmt.Sprintf("%02d.lock", h.Sum32()%docLockStripes))
+	return filepath.Join(runtimeDir(root), "doc-locks", fmt.Sprintf("%02d.lock", h.Sum32()%docLockStripes))
 }
 
 // LockDoc 은 문서 하나의 쓰기 락을 잡는다. flock 이라 프로세스 사이(데몬·MCP 서버·CLI)도, 한 프로세스 안의 두 호출(열 때마다 다른
@@ -289,7 +289,7 @@ type Tick struct{ path string }
 
 // NewTick 은 .cache/daemon/{name}.tick.json 이다.
 func NewTick(root, name string) Tick {
-	return Tick{path: filepath.Join(RuntimeDir(root), name+".tick.json")}
+	return Tick{path: filepath.Join(runtimeDir(root), name+".tick.json")}
 }
 
 // Due 는 마지막 성공에서 every 가 지났는가.

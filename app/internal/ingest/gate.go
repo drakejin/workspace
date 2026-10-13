@@ -19,12 +19,12 @@ func (e *SkipError) Error() string {
 	return fmt.Sprintf("%s: 색인하지 않습니다 (%s)", e.Rel, e.Reason)
 }
 
-// Gate 는 색인 게이트다. 걸리면 사유, 아니면 "". 크기는 stat 으로 먼저 보고(내용을 읽지 않는다), 그다음 앞부분을 읽어 바이너리를 본다.
-func Gate(abs string, size, maxFileBytes int64) (string, error) {
+// gate 는 색인 게이트다. 걸리면 사유, 아니면 "". 크기는 stat 으로 먼저 보고(내용을 읽지 않는다), 그다음 앞부분을 읽어 바이너리를 본다.
+func gate(abs string, size, maxFileBytes int64) (string, error) {
 	if reason := sizeGate(size, maxFileBytes); reason != "" {
 		return reason, nil
 	}
-	binary, err := IsProbablyBinary(abs)
+	binary, err := isProbablyBinary(abs)
 	if err != nil {
 		return "", fmt.Errorf("binary sniff %s: %w", abs, err)
 	}

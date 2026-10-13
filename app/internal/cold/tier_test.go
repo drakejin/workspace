@@ -85,7 +85,7 @@ func TestTierNeverSnapshotsAnEmptyIndex(t *testing.T) {
 		{"이번 달의 빈 인덱스는 hot 에 둔다", "mem-t-2026.10", 0, false, TierKept, false},
 		{"hot 기간 안 달의 빈 인덱스도 둔다", "mem-t-2026.08", 0, false, TierKept, false},
 		{"hot 기간이 지난 달의 빈 인덱스는 스냅샷 없이 지운다", "mem-t-2026.07", 0, false, TierDropped, true},
-		{"미리보기는 지우지 않는다", "mem-t-2026.07", 0, true, TierWouldDrop, false},
+		{"미리보기는 지우지 않는다", "mem-t-2026.07", 0, true, tierWouldDrop, false},
 		{"쓰기를 막는 사이 문서가 들어왔으면 지우지 않는다", "mem-t-2026.07", 1, false, TierKept, false},
 	}
 	for _, c := range cases {

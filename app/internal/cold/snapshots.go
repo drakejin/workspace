@@ -149,7 +149,7 @@ func TeamInWorkspace(ctx context.Context, c opensearch.Client, store Store, work
 	if owned[team] {
 		return true, nil
 	}
-	keys, err := store.List(ctx, TeamPrefix(team))
+	keys, err := store.List(ctx, teamPrefix(team))
 	if err != nil {
 		return false, fmt.Errorf("cold store %s: %w", team, err)
 	}
@@ -241,10 +241,10 @@ func DeleteSnapshot(ctx context.Context, c opensearch.Client, cfg config.Config,
 	return nil
 }
 
-// RestoreIndex 는 스냅샷에서 인덱스를 되살린다. 복원본은 ISM 자동 관리에서 뺀다 — 원래 생성일을 유지하므로
+// restoreIndex 는 스냅샷에서 인덱스를 되살린다. 복원본은 ISM 자동 관리에서 뺀다 — 원래 생성일을 유지하므로
 // 그대로 두면 ISM 이 바로 다시 cold 로 보낸다. 검색 alias 없이 되살린다 — restore_cold 는 다 합치고 deprecate 표시를
 // 입힌 뒤에 alias 를 붙이고(Restore), archive 는 alias 없이 잠깐 열어 고친다.
-func RestoreIndex(ctx context.Context, c opensearch.Client, cfg config.Config, index, snapshot string) error {
+func restoreIndex(ctx context.Context, c opensearch.Client, cfg config.Config, index, snapshot string) error {
 	if err := restoreSnapshot(ctx, c, cfg, snapshot, restoreBody(index)); err != nil {
 		return fmt.Errorf("restore %s from %s: %w", index, snapshot, err)
 	}
@@ -312,21 +312,22 @@ func restoreSearchable(ctx context.Context, c opensearch.Client, cfg config.Conf
 	return attachAliases(ctx, c, target.Name, team, cfg.OrgOf(team))
 }
 
-// partialRestore 는 스냅샷을 합치다 멈춘 복원의 오류다. 복원본이 열려 있으면 deprecate 표시를 다시 입힌다 — 예전 판의
-// 복원본은 이미 검색 alias 가 붙어 있어, 합치며 더한 문서가 표시 없이 기본 검색에 나온다.
+// partialRestore 는 스냅샷을 합치다 멈춘 복원의 오류다. 복원본이 열려 있으면 예전 판의 빈 text 를 지우고 deprecate 표시를
+// 다시 입힌다 — 예전 판의 복원본은 이미 검색 alias 가 붙어 있어, 합치며 더한 문서가 그대로(빈 결과로, 표시 없이) 검색에 나온다.
 func partialRestore(ctx context.Context, c opensearch.Client, cfg config.Config, team, index string, cause error) error {
 	restored, _, err := OpenState(ctx, c, index)
 	if err != nil {
-		return fmt.Errorf("%s 를 일부만 복원했을 수 있습니다 — 복원본 상태를 읽지 못해 deprecate 표시를 다시 입히지 못했습니다. restore 를 다시 하세요: %w",
+		return fmt.Errorf("%s 를 일부만 복원했을 수 있습니다 — 복원본 상태를 읽지 못해 빈 text 를 지우거나 deprecate 표시를 다시 입히지 못했습니다. restore 를 다시 하세요: %w",
 			index, errors.Join(cause, err))
 	}
 	if !restored {
 		return cause // 아무것도 열지 못했다 (가장 최근 스냅샷부터 실패했거나, hot 에 다시 열렸다)
 	}
-	if err := applyDeprecations(ctx, c, cfg, team, index); err != nil {
-		return fmt.Errorf("%s 를 일부만 복원했고 deprecate 표시도 다시 입히지 못했습니다 — restore 를 다시 하세요: %w", index, errors.Join(cause, err))
+	// 하나가 실패해도 다른 하나는 한다 — 둘 다 이미 검색에 붙은 복원본이 보이는 모습을 고친다
+	if err := errors.Join(dropEmptyText(ctx, c, index), applyDeprecations(ctx, c, cfg, team, index)); err != nil {
+		return fmt.Errorf("%s 를 일부만 복원했고 빈 text 를 지우거나 deprecate 표시를 다시 입히지 못했습니다 — restore 를 다시 하세요: %w", index, errors.Join(cause, err))
 	}
-	return fmt.Errorf("%s 를 일부만 복원했습니다 — 스냅샷을 합치다 멈췄습니다(deprecate 표시는 다시 입혔다). "+
+	return fmt.Errorf("%s 를 일부만 복원했습니다 — 스냅샷을 합치다 멈췄습니다(빈 text 는 지우고 deprecate 표시는 다시 입혔다). "+
 		"새로 연 복원본은 다 합칠 때까지 검색에 나오지 않습니다. restore 를 다시 하면 빠진 문서만 더해 마무리합니다: %w", index, cause)
 }
 

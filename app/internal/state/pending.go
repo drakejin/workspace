@@ -27,7 +27,7 @@ type PendingJudgment struct {
 
 // judgePendingFile 은 판정 대기 목록이다 (.cache/daemon — git 에 들어가지 않는다). 문서(source_path)마다 하나.
 func judgePendingFile(root string) string {
-	return filepath.Join(RuntimeDir(root), "judge-pending.json")
+	return filepath.Join(runtimeDir(root), "judge-pending.json")
 }
 
 // ReadJudgePending 은 판정 대기 목록(경로 → 대기분)이다. 없으면 빈 목록.

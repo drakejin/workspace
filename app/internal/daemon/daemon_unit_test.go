@@ -27,7 +27,7 @@ func TestDesiredSupersededByAndChains(t *testing.T) {
 		"k3.md": {SourcePath: "k3.md", Team: "t", Supersedes: "k2.md"},
 		"k4.md": {SourcePath: "k4.md", Team: "t", Supersedes: "missing.md"},
 	}
-	got, err := DesiredSupersededBy(docs, s)
+	got, err := desiredSupersededBy(docs, s)
 	want := map[string]string{"x.md": "y.md", "k1.md": "k3.md", "k2.md": "k3.md"}
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Errorf("desired = %v %v (A→B→C 는 마지막 판을 가리킨다)", got, err)
@@ -68,7 +68,7 @@ func TestDesiredSupersededByFollowsContent(t *testing.T) {
 			for p, sha := range tc.docs {
 				docs[p] = ingest.IndexedDoc{SourcePath: p, Team: "t", Kind: model.KindEpisodic, BodySHA: sha}
 			}
-			got, err := DesiredSupersededBy(docs, s)
+			got, err := desiredSupersededBy(docs, s)
 			if err != nil || !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("desired = %v %v, want %v", got, err, tc.want)
 			}
@@ -80,7 +80,7 @@ func TestDesiredSupersededByFollowsContent(t *testing.T) {
 			"l.md":  {SourcePath: "l.md", Team: "t", Kind: model.KindEpisodic, BodySHA: "sha-l"},
 			"w2.md": {SourcePath: "w2.md", Team: "u", Kind: model.KindEpisodic, BodySHA: "sha-w"},
 		}
-		if got, err := DesiredSupersededBy(docs, s); err != nil || len(got) != 0 {
+		if got, err := desiredSupersededBy(docs, s); err != nil || len(got) != 0 {
 			t.Errorf("desired = %v %v", got, err)
 		}
 	})
@@ -94,7 +94,7 @@ func TestSerialCoalesces(t *testing.T) {
 		maxSeen int32
 	)
 	release := make(chan struct{})
-	s := NewSerial(func(reason string) {
+	s := newSerial(func(reason string) {
 		n := atomic.AddInt32(&active, 1)
 		if n > atomic.LoadInt32(&maxSeen) {
 			atomic.StoreInt32(&maxSeen, n)
@@ -140,7 +140,7 @@ func TestDecide(t *testing.T) {
 		return side{Side: state.Side{Path: p, BodySHA: p + "-sha", EventTime: "2026-10-" + day + "T00:00:00Z"}, text: p}
 	}
 	ask := &stubAsker{}
-	j := &Judge{Config: cfg, Ask: ask, Now: func() time.Time { return time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC) }}
+	j := &judge{Config: cfg, Ask: ask, Now: func() time.Time { return time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC) }}
 	r, err := j.Decide(context.Background(), "k", sd("old.md", "01"), sd("new.md", "12"))
 	if err != nil || r.Decision != state.DecisionSuperseded || r.By != "latest-wins" || r.Old.Path != "old.md" || ask.calls != 0 {
 		t.Errorf("latest-wins = %+v calls=%d", r, ask.calls)
