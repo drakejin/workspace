@@ -13,9 +13,7 @@ import (
 func TestInputValidationBeforeIO(t *testing.T) {
 	h := NewHandlers(Deps{Config: config.Config{DefaultTeam: "ads"}})
 	ctx := context.Background()
-	if out, err := h.Restore(ctx, RestoreInput{Index: "mem-ads-2026.06"}); err != nil || !strings.Contains(out, "복원할까요") {
-		t.Errorf("confirmed 없이는 복원하지 않는다: %q %v", out, err)
-	}
+	// confirmed 없는 restore_cold 는 cold 목록을 읽어 존재를 확인한다 (RUN-14) — TestRestoreWithoutConfirmationChecksTheIndexIsInCold
 	for _, bad := range []string{"mem-ads-hot", "../x", "mem-ads-knowledge"} {
 		if _, err := h.Restore(ctx, RestoreInput{Index: bad, Confirmed: true}); err == nil {
 			t.Errorf("%s 는 거부", bad)

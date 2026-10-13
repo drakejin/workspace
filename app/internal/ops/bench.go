@@ -15,7 +15,7 @@ func runBench(ctx context.Context, c *CLI, args []string) (string, error) {
 	f := newFlags("bench")
 	questions := f.String("questions", "", "질문 YAML (meta-repo 밖)")
 	model := f.String("model", "haiku", "claude 모델")
-	modes := f.String("modes", bench.ModeWith+","+bench.ModeWithout, "조건")
+	modes := f.String("modes", bench.ModeWith+","+bench.ModeWithout, "조건 (with·without 을 쉼표로)")
 	runs := f.Int("runs", 1, "조건마다 회차")
 	maxTurns := f.Int("max-turns", 15, "질문당 최대 턴")
 	script := f.String("mcp-script", defaultMCPScript(), "scripts/mcp/run.sh 절대 경로")
@@ -28,6 +28,18 @@ func runBench(ctx context.Context, c *CLI, args []string) (string, error) {
 	if err := questionsOutside(c.Config.MetaRepoRoot, *questions); err != nil {
 		return "", err
 	}
+	opt := bench.Options{
+		Root: c.Config.MetaRepoRoot, MCPScript: *script, Model: *model, Runs: *runs, MaxTurns: *maxTurns, RulesFile: rulesFile(c.Config.MetaRepoRoot),
+		Modes: bench.ParseModes(*modes),
+		MCPEnv: []string{
+			"META_REPO_ROOT=" + c.Config.MetaRepoRoot, "MEMORY_DEFAULT_TEAM=" + c.Config.DefaultTeam,
+			"MEMORY_WORKSPACE=" + c.Config.Workspace, "OPENSEARCH_URL=" + c.Config.OpenSearchURL,
+		},
+	}
+	// -modes 오타·없는 -mcp-script 는 claude 를 찾기 전에 사용 오류다 — 그대로 돌면 with 가 memory 도구 없이 측정된다
+	if err := opt.Validate(); err != nil {
+		return "", f.invalid(err)
+	}
 	if _, err := exec.LookPath(c.Config.LLM.ClaudeBin); err != nil {
 		return "", fmt.Errorf("bench: claude CLI(%s)를 찾을 수 없습니다 — MEMORY_CLAUDE_BIN: %w", c.Config.LLM.ClaudeBin, err)
 	}
@@ -35,19 +47,15 @@ func runBench(ctx context.Context, c *CLI, args []string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	opt := bench.Options{
-		Root: c.Config.MetaRepoRoot, MCPScript: *script, Model: *model, Runs: *runs, MaxTurns: *maxTurns, RulesFile: rulesFile(c.Config.MetaRepoRoot),
-		Modes: strings.Split(*modes, ","),
-		MCPEnv: []string{
-			"META_REPO_ROOT=" + c.Config.MetaRepoRoot, "MEMORY_DEFAULT_TEAM=" + c.Config.DefaultTeam,
-			"MEMORY_WORKSPACE=" + c.Config.Workspace, "OPENSEARCH_URL=" + c.Config.OpenSearchURL,
-		},
-	}
 	results, err := bench.Run(ctx, suite, opt, claudeRunner(c.Config.LLM.ClaudeBin))
 	if err != nil {
 		return "", err
 	}
-	report := bench.Render(results, *model, c.Now())
+	return saveBenchReport(c, bench.Render(results, *model, c.Now()))
+}
+
+// saveBenchReport 는 측정 보고서를 meta-repo 의 .cache/bench/{시각}.md 에 남기고, 보고서와 저장 위치를 돌려준다.
+func saveBenchReport(c *CLI, report string) (string, error) {
 	dir := filepath.Join(c.Config.MetaRepoRoot, ".cache", "bench")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("bench report: %w", err)

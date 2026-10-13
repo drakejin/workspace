@@ -163,8 +163,11 @@ func (h *Handlers) Filters(ctx context.Context, in FiltersInput) (string, error)
 // IngestInput 은 ingest_path 입력이다.
 type IngestInput struct {
 	Path string `json:"path" jsonschema:"meta-repository 기준 상대 경로 (파일 또는 디렉토리)"`
-	Team string `json:"team,omitempty" jsonschema:"frontmatter 대신 쓸 팀"`
+	Team string `json:"team,omitempty" jsonschema:"이번 적재에만 쓸 팀 (일회성). 파일의 frontmatter team 은 바꾸지 않아, 파일이 바뀌면 다음 데몬 사이클이 frontmatter team(없으면 기본 팀)으로 다시 쓴다. 계속 그 팀에 두려면 frontmatter team 을 고친다"`
 }
+
+// oneOffTeamNote 는 team 을 주고 적재했을 때 덧붙이는 안내다 — 데몬은 파일이 바뀌면 team 인자를 모른 채 다시 쓴다.
+const oneOffTeamNote = "team=%s 는 이번 적재에만 썼습니다 — 파일이 바뀌면 다음 데몬 사이클이 frontmatter team(없으면 기본 팀)으로 다시 씁니다. 계속 이 팀에 두려면 frontmatter 에 team: %s 를 적으세요."
 
 // Ingest 는 ingest_path 다.
 func (h *Handlers) Ingest(ctx context.Context, in IngestInput) (string, error) {
@@ -185,6 +188,9 @@ func (h *Handlers) Ingest(ctx context.Context, in IngestInput) (string, error) {
 	}
 	if len(results) == 0 {
 		return in.Path + ": 색인 대상 문서가 없습니다 (루트 문서, docs/, main/{repo}/docs/ 아래 .md 만 대상)", nil
+	}
+	if in.Team != "" {
+		return FormatIngest(results) + "\n" + fmt.Sprintf(oneOffTeamNote, in.Team, in.Team), nil
 	}
 	return FormatIngest(results), nil
 }
@@ -278,20 +284,20 @@ type RestoreInput struct {
 	Confirmed bool   `json:"confirmed,omitempty" jsonschema:"사용자가 복원에 동의했으면 true"`
 }
 
-// Restore 는 restore_cold 다. confirmed 가 없으면 복원하지 않고 "먼저 물으라"고 돌려준다.
+// Restore 는 restore_cold 다. 인덱스가 이 workspace 팀의 cold 에 있는지 먼저 보고, confirmed 가 없으면 복원하지 않고
+// "먼저 물으라"고 돌려준다.
 func (h *Handlers) Restore(ctx context.Context, in RestoreInput) (string, error) {
 	if !naming.IsMonthly(in.Index) {
 		return "", fmt.Errorf("index 이름이 잘못됐습니다: %q", in.Index)
 	}
-	if !in.Confirmed {
-		return fmt.Sprintf("복원하지 않았습니다. 사용자에게 \"cold 인덱스 %s가 있는데 복원할까요\"라고 먼저 묻고, 동의하면 confirmed=true 로 다시 호출하세요.", in.Index), nil
-	}
 	if err := h.Ready(ctx); err != nil {
 		return "", err
 	}
-	idx, _ := naming.ParseIndex(in.Index)
-	if _, err := h.coldList(ctx, idx.Team); err != nil {
+	if err := h.inCold(ctx, in.Index); err != nil {
 		return "", err
+	}
+	if !in.Confirmed {
+		return fmt.Sprintf("복원하지 않았습니다. 사용자에게 \"cold 인덱스 %s가 있는데 복원할까요\"라고 먼저 묻고, 동의하면 confirmed=true 로 다시 호출하세요.", in.Index), nil
 	}
 	restored, err := cold.Restore(ctx, h.OS, h.Config, in.Index)
 	if err != nil {
@@ -301,9 +307,24 @@ func (h *Handlers) Restore(ctx context.Context, in RestoreInput) (string, error)
 		restored.Name, strings.Join(restored.Snapshots, ","), searchHint), nil
 }
 
+// inCold 는 index 가 이 workspace 팀의 cold 인덱스인지 본다 — 없는 인덱스를 두고 사용자에게 "복원할까요" 를 묻게 시키지 않는다.
+func (h *Handlers) inCold(ctx context.Context, index string) error {
+	idx, _ := naming.ParseIndex(index)
+	list, err := h.coldList(ctx, idx.Team)
+	if err != nil {
+		return err
+	}
+	for _, c := range list {
+		if c.Name == index {
+			return nil
+		}
+	}
+	return fmt.Errorf("team=%s 의 cold 에 %s 가 없습니다 — %s 로 복원할 수 있는 인덱스를 확인하세요", idx.Team, index, listColdHint)
+}
+
 // RelatedInput 은 related_docs 입력이다.
 type RelatedInput struct {
-	Path  string `json:"path" jsonschema:"meta-repository 기준 문서 경로 (search_memory 결과의 source_path)"`
+	Path  string `json:"path" jsonschema:"문서 경로 — search_memory 결과의 source_path. ingest_path 처럼 ./docs/… 나 meta-repository 안의 절대 경로도 받는다"`
 	Depth int    `json:"depth,omitempty" jsonschema:"몇 걸음까지 (1~3, 기본 2). 2 면 같은 entity 를 다루는 문서도 나온다"`
 }
 
@@ -312,20 +333,20 @@ func (h *Handlers) Related(ctx context.Context, in RelatedInput) (string, error)
 	if h.Graph == nil {
 		return "", graph.ErrDisabled
 	}
-	if strings.TrimSpace(in.Path) == "" {
-		return "", fmt.Errorf("path 가 비어 있습니다")
+	path, err := h.graphPath(in.Path)
+	if err != nil {
+		return "", err
 	}
 	depth := in.Depth
 	if depth == 0 {
 		depth = 2
 	}
-	path := ingest.CanonicalRel(strings.TrimSpace(in.Path)) // 그래프의 문서 경로는 source_path 와 같은 NFC 다
 	ns, err := h.Graph.Neighbors(ctx, h.Config.Workspace, path, depth)
 	if err != nil {
 		return "", err
 	}
 	if len(ns) == 0 {
-		return path + ": 그래프에서 이어진 문서가 없습니다 (그래프에 없는 문서이거나 링크·entity 가 없다)", nil
+		return h.noNeighbors(ctx, path)
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s 와 이어진 문서 %d건 (knowledge graph)\n", path, len(ns))
@@ -333,6 +354,33 @@ func (h *Handlers) Related(ctx context.Context, in RelatedInput) (string, error)
 		fmt.Fprintf(&b, "- [%d] %s (%s) — %s\n", n.Hops, n.Path, n.Status, describePath(n))
 	}
 	return strings.TrimRight(b.String(), "\n"), nil
+}
+
+// graphPath 는 입력 경로를 그래프의 문서 경로(source_path)로 맞춘다 — ingest_path 와 같은 규칙이다: ./docs/… 와 meta-repo 안의
+// 절대 경로는 meta-repo 기준 상대 경로로, 철자는 디스크의 것(대소문자·NFC)으로.
+func (h *Handlers) graphPath(input string) (string, error) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return "", fmt.Errorf("path 가 비어 있습니다")
+	}
+	_, rel, err := ingest.ResolveOnDisk(h.Config.MetaRepoRoot, input)
+	if err != nil {
+		return "", fmt.Errorf("related_docs: %w", err)
+	}
+	return rel, nil
+}
+
+// noNeighbors 는 이어진 문서가 없을 때의 답이다 — 그래프에 없는 문서(경로 오타, 아직 그래프를 만들지 않은 새 문서)와
+// 그래프에 있지만 이어진 것이 없는 문서를 가른다.
+func (h *Handlers) noNeighbors(ctx context.Context, path string) (string, error) {
+	found, err := h.Graph.HasDoc(ctx, h.Config.Workspace, path)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return path + ": 그래프에 없는 문서입니다 — 경로는 search_memory(CLI: search) 결과의 source_path 를 쓰세요 (막 적재한 문서는 다음 데몬 사이클 뒤에 그래프에 생긴다)", nil
+	}
+	return path + ": 그래프에 있지만 이어진 문서가 없습니다 (링크·supersedes·derived_from·relates·entity 가 없다)", nil
 }
 
 func describePath(n graph.Neighbor) string {
@@ -372,9 +420,23 @@ func (h *Handlers) Entities(ctx context.Context, in EntityInput) (string, error)
 	}
 	var b strings.Builder
 	for _, e := range es {
-		fmt.Fprintf(&b, "%s:%s — %s\n", e.Type, e.Name, strings.Join(e.Docs, ", "))
+		fmt.Fprintf(&b, "%s:%s — %s\n", e.Type, e.Name, entityDocList(e.Docs))
 	}
 	return strings.TrimRight(b.String(), "\n"), nil
+}
+
+// entityDocList 는 entity 를 다루는 문서 목록이다. 현행(hot)이 아닌 문서에는 related_docs 와 같은 상태 이름을 붙인다 —
+// 기본 검색에서 숨는 밀린·deprecate 된 문서를 현행으로 읽지 않게.
+func entityDocList(docs []graph.DocRef) string {
+	parts := make([]string, 0, len(docs))
+	for _, d := range docs {
+		if d.Status == "" || d.Status == graph.StatusHot {
+			parts = append(parts, d.Path)
+			continue
+		}
+		parts = append(parts, d.Path+" ("+d.Status+")")
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (h *Handlers) team(t string) (string, error) {
@@ -415,7 +477,8 @@ func NewServer(h *Handlers) *mcp.Server {
 		Name:  "ingest_path",
 		Title: "문서 수동 적재",
 		Description: "데몬이 아직 잡지 못한 문서나 디렉토리를 바로 색인한다. 경로는 meta-repository 기준 상대 경로. " +
-			"바이너리·크기 초과 파일은 데몬처럼 색인하지 않고 건너뛴 것으로 알린다. 적재한 문서는 다음 데몬 사이클이 판정·증류·그래프로 넘긴다.",
+			"바이너리·크기 초과 파일은 데몬처럼 색인하지 않고 건너뛴 것으로 알린다. 적재한 문서는 다음 데몬 사이클이 판정·증류·그래프로 넘긴다. " +
+			"team 은 이번 적재에만 쓰인다 — 파일이 바뀌면 데몬이 frontmatter team(없으면 기본 팀)으로 다시 쓴다.",
 	}, wrap(h.Log, h.Ingest))
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -428,22 +491,24 @@ func NewServer(h *Handlers) *mcp.Server {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:  "restore_cold",
 		Title: "cold 인덱스 복원",
-		Description: "스냅샷에서 cold 인덱스 하나를 hot 으로 복원한다. 반드시 사용자에게 \"cold 인덱스 X가 있는데 복원할까요\"를 먼저 묻고, " +
-			"동의를 받은 경우에만 confirmed=true 로 호출한다.",
+		Description: "스냅샷에서 cold 인덱스 하나를 hot 으로 복원한다. 이 workspace 팀의 cold 에 없는 인덱스면 confirmed 와 상관없이 실패한다 (list_cold 로 확인). " +
+			"반드시 사용자에게 \"cold 인덱스 X가 있는데 복원할까요\"를 먼저 묻고, 동의를 받은 경우에만 confirmed=true 로 호출한다.",
 	}, wrap(h.Log, h.Restore))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:  "related_docs",
 		Title: "이어진 문서 (knowledge graph)",
 		Description: "knowledge graph 에서 문서와 이어진 문서를 찾는다 — 개정 관계(SUPERSEDES), 근거(DERIVED_FROM), 관련(RELATES), " +
-			"본문 링크(LINKS_TO), 같은 entity 를 다루는 문서. search_memory 로 찾은 문서의 배경을 넓힐 때 쓴다.",
+			"본문 링크(LINKS_TO), 같은 entity 를 다루는 문서. search_memory 로 찾은 문서의 배경을 넓힐 때 쓴다. " +
+			"path 는 source_path 그대로 (./docs/… 나 meta-repo 안의 절대 경로도 된다). 그래프에 없는 문서면 그렇다고 따로 답한다.",
 		Annotations: readOnly,
 	}, wrap(h.Log, h.Related))
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "docs_by_entity",
-		Title:       "entity 로 문서 찾기",
-		Description: "서비스·테이블·API·개념 같은 entity 이름으로 그것을 다루는 문서를 찾는다 (증류가 뽑은 entity, knowledge graph).",
+		Name:  "docs_by_entity",
+		Title: "entity 로 문서 찾기",
+		Description: "서비스·테이블·API·개념 같은 entity 이름으로 그것을 다루는 문서를 찾는다 (증류가 뽑은 entity, knowledge graph). " +
+			"기본 검색에서 숨는 문서에는 related_docs 처럼 (superseded)·(deprecated) 를 붙인다.",
 		Annotations: readOnly,
 	}, wrap(h.Log, h.Entities))
 

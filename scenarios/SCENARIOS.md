@@ -224,7 +224,7 @@ printf -- '---\ndate: %s\n---\n# 배송비 정책\n\n## 결정\n\nShippingFeePol
 | M1 | 공통 준비 후 `export MEMORY_DISTILL_ENABLED=true MEMORY_LLM_MODEL=haiku` 그리고 G4 의 **배송비 쌍** 블록을 실행한 뒤 `scripts/memory-daemon/run.sh once` | 1~4분. `[judge] superseded …shipping-fee-a.md ↔ …shipping-fee-b.md (llm: …)` (LLM 이 모순·신판으로 판정) 또는 확신이 낮으면 `question` — 둘 중 하나면 PASS, 어느 쪽인지 적는다. 배송비 쌍과 F1 의 두 판정 말고 다른 문서의 superseded 줄이 있으면 FAIL. `[distill] …: summary N자, entities M` 줄이 문서 수만큼, 끝에 `trigger=settle` 사이클과 `[graph] … entities=` 1 이상 |
 | M2 | `scripts/memory/run.sh search ScnAlphaLedgerLock` | 결과에 `요약:` 줄 |
 | M3 | `scripts/memory/run.sh graph stats` | `Entity=` 1 이상, `MENTIONS=` 1 이상 |
-| M4 | `scripts/memory/run.sh graph entity alpha-api` | 한 줄 이상 `<type>:<name> — <경로들>` |
+| M4 | `scripts/memory/run.sh graph entity alpha-api` | 한 줄 이상 `<type>:<name> — <경로들>`. 밀린 문서(`docs/knowledge/status-codes.md` 등)가 끼면 그 경로 뒤에 `(superseded)` |
 | M5 | Claude 로: `scenarios/claude-mcp.sh "docs_by_entity 로 alpha-api 를 찾아 결과를 그대로 보여 줘."` | `tool_use docs_by_entity`, 결과가 M4 와 같은 내용 |
 | M6 | `scenarios/teardown.sh llm` | 정리됨 |
 
