@@ -26,6 +26,9 @@ import (
 	"github.com/drakejin/workspace/app/internal/state"
 )
 
+// startupProbeTimeout 은 MCP 서버가 stdio 를 열기 전에 OpenSearch 에 닿는지 기다리는 상한이다.
+const startupProbeTimeout = 5 * time.Second
+
 func main() {
 	if err := run(); err != nil {
 		if errors.Is(err, ops.ErrUsage) {
@@ -71,9 +74,12 @@ func run() error {
 	if len(args) == 0 || args[0] == "serve" {
 		logger.Printf("[memory-mcp] root=%s workspace=%s opensearch=%s graph=%s team=%s",
 			cfg.MetaRepoRoot, cfg.Workspace, cfg.OpenSearchURL, orOff(cfg.Graph.URI), cfg.DefaultTeam)
-		if err := handlers.Ready(ctx); err != nil {
-			logger.Printf("[memory-mcp] OpenSearch 준비 실패, 첫 도구 호출 때 다시 시도: %v", err)
+		// 닿는지만 짧게 본다 — 쓰기 쪽 bootstrap 은 적재·복원 도구가 처음 불릴 때 한다 (세션을 열 때마다 클러스터에 쓰지 않게)
+		probe, cancel := context.WithTimeout(ctx, startupProbeTimeout)
+		if err := handlers.ReadReady(probe); err != nil {
+			logger.Printf("[memory-mcp] OpenSearch 에 닿지 않음, 첫 도구 호출 때 다시 본다: %v", err)
 		}
+		cancel()
 		return mcpserver.NewServer(handlers).Run(ctx, &mcp.StdioTransport{})
 	}
 	cli := &ops.CLI{Config: cfg, OS: osClient, Cold: store, Indexer: ix, Handlers: handlers, Graph: g, Out: os.Stdout, In: os.Stdin, Now: time.Now}

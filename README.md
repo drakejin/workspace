@@ -146,8 +146,8 @@ claude mcp add drakejin-workspace-memory-mcp -s user -- bash ~/Workspace/drakeji
 
 | 도구 | 하는 일 |
 | --- | --- |
-| `search_memory(query?, project?, topic?, date?, time_range?, doc_type?, team?, org?, size?, include_superseded?)` | hot 영역 BM25 검색, 또는 필터로 가져오기. 필터: **프로젝트**(`project`), **주제**(`topic`), **날짜**(`date`, 그날 하루 — 문서의 날: frontmatter `date`, 없으면 커밋 시각을 `MEMORY_TIME_ZONE` 에서 본 날), **범위**(`time_range` from~to), 문서 종류. `query` 를 비우고 필터만 주면 맞는 문서를 최신순으로(문서 하나에 한 건, 머리 `문서 N건`) 가져온다. 질의어 검색은 청크 단위라 한 문서의 여러 절이 따로 나올 수 있다(머리 `청크 N건 · 문서 M건 (BM25)` — 맞은 청크 수와 그 청크들의 문서 수). 결과는 `source_path › header_path (종류, project=, topic=, 날짜)`, 청크, (증류가 켜져 있으면) 요약 |
-| `search_filters(project?, topic?, date?, time_range?, doc_type?, …)` | 필터에 쓸 수 있는 값과 문서 수 — 프로젝트·주제·문서 종류·날짜 범위·날짜별 수 |
+| `search_memory(query?, project?, topic?, date?, time_range?, doc_type?, team?, org?, size?, include_superseded?)` | hot 영역 BM25 검색, 또는 필터로 가져오기. 필터: **프로젝트**(`project`), **주제**(`topic`), **날짜**(`date`, 그날 하루 — 문서의 날: frontmatter `date`, 없으면 커밋 시각을 `MEMORY_TIME_ZONE` 에서 본 날), **범위**(`time_range` from~to — OpenSearch 가 읽는 꼴만 받는다: 날짜(`2026-10-01`, `2026-10`), 시각(`2026-10-01T09:00`), epoch 밀리초, date math(`now-30d`, `now-7d/d`). 그 밖의 값과 뒤집힌 범위(날짜·시각·date math 가 섞여도)는 거부), 문서 종류. 프로젝트는 대소문자를 가리지 않는다. 팀·org 의 hot 색인이 없으면(이름 오타, 적재 전, 모두 cold 로 내려감) 0건이 아니라 `hot 색인이 없습니다` 와 `list_cold` 안내로 알린다. `query` 를 비우고 필터만 주면 맞는 문서를 최신순으로(문서 하나에 한 건, 머리 `문서 N건`) 가져온다. 질의어 검색은 청크 단위라 한 문서의 여러 절이 따로 나올 수 있다(머리 `청크 N건 · 문서 M건 (BM25)` — 맞은 청크 수와 그 청크들의 문서 수). 결과는 `source_path › header_path (종류, project=, topic=, 날짜)`, 청크, (증류가 켜져 있으면) 요약 |
+| `search_filters(project?, topic?, date?, time_range?, doc_type?, …)` | 필터에 쓸 수 있는 값과 문서 수 — 프로젝트·주제·문서 종류·날짜 범위·날짜별 수 (값이 100개를 넘으면 잘린 값들의 문서 수를 `외 문서 N건` 으로 알린다) |
 | `related_docs(path, depth?)` | knowledge graph 에서 이어진 문서 — supersedes·derived_from·relates·링크·같은 entity·같은 repo |
 | `docs_by_entity(entity)` | 증류가 뽑은 entity(`service:order-api` 등)를 다루는 문서 |
 | `ingest_path(path, team?)` | 데몬이 아직 잡지 못한 파일·디렉토리를 바로 색인. 경로는 디스크의 철자(대소문자·NFC)로 맞추고, 데몬과 같은 게이트로 바이너리·`MEMORY_MAX_FILE_BYTES` 초과는 건너뛴다고 알린다. 적재한 문서는 다음 데몬 사이클이 판정·증류·그래프로 넘긴다 |

@@ -15,7 +15,7 @@ import (
 
 func TestBuildQuery(t *testing.T) {
 	q := BuildQuery(Request{Workspace: "ws", Team: "ads", Query: "dedup", TimeRange: model.TimeRange{From: "now-30d"}, Project: "attribution", DocType: model.DocADR, Size: 500})
-	if q["size"] != maxSize {
+	if q["size"] != MaxSize {
 		t.Errorf("size = %v", q["size"])
 	}
 	b := q["query"].(map[string]any)["bool"].(map[string]any)
@@ -114,7 +114,7 @@ func TestFiltersDateRangeTopicProject(t *testing.T) {
 	// 날짜는 문서의 날(event_day: frontmatter 날짜 그대로, 아니면 설정한 시간대의 날)로 맞춘다
 	q := BuildQuery(Request{Query: "x", Date: "2026-10-06", Topic: "Payments", Project: "alpha-api"})
 	got, _ := json.Marshal(filterOf(t, q))
-	want := `[{"term":{"event_day":"2026-10-06"}},{"term":{"repo":"alpha-api"}},{"term":{"topic":"payments"}}]`
+	want := `[{"term":{"event_day":"2026-10-06"}},{"term":{"repo":{"case_insensitive":true,"value":"alpha-api"}}},{"term":{"topic":"payments"}}]`
 	if string(got) != want {
 		t.Errorf("date·project·topic\n got  %s\n want %s", got, want)
 	}

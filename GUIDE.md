@@ -186,8 +186,8 @@ launchd 가 없는 머신은 nohup 백그라운드라(`[memory-daemon] backgroun
 
 | 도구 | 입력 | 하는 일 |
 | --- | --- | --- |
-| `search_memory` | `query?`, `project?`, `topic?`, `date?`(YYYY-MM-DD), `time_range?{from,to}`, `doc_type?`, `team?`, `org?`, `size?`, `include_superseded?` | hot BM25 검색, 또는 질의어 없이 필터로 가져오기(최신순, 문서 하나에 한 건). 밀린 문서·deprecate 된 문서는 기본으로 숨긴다 |
-| `search_filters` | `project?`, `topic?`, `date?`, `time_range?`, `doc_type?`, `team?`, `org?`, `include_superseded?` | 필터에 쓸 수 있는 값과 문서 수 — 프로젝트·주제·문서 종류·날짜 범위·날짜별 수 |
+| `search_memory` | `query?`, `project?`, `topic?`, `date?`(YYYY-MM-DD), `time_range?{from,to}`, `doc_type?`, `team?`, `org?`, `size?`, `include_superseded?` | hot BM25 검색, 또는 질의어 없이 필터로 가져오기(최신순, 문서 하나에 한 건). 밀린 문서·deprecate 된 문서는 기본으로 숨긴다. 쓰기 쪽 bootstrap 없이 읽기만 한다 — cold·스냅샷 설정이 잘못돼도 이미 색인된 문서는 찾는다 |
+| `search_filters` | `project?`, `topic?`, `date?`, `time_range?`, `doc_type?`, `team?`, `org?`, `include_superseded?` | 필터에 쓸 수 있는 값과 문서 수 — 프로젝트·주제·문서 종류·날짜 범위·날짜별 수. 값이 100개를 넘는 필터는 `외 문서 N건(…상위만 보임…)` 으로 잘린 것을 알린다 |
 | `related_docs` | `path`, `depth?`(1~3, 기본 2) | 그래프에서 이어진 문서와 그 경로(관계·이유). depth 2 면 같은 entity·같은 repo 를 다루는 문서도 |
 | `docs_by_entity` | `entity` (`order-api` 또는 `service:order-api`, 부분 일치) | 증류 entity 로 문서 찾기 |
 | `ingest_path` | `path`(meta-repo 기준), `team?` | 데몬보다 먼저 색인 (meta-repo 밖 경로는 거부). 경로는 디스크의 철자(대소문자·NFC)로 맞춘다. 데몬과 같은 게이트 — 바이너리·`MEMORY_MAX_FILE_BYTES` 초과는 색인하지 않고 `N개 건너뜀 … - <path> (<이유>)` 로 알린다. 새로 쓴 내용은 다음 데몬 사이클이 판정·증류·그래프로 넘긴다 (데몬이 이미 넘겨받은 같은 내용을 다시 적재하면 넘기지 않는다) |
@@ -332,7 +332,13 @@ team=demo · project=order-api, time_range=2026-10-01~ · 문서 3건 (필터, �
 (4.1 의 환불 기간 두 문서를 더하기 전 샘플에서 찍은 출력이다. 주제는 `docs/feature|specs|issues/{주제}/` 경로나 frontmatter `topic`,
 프로젝트는 `docs/repository/{프로젝트}/`·`main/{프로젝트}/docs/` 경로나 frontmatter `repo`/`project` 에서 정한다. `-from` 처럼 날짜만 주면 그날 전체가 들어간다.
 주제는 NFC·소문자로, 글자·숫자가 아닌 것은 하이픈으로 맞춰 비교한다 — Finder 가 NFD 로 만든 디렉토리 이름도 친 그대로 맞는다.
-글자·숫자가 하나도 없는 주제(`-topic '!!!'`)나 공백뿐인 프로젝트는 필터를 조용히 빼지 않고 `topic 에 글자·숫자가 없습니다` 로 거부한다.)
+글자·숫자가 하나도 없는 주제(`-topic '!!!'`)나 공백뿐인 프로젝트는 필터를 조용히 빼지 않고 `topic 에 글자·숫자가 없습니다` 로 거부한다.
+프로젝트는 대소문자를 가리지 않는다(`-project Alpha-API` 도 `alpha-api` 를 찾는다). `-from`/`-to`(`time_range`)는 OpenSearch 가 읽는 꼴만 받는다 —
+날짜(`2026-10-01`, `2026-10`, `2026`), 시각(`2026-10-01T09`, `2026-10-01T09:00:00.5+09:00`, 시간대 생략 가능), epoch 밀리초, date math(`now-30d`, `now-d`, `now-7d/d`, `2026-10-01||+1M`).
+`yesterday` 같은 값이나 뒤집힌 범위(`-from` 이 `-to` 보다 늦다 — 날짜·시각·date math 가 섞여도 OpenSearch 처럼 계산한다)는 OpenSearch 에 묻기 전에
+무엇이 틀렸는지(뒤집혔으면 두 경계를 읽은 시각까지) 알리며 거부한다. 연·월만 적은 `-to 2026-10` 은 OpenSearch 규칙대로 10월 1일 끝까지다 — 달 전체는 `-to '2026-10||/M'`.
+팀·org 의 hot 색인이 없으면 0건이 아니라 `team=… 의 hot 색인이 없습니다` 로 구별하고 까닭 셋(이름 오타, 아직 적재 전, 문서가 모두 cold 로 내려감)과
+`list_cold(CLI: list-cold)` 를 함께 알린다. 가져오기가 잘렸을 때 size 가 이미 상한(50)이면 size 대신 필터를 좁히라고 안내한다 (페이지 넘김은 없다).)
 
 ### 4.3 그래프
 
@@ -445,7 +451,7 @@ team=demo cold 인덱스 2개 (repository mem-cold)
 - mem-demo-2026.06  snapshot=cold-mem-demo-2026.06-20261013t003025-064934000  at=2026-10-13T00:30:25.062Z
 - mem-demo-2026.08  snapshot=cold-mem-demo-2026.08-20261013t003025-237458000  at=2026-10-13T00:30:25.062Z
 
-mem-demo-2026.06 을(를) snapshot cold-mem-demo-2026.06-20261013t003025-064934000 에서 hot 으로 복원했습니다. 이제 검색(search_memory, CLI: search)에 포함됩니다 (ISM 자동 관리 제외).
+mem-demo-2026.06 을(를) snapshot cold-mem-demo-2026.06-20261013t003025-064934000 에서 hot 으로 복원했습니다. 이제 search_memory(CLI: search) 결과에 포함됩니다 (ISM 자동 관리 제외).
 
 [1] docs/repository/order-api/prd/2026-06-order-launch.md › 주문 API 1차 출시 PRD > 활성 주문 정의  (prd, project=order-api, 2026-06-15; score 3.03)
 ```
@@ -657,7 +663,7 @@ ISM 이 먼저 옮긴 경우다. "갖고 있다" 의 판단:
 | `MEMORY_DEFAULT_TEAM` | `default` | frontmatter 에 team 이 없을 때 |
 | `MEMORY_TEAM_ORGS` | — | `팀=org,팀=org` — org alias |
 | `MEMORY_HOT_DAYS` | `60` | hot/cold 경계. tier 는 바로 따른다. ISM 정책은 bootstrap 이 고치지만 **이미 정책이 붙은 인덱스는 처음 붙은 기간을 유지한다** (새로 만드는 인덱스부터) |
-| `MEMORY_TIME_ZONE` | 이 머신의 시간대 | 문서의 날(`date`·`time_range` 날짜 필터, `search_filters` 날짜별 수)을 정하는 IANA 시간대 (예: `Asia/Seoul`). frontmatter `date` 는 적힌 날 그대로, 없으면 커밋·mtime 시각을 이 시간대에서 본 날. 바꾸면 `scripts/memory/run.sh ingest .` 로 이미 색인된 문서의 날을 다시 쓴다 (데몬은 내용이 바뀐 문서만 다시 쓴다) |
+| `MEMORY_TIME_ZONE` | 이 머신의 시간대 | 문서의 날(`date`·`time_range` 날짜 필터, `search_filters` 날짜별 수)을 정하는 IANA 시간대 (예: `Asia/Seoul`). 비우면 `TZ` 나 `/etc/localtime` 링크에서 이 머신의 시간대 이름을 찾는다 — date math(`now-90d/d`)·시각 경계는 OpenSearch 에 이 이름으로 넘겨 DST 를 넘어도 맞는다 (이름을 못 찾으면 그 시각의 오프셋). frontmatter `date` 는 적힌 날 그대로, 없으면 커밋·mtime 시각을 이 시간대에서 본 날. 바꾸면 `scripts/memory/run.sh ingest .` 로 이미 색인된 문서의 날을 다시 쓴다 (데몬은 내용이 바뀐 문서만 다시 쓴다) |
 | `MEMORY_RECONCILE_INTERVAL_SECONDS` | `60` | 데몬 타이머 |
 | `MEMORY_RECONCILE_DEBOUNCE_MS` | `3000` | watcher 힌트 debounce |
 | `MEMORY_MAX_FILE_BYTES` | `2097152` | 이보다 큰 파일은 건너뛴다 (데몬·`ingest_path` 모두) |
@@ -668,7 +674,7 @@ ISM 이 먼저 옮긴 경우다. "갖고 있다" 의 판단:
 | `MEMORY_DISTILL_ENABLED` | `false` | 증류 (본문이 LLM 으로 간다) |
 | `MEMORY_DISTILL_CONCURRENCY` | `2` | 증류 동시 실행 |
 | `MEMORY_CLAUDE_BIN` / `MEMORY_LLM_MODEL` / `MEMORY_LLM_TIMEOUT_MS` | `claude` / `opus` / `120000` | 판정·증류 LLM. 격리 실행(`--setting-sources ""`, 도구 없음, JSON 스키마), 실패하면 폴백 |
-| `MEMORY_GRAPH_URI` | `bolt://localhost:${NEO4J_BOLT_PORT}` | Neo4j. `off` 면 그래프를 끈다 |
+| `MEMORY_GRAPH_URI` | `bolt://localhost:${NEO4J_BOLT_PORT}` | Neo4j — `bolt://`·`bolt+s://`·`bolt+ssc://`·`neo4j://`·`neo4j+s://`·`neo4j+ssc://` 주소, 또는 unix 소켓 `bolt+unix:///소켓경로`. `off` 면 그래프를 끈다. 드라이버가 거부할 주소(`http://`, `host:port`, host 가 붙은 `bolt+unix`, query 가 붙은 `bolt` 계열)는 다른 설정 오류와 함께 시작할 때 거부한다 |
 | `MEMORY_GRAPH_USER` / `MEMORY_GRAPH_PASSWORD` / `MEMORY_GRAPH_DATABASE` | — / — / `neo4j` | 인증을 켠 Neo4j 일 때만 |
 | `COLD_SNAPSHOT_REPOSITORY` / `COLD_SNAPSHOT_TYPE` | `mem-cold` / `fs` | 스냅샷 repository |
 | `COLD_SNAPSHOT_FS_LOCATION` | `/usr/share/opensearch/snapshots` | fs repository 경로 (컨테이너 안 — `path.repo`) |

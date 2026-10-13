@@ -80,7 +80,7 @@ func TestSearchHeaderNamesItsUnit(t *testing.T) {
 	}{
 		{"질의어 검색 — 청크와 문서", false, 3, threeChunksTwoDocs, "team=a · 청크 3건 · 문서 2건 (BM25)"},
 		{"필터 가져오기 — 문서 단위", true, 2, twoDocs, "team=a · 문서 2건 (필터, 최신순)"},
-		{"잘린 가져오기 — 전체 문서 수", true, 5, twoDocs, "team=a · 문서 5건 중 최신 2건 (필터, 최신순 — 더 보려면 size 를 늘리거나 필터를 좁히세요)"},
+		{"잘린 가져오기 — 전체 문서 수", true, 5, twoDocs, "team=a · 문서 5건 중 최신 2건 (필터, 최신순 — 더 보려면 size 를 늘리거나(최대 50) 필터를 좁히세요)"},
 	}
 	for _, c := range cases {
 		if got := searchHeader("team=a", c.listing, c.total, c.hits); got != c.want {
