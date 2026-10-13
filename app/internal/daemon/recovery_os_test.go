@@ -23,12 +23,13 @@ import (
 const recoveryIndex = "mem-t-2026.10"
 
 // routedOS 는 경로별로 답하는 OpenSearch 대신이다: _settings 는 관리 대상 인덱스를, 팀 hot alias 검색(판정 이웃)은 neighbors 를,
-// 나머지 _search 는 docs(문서 대표 청크)를, _snapshot 은 빈 목록을 돌려준다. fail 의 경로 조각이 든 요청은 그 오류로 실패하고,
+// 나머지 _search 는 docs(문서 대표 청크)를, _snapshot 은 snapshots 를 돌려준다. fail 의 경로 조각이 든 요청은 그 오류로 실패하고,
 // ctx 가 끝났으면 실제 클라이언트처럼 ctx 오류다. 받은 요청(경로와 본문)을 모은다.
 type routedOS struct {
 	indices   []string
 	docs      []map[string]any
 	neighbors []map[string]any
+	snapshots []map[string]any
 
 	mu   sync.Mutex
 	fail map[string]error
@@ -103,7 +104,7 @@ func (o *routedOS) response(path string) []byte {
 		}
 		v = settings
 	case strings.HasPrefix(path, "/_snapshot/"):
-		v = map[string]any{"snapshots": []any{}}
+		v = map[string]any{"snapshots": nonNil(o.snapshots)}
 	case strings.HasPrefix(path, "/_cat/"):
 		v = []any{}
 	case strings.HasSuffix(path, "/_delete_by_query"):

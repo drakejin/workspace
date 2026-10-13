@@ -2,14 +2,11 @@
 package ingest
 
 import (
-	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/drakejin/workspace/app/internal/document"
 )
@@ -86,15 +83,15 @@ func CanonicalRel(rel string) string {
 // abs 는 실제 이름의 경로(IO 용), rel 은 그 이름의 NFC 다 (문서의 정체). 디스크에 없는 세그먼트부터는 입력 철자를 그대로 쓴다
 // (읽는 쪽이 실패한다).
 func ResolveOnDisk(root, input string) (abs, rel string, err error) {
-	return resolveOnDisk(root, input, matchEntry)
+	return resolveOnDisk(root, input, document.MatchEntry)
 }
 
 // resolveOnDisk 는 ResolveOnDisk 이되 디렉토리 항목 찾기(match)를 고를 수 있다 — Indexer 는 나열을 다시 쓰는 것을 꽂는다.
-func resolveOnDisk(root, input string, match entryMatcher) (abs, rel string, err error) {
+func resolveOnDisk(root, input string, match document.EntryMatcher) (abs, rel string, err error) {
 	if _, rel, err = ResolveInsideRoot(root, input); err != nil {
 		return "", "", err
 	}
-	onDisk, _ := onDiskSpelling(root, rel, match)
+	onDisk, _ := document.OnDiskSpelling(root, rel, match)
 	return filepath.Join(root, filepath.FromSlash(onDisk)), CanonicalRel(onDisk), nil
 }
 
@@ -105,40 +102,8 @@ func LiveUnderOtherSpelling(root, rel string) bool {
 	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
 		return false
 	}
-	onDisk, found := onDiskSpelling(root, rel, matchEntry)
+	onDisk, found := document.OnDiskSpelling(root, rel, document.MatchEntry)
 	return found && CanonicalRel(onDisk) != rel
-}
-
-// entryMatcher 는 dir 안에서 name 과 같은 항목의 실제 이름을 찾는다 (matchEntry 또는 listingCache.match).
-type entryMatcher func(dir, name string) (string, bool)
-
-// onDiskSpelling 은 rel(posix)의 세그먼트를 디스크의 실제 이름으로 바꾼다. 모든 세그먼트를 찾았으면 found.
-func onDiskSpelling(root, rel string, match entryMatcher) (string, bool) {
-	if rel == "" || rel == "." {
-		return rel, true
-	}
-	segs := strings.Split(rel, "/")
-	names := make([]string, 0, len(segs))
-	dir := root
-	for i, seg := range segs {
-		name, ok := match(dir, seg)
-		if !ok {
-			return path.Join(path.Join(names...), path.Join(segs[i:]...)), false
-		}
-		names = append(names, name)
-		dir = filepath.Join(dir, name)
-	}
-	return path.Join(names...), true
-}
-
-// matchEntry 는 dir 안에서 name 과 같은 항목의 실제 이름이다: 그 철자 그대로 있으면 그것, 없으면 대소문자·유니코드 정규화만
-// 다른 것(여럿이면 이름순 첫째). 디렉토리를 나열할 수 없으면(실행 권한만 있는 디렉토리 등) 입력 철자를 그대로 믿는다.
-func matchEntry(dir, name string) (string, bool) {
-	l, err := readListing(dir, time.Time{})
-	if err != nil {
-		return name, !errors.Is(err, fs.ErrNotExist)
-	}
-	return l.match(name)
 }
 
 // RealInsideRoot 는 abs 가 심볼릭 링크를 다 풀어도 root 안인지 본다. 링크로 meta-repo 밖의 파일을 읽어

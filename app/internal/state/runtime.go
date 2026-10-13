@@ -23,7 +23,8 @@ type CycleSummary struct {
 	StatUpdated    int   `json:"statUpdated"`
 	Removed        int   `json:"removed"`
 	Skipped        int   `json:"skipped"`
-	ColdOwned      int   `json:"coldOwned"`
+	ColdOwned      int   `json:"coldOwned"` // cold 로 간 hot 원본 — 다음 tier 가 정리한다
+	ColdKept       int   `json:"coldKept"`  // cold 로 간 hot 원본 중 git 이 되살릴 수 없어(커밋 전·커밋 뒤 고침) tier 가 남기는 것 — 커밋하면 정리한다
 	Failed         int   `json:"failed"`
 	FlagsConverged int   `json:"flagsConverged"`
 	Refused        bool  `json:"refused"`

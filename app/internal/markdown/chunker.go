@@ -19,9 +19,10 @@ const HeaderSeparator = " > "
 const DefaultMaxChars = 4000
 
 var (
-	headerLine = regexp.MustCompile(`^(#{1,6})\s+(.+?)\s*#*\s*$`)
-	// sentenceEnd 는 문장 끝(마침표·물음표·느낌표 뒤 공백)이다. 긴 줄 하나를 나눌 때 쓴다
-	sentenceEnd = regexp.MustCompile(`[.!?。！？]\s+`)
+	// headerLine 은 ATX 제목 줄이다. 닫는 # 은 앞에 스페이스·탭이 있을 때만 뺀다 (CommonMark) — "C#"·"F#" 의 # 은 제목의 일부다
+	headerLine = regexp.MustCompile(`^(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$`)
+	// sentenceEnd 는 문장 끝(마침표·물음표·느낌표 뒤 공백)이다. 긴 줄 하나를 나눌 때 쓴다 — 1번 묶음이 문장 사이의 공백이다
+	sentenceEnd = regexp.MustCompile(`[.!?。！？](\s+)`)
 )
 
 type heading struct {
@@ -106,7 +107,7 @@ type splitLevel struct {
 var splitLevels = []splitLevel{
 	{paragraphBlocks, "\n\n"},
 	{splitLines, "\n"},
-	{sentences, " "},
+	{sentences, ""},
 }
 
 // splitLong 은 긴 섹션을 상한(maxChars) 안의 조각으로 나눈다. 문단을 상한까지 이어 붙이고, 문단 하나가 상한을 넘으면
@@ -175,16 +176,17 @@ func paragraphBlocks(text string) []string {
 
 func splitLines(text string) []string { return strings.Split(text, "\n") }
 
-// sentences 는 줄 하나를 문장으로 나눈다 (문장 사이 공백은 하나로 다시 잇는다).
+// sentences 는 줄 하나를 문장 경계에서 자른다. 조각은 원문 그대로다 — 문장 사이의 공백(스페이스·탭 묶음)은 뒤 문장의 앞에 붙어
+// 남아, 조각을 구분자 없이 이으면 원래 줄이다 (다듬어 공백 하나로 다시 이으면 공백 묶음이 사라진다).
 func sentences(text string) []string {
 	var out []string
 	start := 0
-	for _, loc := range sentenceEnd.FindAllStringIndex(text, -1) {
-		out = append(out, strings.TrimSpace(text[start:loc[1]]))
-		start = loc[1]
+	for _, loc := range sentenceEnd.FindAllStringSubmatchIndex(text, -1) {
+		out = append(out, text[start:loc[2]])
+		start = loc[2]
 	}
-	if rest := strings.TrimSpace(text[start:]); rest != "" {
-		out = append(out, rest)
+	if start < len(text) {
+		out = append(out, text[start:])
 	}
 	return out
 }

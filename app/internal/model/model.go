@@ -40,8 +40,9 @@ const (
 // IndexVersion 은 청크에 담는 필드 구성의 판이다. 필드를 더하면 올린다 — 데몬은 판이 낮은 문서를 내용이 같아도 다시 써서
 // 새 필드(예: topic)를 채운다. 1: 처음, 2: topic, 3: topic·repo 를 질의어로도 검색 (text 하위 필드),
 // 4: event_day (날짜 필터가 UTC 가 아니라 문서의 날로 맞게), 5: topic·repo·supersedes 를 NFC 로 (Finder 의 NFD 이름이 사람이 친
-// NFC 값과 맞게 — 다시 쓰면서 옛 철자 문서가 덮어쓴 cold store 청크도 정본 철자로 다시 쓴다).
-const IndexVersion = 5
+// NFC 값과 맞게 — 다시 쓰면서 옛 철자 문서가 덮어쓴 cold store 청크도 정본 철자로 다시 쓴다), 6: 본문이 없는 문서의 청크 0 에
+// text 필드를 두지 않는다 (5 까지는 "text": "" 로 써, exists 가 빈 문자열도 있다고 보아 목록·검색에 빈 결과로 나왔다).
+const IndexVersion = 6
 
 // Chunk 는 OpenSearch 에 들어가는 청크 한 건이다. ID 는 _id 라 본문(_source)에 넣지 않는다.
 type Chunk struct {

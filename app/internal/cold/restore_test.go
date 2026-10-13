@@ -2,6 +2,7 @@ package cold
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -127,6 +128,28 @@ func TestRestoreMarksDeprecationsBeforeSearch(t *testing.T) {
 	searchable := callIndex(fake, http.MethodPost, "/_aliases")
 	if marked < 0 || searchable < 0 || marked > searchable {
 		t.Errorf("표시(%d)가 alias(%d)보다 먼저여야 한다 — 요청 = %+v", marked, searchable, fake.calls)
+	}
+}
+
+// R4-daemon-a-2: 예전 판이 뜬 스냅샷에는 본문이 없는 문서의 청크 0 이 "text": "" 로 들어 있다 — exists 는 빈 문자열도 있다고
+// 보아 복원한 달의 목록·검색에 빈 결과로 나온다. 복원은 검색 alias 를 붙이기 전에 그 빈 text 를 지운다 (지금 판은 필드째 쓰지 않는다).
+func TestRestoreDropsEmptyTextBeforeSearch(t *testing.T) {
+	fake, err := runRestore(t, &restoreCluster{})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	dropped, searchable := -1, callIndex(fake, http.MethodPost, "/_aliases")
+	for i, c := range fake.calls {
+		if c.Method != http.MethodPost || c.Path != "/"+restoreMonth+"/_update_by_query" {
+			continue
+		}
+		if b, _ := json.Marshal(c.Body); strings.Contains(string(b), `remove('text')`) {
+			dropped = i
+		}
+	}
+	if dropped < 0 || searchable < 0 || dropped > searchable {
+		t.Errorf("빈 text 지우기(%d)가 alias(%d)보다 먼저여야 한다 — 요청 = %+v", dropped, searchable, fake.calls)
 	}
 }
 

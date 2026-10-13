@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/drakejin/workspace/app/internal/cold"
 	"github.com/drakejin/workspace/app/internal/config"
 	"github.com/drakejin/workspace/app/internal/ingest"
 	"github.com/drakejin/workspace/app/internal/model"
@@ -55,7 +56,7 @@ func (o *cycleOS) Do(_ context.Context, _, path string, body any, _ url.Values, 
 	case strings.HasPrefix(path, "/_snapshot/"):
 		return decodeInto(map[string]any{"snapshots": []any{}}, out)
 	case strings.HasSuffix(path, "/_update_by_query"):
-		return o.update(body)
+		return o.update(path, body)
 	case strings.HasSuffix(path, "/_search"):
 		return o.search(path, body, out)
 	}
@@ -83,7 +84,12 @@ func (o *cycleOS) search(path string, body any, out any) error {
 	return decodeInto(map[string]any{"hits": map[string]any{"hits": hits}}, out)
 }
 
-func (o *cycleOS) update(body any) error {
+func (o *cycleOS) update(path string, body any) error {
+	for _, index := range strings.Split(strings.TrimSuffix(strings.TrimPrefix(path, "/"), "/_update_by_query"), ",") {
+		if o.broken[index] {
+			return fmt.Errorf("OpenSearch POST %s 실패 (503): all shards failed", path)
+		}
+	}
 	b, err := json.Marshal(body)
 	if err != nil {
 		return err
@@ -137,7 +143,7 @@ func newCycleReconciler(t *testing.T, fos *cycleOS) *Reconciler {
 	t.Helper()
 	root := t.TempDir()
 	cfg := config.Config{MetaRepoRoot: root, Workspace: "ws", DefaultTeam: "t", Reconcile: config.Reconcile{MaxFileBytes: 1 << 20}}
-	return &Reconciler{OS: fos, Config: cfg, Judge: state.NewJudgeState(root), Log: t.Logf, coldOwned: map[string]statKey{}}
+	return &Reconciler{OS: fos, Config: cfg, Judge: state.NewJudgeState(root), Log: t.Logf, coldOwned: map[string]coldOwnedFile{}}
 }
 
 // IDX-9: 수렴은 문서 하나가 실패해도 나머지 문서를 마저 맞추고, 실패는 모아 돌려준다 — 예전에는 첫 실패에서 멈춰 그 뒤 문서는
@@ -194,6 +200,52 @@ func TestLoadStateReadsOnlyThisWorkspacesIndices(t *testing.T) {
 	}
 	if strings.Join(st.indices, ",") != "mem-t-2026.10" {
 		t.Errorf("indices = %v", st.indices)
+	}
+}
+
+// otherWorkspaceDown 은 이 workspace(팀 t)의 인덱스에는 문서 a.md(본문 sha bodySHA)가 있고, 같은 클러스터를 쓰는 다른 workspace 의
+// 인덱스(복원한 것 포함)가 열리지 않는(샤드 503) 클러스터다.
+func otherWorkspaceDown(bodySHA string) *cycleOS {
+	return &cycleOS{
+		settings: map[string]map[string]any{
+			"mem-t-2026.10": {}, "mem-other-2026.10": {}, "mem-other-2026.06": restoredSettings,
+		},
+		teams: []string{"t"},
+		heads: map[string][]map[string]any{
+			"mem-t-2026.10": {headOf(docA, map[string]any{"body_sha": bodySHA})},
+		},
+		broken: map[string]bool{"mem-other-2026.10": true, "mem-other-2026.06": true},
+	}
+}
+
+// R4-daemon-a-3: 그래프·증류 백필·증류 반영도 사이클처럼 이 workspace 팀의 인덱스만 본다 — 다른 workspace 의 인덱스가 잠깐 열리지
+// 않아도(샤드 503) 이 workspace 의 그래프가 멈추거나, 요약이 색인에 반영되지 않으면 안 된다 (R2-handoff-4 와 같은 범위).
+func TestGraphAndDistillReadOnlyThisWorkspacesIndices(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	entry := writeDoc(t, root, docA, contentA)
+	fos := otherWorkspaceDown(entry.BodySHA)
+	g := &replaceCounter{}
+	d, err := New(ctx, Deps{Config: recoveryConfig(root), OS: fos, Ask: &stubAsker{}, Cold: cold.NewLocalStore(t.TempDir()), Graph: g, Log: t.Logf})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := d.syncGraph(ctx, true); strings.HasPrefix(got, "failed") || g.count() != 1 {
+		t.Errorf("그래프 = %q (replace=%d)", got, g.count())
+	}
+	if jobs, err := d.missingDistill(ctx); err != nil || len(jobs) != 1 {
+		t.Errorf("증류 백필 = %+v %v", jobs, err)
+	}
+	if err := d.cache.Put("t", state.DistillRecord{BodySHA: entry.BodySHA, SourcePath: docA, Summary: "결제 요약"}); err != nil {
+		t.Fatal(err)
+	}
+	job := DistillJob{Team: "t", SourcePath: docA, BodySHA: entry.BodySHA, Title: entry.Title, Body: entry.Body}
+	if err := d.distill.process(job); err != nil {
+		t.Errorf("증류 반영 = %v", err)
+	}
+	if got := strings.Join(fos.updated, ","); got != docA {
+		t.Errorf("반영한 문서 = %q", got)
 	}
 }
 

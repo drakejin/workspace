@@ -295,11 +295,14 @@ func Restore(ctx context.Context, c opensearch.Client, cfg config.Config, name s
 	return Index{}, fmt.Errorf("cold 에 %s 가 없습니다. list_cold 로 먼저 확인하세요", name)
 }
 
-// restoreSearchable 은 target 의 스냅샷 전부를 합치고 deprecate 표시를 다시 입힌 뒤에 검색 alias 를 붙인다 — 그 전까지
-// 새로 연 복원본은 검색에 나오지 않아, 합치다 멈춰도 표시가 빠진 문서가 기본 검색에 나오지 않는다.
+// restoreSearchable 은 target 의 스냅샷 전부를 합치고 예전 판의 빈 text 를 지우고 deprecate 표시를 다시 입힌 뒤에 검색 alias 를
+// 붙인다 — 그 전까지 새로 연 복원본은 검색에 나오지 않아, 합치다 멈춰도 표시가 빠진 문서가 기본 검색에 나오지 않는다.
 func restoreSearchable(ctx context.Context, c opensearch.Client, cfg config.Config, target Index, team string) error {
 	if err := RestoreAll(ctx, c, cfg, target.Name, target.Snapshots); err != nil {
 		return partialRestore(ctx, c, cfg, team, target.Name, err)
+	}
+	if err := dropEmptyText(ctx, c, target.Name); err != nil {
+		return fmt.Errorf("%s: 스냅샷은 다 합쳤지만 본문이 없는 문서의 빈 text 를 지우지 못해 검색에 붙이지 않았습니다 — restore 를 다시 하세요: %w", target.Name, err)
 	}
 	if err := applyDeprecations(ctx, c, cfg, team, target.Name); err != nil {
 		return fmt.Errorf("%s: 스냅샷은 다 합쳤지만 deprecate 표시를 다시 입히지 못해 검색에 붙이지 않았습니다 — restore 를 다시 하세요: %w", target.Name, err)
@@ -334,6 +337,26 @@ func attachAliases(ctx context.Context, c opensearch.Client, index, team, org st
 	}
 	if err := c.Do(ctx, http.MethodPost, "/_aliases", map[string]any{"actions": actions}, nil, nil); err != nil {
 		return fmt.Errorf("aliases %s: %w", index, err)
+	}
+	return nil
+}
+
+// dropEmptyTextScript 는 빈 text 를 필드째 지우는 스크립트다. 다른 문서는 건드리지 않는다(noop).
+const dropEmptyTextScript = "if (ctx._source.text instanceof String && ctx._source.text.isEmpty()) { ctx._source.remove('text') } else { ctx.op = 'noop' }"
+
+// dropEmptyText 는 복원본에서 본문이 없는 문서의 청크 0 에 남은 "text": "" 를 지운다. 예전 판은 빈 text 를 빈 문자열로 썼고
+// exists 는 빈 문자열도 있다고 보아, 그대로 검색에 붙이면 그 문서가 목록·검색에 빈 결과로 나온다 (지금 판은 필드째 쓰지 않는다).
+func dropEmptyText(ctx context.Context, c opensearch.Client, index string) error {
+	body := map[string]any{
+		"query": map[string]any{"bool": map[string]any{"filter": []any{
+			map[string]any{"term": map[string]any{"chunk_index": 0}},
+			map[string]any{"exists": map[string]any{"field": "text"}},
+		}}},
+		"script": map[string]any{"lang": "painless", "source": dropEmptyTextScript},
+	}
+	q := url.Values{"refresh": {"true"}, "conflicts": {"proceed"}}
+	if err := c.Do(ctx, http.MethodPost, "/"+index+"/_update_by_query", body, q, nil); err != nil {
+		return fmt.Errorf("empty text %s: %w", index, err)
 	}
 	return nil
 }

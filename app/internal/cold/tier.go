@@ -393,10 +393,16 @@ const hotOriginalPrefix = "docs/"
 
 // hotOriginalExists 는 rel 이 tier 가 빼는 원본이고 working tree 에 아직 있는가다.
 func hotOriginalExists(root, rel string) bool {
-	if !strings.HasPrefix(rel, hotOriginalPrefix) {
-		return false
+	return strings.HasPrefix(rel, hotOriginalPrefix) && onDiskExists(root, rel)
+}
+
+// onDiskExists 는 문서 rel(source_path, NFC)의 파일이 working tree 에 있는가다. source_path 로 열리지 않으면 디스크의 철자로
+// 다시 본다 — 정규화를 구분하는 파일 시스템(Linux)에서는 NFD 이름(Finder 가 만든 한글 이름)의 파일이 NFC 경로로 열리지 않는다.
+func onDiskExists(root, rel string) bool {
+	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err == nil {
+		return true
 	}
-	_, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel)))
+	_, err := os.Stat(filepath.Join(root, filepath.FromSlash(document.OnDiskRel(root, rel))))
 	return err == nil
 }
 
@@ -404,7 +410,7 @@ func hotOriginalExists(root, rel string) bool {
 // 그리고 지금 내용이 색인·cold store 에 있던 내용과 같을 때만 지운다 (그 사이 고친 문서는 남긴다).
 // git 레포면 git 이 되살릴 수 있는 원본(추적하고 HEAD 와 같다)만 git rm 으로 지워 다음 커밋에 들어가게 하고, 추적하지 않거나
 // 커밋 뒤 고친 원본은 남겨 kept 로 알린다 — 지우면 그 내용은 .gitignore 된 cold store 에만 남는다. git 레포가 아니면
-// 되살릴 히스토리가 처음부터 없으므로 cold store raw 확인만으로 지운다.
+// 되살릴 히스토리가 처음부터 없으므로 cold store raw 확인만으로 지운다. 파일은 디스크의 철자로 열고 git 에 넘긴다 (NFD 이름).
 func removeHotOriginals(ctx context.Context, store Store, root string, docs []sourceDoc) (removed, kept []string, err error) {
 	if len(docs) == 0 {
 		return nil, nil, nil
@@ -414,18 +420,19 @@ func removeHotOriginals(ctx context.Context, store Store, root string, docs []so
 		return nil, nil, err
 	}
 	for _, d := range docs {
-		ok, err := verifiedCopy(ctx, store, root, d)
+		disk := document.OnDiskRel(root, d.sourcePath)
+		ok, err := verifiedCopy(ctx, store, root, d, disk)
 		if err != nil {
 			return removed, kept, err
 		}
 		if !ok {
 			continue
 		}
-		if inGit && !committedAsIs(ctx, root, d.sourcePath) {
+		if keptForGit(ctx, root, disk, inGit) {
 			kept = append(kept, d.sourcePath)
 			continue
 		}
-		if err := removeOriginal(ctx, root, d.sourcePath, inGit); err != nil {
+		if err := removeOriginal(ctx, root, disk, inGit); err != nil {
 			return removed, kept, err
 		}
 		removed = append(removed, d.sourcePath)
@@ -433,12 +440,30 @@ func removeHotOriginals(ctx context.Context, store Store, root string, docs []so
 	return removed, kept, nil
 }
 
-// verifiedCopy 는 d 가 tier 가 빼는 원본이고, 지금 파일 내용과 cold store raw 가 모두 색인에 있던 내용(sha)과 같은가다.
-func verifiedCopy(ctx context.Context, store Store, root string, d sourceDoc) (bool, error) {
+// keptForGit 는 tier 가 cold 로 간 원본(디스크의 철자 disk)을 git 때문에 hot 에 남기는가다 — git 으로 다루는 meta-repo 인데
+// git 이 그 원본을 되살릴 수 없다 (추적하지 않거나 HEAD 와 다르다).
+func keptForGit(ctx context.Context, root, disk string, inGit bool) bool {
+	return inGit && !committedAsIs(ctx, root, disk)
+}
+
+// KeptByGit 는 tier 가 cold 로 간 hot 원본 rel(source_path)을 지우지 않고 hot 에 남기는가다 (removeHotOriginals 와 같은 규칙):
+// 커밋하지 않았거나 커밋 뒤 고친 원본이다 — 커밋하면 다음 tier 가 뺀다. 데몬은 이런 원본을 tier 가 정리할 cold 소유와 따로 센다.
+// git 으로 확인하지 못하면 tier 도 지우지 않으므로 남긴다고 보고 오류를 함께 돌려준다.
+func KeptByGit(ctx context.Context, root, rel string) (bool, error) {
+	inGit, err := gitWorkTree(ctx, root)
+	if err != nil {
+		return true, err
+	}
+	return keptForGit(ctx, root, document.OnDiskRel(root, rel), inGit), nil
+}
+
+// verifiedCopy 는 d 가 tier 가 빼는 원본이고, 지금 파일(디스크의 철자 disk) 내용과 cold store raw 가 모두 색인에 있던 내용(sha)과
+// 같은가다.
+func verifiedCopy(ctx context.Context, store Store, root string, d sourceDoc, disk string) (bool, error) {
 	if !strings.HasPrefix(d.sourcePath, hotOriginalPrefix) {
 		return false, nil
 	}
-	content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(d.sourcePath)))
+	content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(disk)))
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}
@@ -484,7 +509,7 @@ func gitCheckError(root string, err error, out string) error {
 	return fmt.Errorf("git 으로 %s 를 확인하지 못해 hot 원본을 지우지 않았습니다: %w %s", root, err, strings.TrimSpace(out))
 }
 
-// committedAsIs 는 rel 을 git 이 추적하고 지금 내용이 HEAD 와 같은가다 (지워도 git 히스토리에서 되살릴 수 있다).
+// committedAsIs 는 rel(디스크의 철자)을 git 이 추적하고 지금 내용이 HEAD 와 같은가다 (지워도 git 히스토리에서 되살릴 수 있다).
 // 확인하지 못하면 아니라고 본다 — 남기는 쪽이 안전하다.
 func committedAsIs(ctx context.Context, root, rel string) bool {
 	if _, err := gitOutput(ctx, root, "ls-files", "--error-unmatch", "--", rel); err != nil {
@@ -494,7 +519,7 @@ func committedAsIs(ctx context.Context, root, rel string) bool {
 	return err == nil
 }
 
-// removeOriginal 은 원본 하나를 지운다. git 레포면 git rm 으로 지워 다음 커밋에 들어가게 한다.
+// removeOriginal 은 원본 하나(디스크의 철자 rel)를 지운다. git 레포면 git rm 으로 지워 다음 커밋에 들어가게 한다.
 func removeOriginal(ctx context.Context, root, rel string, inGit bool) error {
 	if inGit {
 		if out, err := gitOutput(ctx, root, "rm", "-q", "-f", "--", rel); err != nil {

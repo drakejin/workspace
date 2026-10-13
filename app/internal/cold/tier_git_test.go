@@ -80,6 +80,42 @@ func TestRemoveHotOriginalsKeepsFilesGitCannotRestore(t *testing.T) {
 	}
 }
 
+// R4-daemon-b-6: tier 는 hot 원본을 디스크의 철자로 열고 git 에 넘긴다 — source_path(NFC)와 디스크 이름이 다른 원본(Finder 가
+// 만든 NFD 한글 이름, 대소문자만 다른 이름)도 확인하고 지운다. 정규화·대소문자를 구분하는 파일 시스템(Linux)에서는 source_path
+// 로 열면 파일이 없고, git 은 다른 철자의 경로를 모른다 — 예전에는 그런 원본을 건너뛰거나 커밋하지 않은 것으로 보고 남겼다.
+func TestRemoveHotOriginalsUsesTheOnDiskSpelling(t *testing.T) {
+	const body = "# 원본\n"
+	cases := map[string]struct{ disk, sourcePath string }{
+		"NFD 한글 이름": {"docs/specs/각/a.md", "docs/specs/각/a.md"},
+		"대소문자":      {"docs/specs/Upper.md", "docs/specs/upper.md"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			root := t.TempDir()
+			store := NewLocalStore(t.TempDir())
+			gitIn(t, root, "init", "-q")
+			writeHot(t, root, c.disk, body)
+			gitIn(t, root, "add", "-A")
+			gitIn(t, root, "commit", "-q", "-m", "fixture")
+			mustDo(t, store.Put(ctx, RawKey("t", c.sourcePath), body))
+			doc := sourceDoc{team: "t", sourcePath: c.sourcePath, contentSHA: document.SHA256(body)}
+
+			if !hotOriginalExists(root, c.sourcePath) {
+				t.Errorf("디스크의 철자로 원본을 찾아야 한다")
+			}
+			removed, kept, err := removeHotOriginals(ctx, store, root, []sourceDoc{doc})
+
+			if err != nil || strings.Join(removed, ",") != c.sourcePath || len(kept) != 0 {
+				t.Errorf("removed=%v kept=%v err=%v (커밋된 그대로인 원본은 지운다)", removed, kept, err)
+			}
+			if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(c.disk))); !os.IsNotExist(err) {
+				t.Errorf("디스크의 원본이 남았다: %v", err)
+			}
+		})
+	}
+}
+
 // git 레포가 아닌 루트(테스트·임시 meta-repo)는 예전처럼 cold store raw 확인만으로 지운다 — 되살릴 git 히스토리가 처음부터 없다.
 func TestRemoveHotOriginalsOutsideGitRemovesVerifiedCopies(t *testing.T) {
 	ctx := context.Background()

@@ -1,6 +1,10 @@
 package ingest
 
-import "os"
+import (
+	"os"
+
+	"github.com/drakejin/workspace/app/internal/document"
+)
 
 // ExistsAsSpelled 는 rel(meta-repo 기준 posix 경로)의 파일이 디스크에 그 철자 그대로 있는가다 — 색인 범위 밖이어도 된다.
 // 링크가 살아 있는지 볼 때 쓴다. APFS 는 대소문자를 구분하지 않아 os.Stat 만으로는 철자가 틀린 링크도 있다고 나오는데,
@@ -13,6 +17,6 @@ func ExistsAsSpelled(root, rel string) bool {
 	if _, err := os.Stat(abs); err != nil {
 		return false
 	}
-	onDisk, found := onDiskSpelling(root, inside, matchEntry)
+	onDisk, found := document.OnDiskSpelling(root, inside, document.MatchEntry)
 	return found && CanonicalRel(onDisk) == CanonicalRel(inside)
 }

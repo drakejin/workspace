@@ -55,7 +55,7 @@ func markLines(body string) []markedLine {
 	return out
 }
 
-// FirstH1 은 코드 펜스 밖의 첫 `# ` 제목이다 (청커와 같은 펜스·헤더 규칙 — 닫는 # 은 뺀다). 없으면 "", false.
+// FirstH1 은 코드 펜스 밖의 첫 `# ` 제목이다 (청커와 같은 펜스·헤더 규칙 — 앞에 공백이 있는 닫는 # 만 뺀다). 없으면 "", false.
 func FirstH1(body string) (string, bool) {
 	for _, l := range markLines(body) {
 		if l.code {

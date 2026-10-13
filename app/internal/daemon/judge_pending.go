@@ -59,8 +59,8 @@ func (j *Judge) persist(entries []DiffEntry) error {
 // 그대로인 문서만 되살린다 — 그 사이 고쳤거나 지운 문서는 버린다 (고친 본문은 사이클이 새 변경분으로 넘긴다).
 func (j *Judge) Restore() error {
 	root := j.Config.MetaRepoRoot
-	if root == "" {
-		return nil
+	if root == "" || !j.Config.Judge.Enabled {
+		return nil // 판정이 꺼져 있으면 Run 이 판정하지 않는다 — 대기 목록은 디스크에 두고, 판정을 다시 켠 boot 가 되살린다
 	}
 	pending, err := state.ReadJudgePending(root)
 	if err != nil {
