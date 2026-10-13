@@ -134,3 +134,22 @@ func TestSearchFiltersUseTheDocumentsLocalDay(t *testing.T) {
 		t.Errorf("날짜별 수도 문서의 날로 센다:\n%s", text)
 	}
 }
+
+// TestQuerySearchHeaderCountsChunks 는 질의어 검색(BM25)의 머리가 청크 수와 문서 수를 함께 밝히는지 본다 — 한 문서의
+// 두 절이 맞으면 "청크 2건 · 문서 1건" 이다. 필터 가져오기의 머리는 문서 수("문서 N건")다 (DOC-16 · API-7).
+func TestQuerySearchHeaderCountsChunks(t *testing.T) {
+	m := newMCP(t, newConfig(t, nil))
+	ctx := context.Background()
+	write(t, m.cfg.MetaRepoRoot, "docs/specs/chunky/plan.md", "---\ndate: "+daysAgo(1)+"\n---\n# 청크 둘\n\n## 하나\n\nChunkyHeaderToken 첫째\n\n## 둘\n\nChunkyHeaderToken 둘째\n")
+	if _, err := m.indexer.IngestPath(ctx, "docs", ""); err != nil {
+		t.Fatal(err)
+	}
+	text, isErr := m.call(t, "search_memory", map[string]any{"query": "ChunkyHeaderToken"})
+	if isErr || !strings.Contains(text, "· 청크 2건 · 문서 1건 (BM25)") || strings.Count(text, "docs/specs/chunky/plan.md ›") != 2 {
+		t.Errorf("질의어 검색 머리는 청크 수와 문서 수다:\n%s", text)
+	}
+	text, isErr = m.call(t, "search_memory", map[string]any{"topic": "chunky"})
+	if isErr || !strings.Contains(text, "· 문서 1건 (필터, 최신순)") {
+		t.Errorf("필터 가져오기 머리는 문서 수다:\n%s", text)
+	}
+}

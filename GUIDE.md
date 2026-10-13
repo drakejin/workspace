@@ -54,7 +54,8 @@ Claude Code 가 파일 트리를 뒤지는 대신 `search_memory` 로 묻게 하
 | episodic (시간이 지나면 낡는 기록) | `docs/` 의 spec·adr·prd·plan·note, `docs/issues/` | 유효 시각(`date`) 달의 인덱스 | 비슷한 문서끼리 자동 판정 | 60일 뒤 cold |
 | knowledge (누가 바꾸기 전까지 유효한 사실) | `docs/knowledge/`, `doc_type: knowledge·guide`, 루트 `README`·`INDEX`·`CLAUDE`·`GUIDE`, `main/{repo}/docs/` | `mem-{team}-knowledge` | 개정판의 `supersedes:` 선언만 | 없음. 밀리면 자기 달 인덱스로 옮겨 가 그때부터 노화 |
 
-색인 범위 밖: `main/{repo}` 의 코드 트리, `.worktrees/`, `node_modules`·`.git`·`.cache`·`dist`·`build`·`vendor` 등, `.md` 가 아닌 파일, `MEMORY_MAX_FILE_BYTES` 초과, 바이너리.
+색인 범위 밖: 루트의 다른 디렉토리(`scenarios/`·`examples/`·`.claude/`·`app/`·`scripts/`), `main/{repo}` 의 코드 트리, `.worktrees/`, `node_modules`·`.git`·`.cache`·`dist`·`build`·`vendor` 등, `.md` 가 아닌 파일, `MEMORY_MAX_FILE_BYTES` 초과, 바이너리.
+범위 밖이어도 디스크에 있는 파일을 가리키는 링크는 산 링크다 — 감사는 `broken-link` 로 보지 않고, 그래프는 그 노드를 `out-of-scope` 로 둔다.
 크기·바이너리 게이트는 데몬과 `ingest_path` 가 같은 규칙 하나를 쓴다 — `ingest_path` 도 이런 파일은 색인하지 않고 `N개 건너뜀` 으로 알린다.
 빈 파일·frontmatter 만 있는 `.md` 도 빈 청크 하나로 색인한다 — 한 번 쓰면 다음 사이클은 건너뛴다. 본문이 없으니 판정·증류 대상은 아니다.
 
@@ -84,7 +85,7 @@ NFC 로 친 경로를 줘도 디스크의 철자 하나로 적재하고, 주제(
 [memory-init] neo4j: waiting http://localhost:7476
 [memory-init] neo4j: ready
 [reconcile] scanned=11 indexed=11 stat_updated=0 removed=0 skipped=0 failed=0 cold_owned=0 flags=0 trigger=boot took=365ms
-[graph] docs=12 entities=0 edges=12
+[graph] docs=14 entities=0 edges=29
 [memory-init] reconcile: done
 
 [memory-init] 다음: 'make memory-daemon-start' 로 데몬을 상주시키고, 'scripts/memory-daemon/run.sh status' 로 확인하세요
@@ -118,7 +119,7 @@ launchd 가 없는 머신은 nohup 백그라운드라(`[memory-daemon] backgroun
 ```
 [daemon] LLM 백엔드: 로컬 claude CLI (2.1.283 (Claude Code))
 [reconcile] scanned=11 indexed=0 stat_updated=0 removed=0 skipped=0 failed=0 cold_owned=0 flags=0 trigger=boot took=11ms
-[graph] docs=12 entities=0 edges=12
+[graph] docs=14 entities=0 edges=29
 [daemon] watching /Users/jin/Workspace/drakejin/workspace (루트 문서, docs/, main/*/docs/), interval=1m0s, debounce=3s, judge=on, distill=off, graph=on
 ```
 
@@ -147,13 +148,13 @@ launchd 가 없는 머신은 nohup 백그라운드라(`[memory-daemon] backgroun
 [status] container opensearch: running
 [status] container neo4j: running
 [status] opensearch: yellow (http://localhost:9202)
-[status] index: workspace=workspace 11 docs, 96 chunks (memory indices 6)
+[status] index: workspace=workspace 11 docs, 97 chunks (memory indices 6)
 [status] last indexed: 2026-10-13T00:32:11.795Z
-[status] graph: 12 docs, 0 entities, 12 edges (bolt://localhost:7689)
+[status] graph: 14 docs, 0 entities, 29 edges (bolt://localhost:7689)
 [status] daemon: running pid=39975 since 2026-10-13T00:32:29.33219Z, cycles=1
 [status] heartbeat: 1s ago (interval 60s)
 [status] last cycle: 2026-10-13T00:32:29.422157Z trigger=boot scanned=11 indexed=0 stat_updated=0 removed=0 skipped=0 failed=0 cold_owned=0 took=11ms
-[status] last graph: docs=12 entities=0 edges=12
+[status] last graph: docs=14 entities=0 edges=29
 [status] judge: on, 답을 기다리는 질문 0건
 [status] distill: off, cache 0건, 대기 0건
 ```
@@ -204,7 +205,7 @@ launchd 가 없는 머신은 nohup 백그라운드라(`[memory-daemon] backgroun
 
 ## 4. 샘플로 따라 하기
 
-`examples/sample-workspace/` 는 가상의 서비스(order-api, catalog-api)로 만든 작은 meta-repo 다. `tier` 가 cold 로 보낸 원본을 지우므로 **복사해서** 쓴다.
+[`examples/sample-workspace/`](./examples/sample-workspace/README.md) 는 가상의 서비스(order-api, catalog-api)로 만든 작은 meta-repo 다. `tier` 가 cold 로 보낸 원본을 지우므로 **복사해서** 쓴다.
 
 ```bash
 cp -R ~/Workspace/drakejin/workspace/examples/sample-workspace ~/memory-demo
@@ -276,7 +277,7 @@ scripts/memory/run.sh search IdempotencyKeyHeader
 ```
 
 ```
-team=demo · 2건 (BM25)
+team=demo · 청크 2건 · 문서 2건 (BM25)
 
 [1] docs/repository/order-api/adr/0001-idempotency-key.md › ADR-0001 결제 요청 멱등 키 > 결정  (adr, project=order-api, 2026-10-08; score 7.73)
 요약: order-api의 결제 요청에 멱등성 키를 도입하여 이중 결제 문제를 방지하는 아키텍처 결정을 기술합니다.
@@ -286,7 +287,8 @@ order-api 가 결제 대행사로 보내는 모든 결제 요청에 `Idempotency
 …
 ```
 
-함수명·필드명이 그대로 맞는다 — 식별자 분할 analyzer 가 `ClickDeduplicator.window` 를 원형과 `click`·`deduplicator`·`window` 로 함께 색인한다.
+머리의 `청크 N건 · 문서 M건` 은 맞은 청크 수와 그 청크들이 나온 문서 수다 — 질의어 검색은 청크(제목 단위로 자른 조각) 단위라 한 문서의 여러 절이
+따로 나와 결과 수(`size`)를 나눠 쓸 수 있다 (여기서는 ADR 과 샘플 README 가 한 청크씩. 필터로 가져오기의 `문서 N건` 은 문서 수). 함수명·필드명이 그대로 맞는다 — 식별자 분할 analyzer 가 `ClickDeduplicator.window` 를 원형과 `click`·`deduplicator`·`window` 로 함께 색인한다.
 `요약:` 줄은 증류가 붙인 것이다. 밀린 구판까지 보려면 `-superseded` (플래그는 질의어 앞에):
 
 ```bash
@@ -486,8 +488,9 @@ questions:
 ```yaml
 ---
 team: default                # 생략하면 MEMORY_DEFAULT_TEAM
-repo: books-guitar           # 여러 repo 에 걸치면 생략 (main/{repo}/docs 와 docs/repository/{repo}/ 는 경로로 안다)
-doc_type: adr                # spec | adr | prd | plan | knowledge | guide | note (생략하면 경로로 추론)
+repo: books-guitar           # 프로젝트 — project: 로 써도 된다. 여러 repo 에 걸치면 생략 (main/{repo}/docs 와 docs/repository/{repo}/ 는 경로로 안다)
+topic: score-renderer        # 주제 — 생략하면 docs/{feature,specs,issues}/{주제}/ 경로에서 정한다 (topic 필터)
+doc_type: adr                # spec | adr | prd | plan | knowledge | guide | note (생략하면 경로로 추론. 낡지 않는 설계·안내 문서는 guide)
 date: 2026-10-13             # 유효 시각 — hot/cold 와 판정 순서가 이걸로 갈린다 (생략하면 마지막 커밋 시각, 커밋 전이면 파일 mtime)
 supersedes: docs/knowledge/score-format.md        # (개정판만) 밀어내는 구판
 derived_from:                                     # (선택) 근거 문서 — 그래프 DERIVED_FROM. why 가 없으면 버린다
@@ -499,7 +502,8 @@ relates:                                          # (선택) 관련 문서 — �
 ---
 ```
 
-본문의 마크다운 링크(`[..](../x.md)`)도 그래프의 `LINKS_TO` 가 된다. 링크 대상이 hot 에도 cold 에도 없으면 주간 감사가 `broken-link` 로 알린다.
+본문의 마크다운 링크(`[..](../x.md)`)도 그래프의 `LINKS_TO` 가 된다. 링크 대상이 디스크에도 hot 에도 cold 에도 없거나 디스크의 철자와 대소문자만 다르면(GitHub 에서 깨진다)
+주간 감사가 `broken-link` 로 알린다 (`scenarios/` 처럼 색인 범위 밖이어도 디스크에 그 철자로 있으면 산 링크다).
 knowledge 는 근거가 있어야 한다 — `derived_from` 이나 `## 출처` 절이 없으면 감사가 `unsourced-fact` 로 알린다.
 
 ### 5.2 예제 — Claude 에게 ADR 을 쓰게 하기
@@ -540,7 +544,7 @@ knowledge 는 유사도로 판정하지 않으므로 선언이 없으면 구판�
 
 ### 6.1 주간 compaction — `/compaction`
 
-`.claude/commands/compaction.md` 의 절차: 1·2 리포트(`scripts/memory/run.sh compaction-report -team T`) → 원문 대조 → 3 유효하지 않은 정의 분리 → 4 살아남은 사실을 오늘 날짜 knowledge 로 다시 쓰기(`derived_from` 에 근거) → 5 `scripts/memory/run.sh tier -team T` (먼저 `-dry-run`) → 6 `scripts/memory/run.sh audit`.
+[`.claude/commands/compaction.md`](./.claude/commands/compaction.md) 의 절차: 1·2 리포트(`scripts/memory/run.sh compaction-report -team T`) → 원문 대조 → 3 유효하지 않은 정의 분리 → 4 살아남은 사실을 오늘 날짜 knowledge 로 다시 쓰기(`derived_from` 에 근거) → 5 `scripts/memory/run.sh tier -team T` (먼저 `-dry-run`) → 6 `scripts/memory/run.sh audit`.
 **지우지 않고 다시 쓴다.** cold 로 간 원문은 스냅샷과 cold store 에 남는다.
 
 ### 6.2 tier 와 ISM
@@ -571,14 +575,15 @@ knowledge 인덱스는 `mem-knowledge-keep`(우선순위 200)이라 ISM 이 건�
 
 | 종류 | 뜻 | `-apply` |
 | --- | --- | --- |
-| `orphan-index` | 색인에는 있는데 파일이 없다 | 색인에서 뺀다 (청크 JSONL 도) |
+| `orphan-index` | 색인에는 있는데 파일이 없다. 같은 파일이 디스크에 다른 철자(대소문자·NFD)로 있으면 옛 철자의 색인이라고 디스크의 철자를 알린다 | 색인에서 뺀다 (청크 JSONL 도 — 다른 철자로 살아 있는 파일의 것은 남긴다) |
 | `unindexed` | 파일이 있는데 색인에도 cold 에도 없다 | 색인한다 (다음 데몬 사이클이 판정·증류·그래프로 넘긴다) |
 | `stale-content` | 색인 내용(sha)이 파일과 다르다 (stat 이 보존된 복사 등) | 다시 색인한다 (다음 데몬 사이클이 판정·증류·그래프로 넘긴다) |
 | `orphan-chunks` | cold store 에 청크만 남았다 | 지운다 (raw 원본은 이력이라 남긴다) |
-| `broken-link` | 링크 대상이 hot 에도 cold 에도 없다 | 보고만 |
+| `broken-link` | 링크 대상이 디스크에도 hot 에도 cold 에도 없다. 디스크의 철자와 대소문자만 다른 링크도 알린다(GitHub 에서 깨진다 — 설명에 디스크의 철자). 색인 범위 밖이어도 디스크에 그 철자로 있으면 산 링크다 | 보고만 |
 | `unsourced-fact` | knowledge 에 근거가 없다 | 보고만 |
 | `stale-question` | 14일 넘게 답을 기다리는 판정 질문 | 보고만 |
 | `corrupted-ledger` | 원장에 읽을 수 없는 줄 | 보고만 (그 줄은 건너뛴다) |
+| `partial-scan` | 읽지 못한 디렉토리가 있다 (권한) | 보고만 — 그 감사에서는 지우는 조치(`orphan-index`·`orphan-chunks`)를 건너뛴다 |
 
 ### 6.4 cold 문서 조치 — `archive`
 
@@ -637,7 +642,7 @@ ISM 이 먼저 옮긴 경우다. "갖고 있다" 의 판단:
 ## 8. 설정 레퍼런스
 
 `.env`(복사: `cp .env.example .env`) 또는 환경변수. 명령줄에서 준 값이 `.env` 보다 우선한다.
-`make memory-daemon-start` 로 띄운 데몬(launchd)은 start 때의 설정(`.env` 와 명령줄 값 중 아래 표의 메모리 설정과 `OS_PORT`·`NEO4J_BOLT_PORT`·`NEO4J_HTTP_PORT`·`AWS_PROFILE` — 이름에 `PASSWORD`·`SECRET`·`TOKEN` 이 든 것은 빼고)을 잡에 담아 돈다 — 바꾸면 `make memory-daemon-stop && make memory-daemon-start`.
+`make memory-daemon-start` 로 띄운 데몬(launchd)은 start 때의 설정 중 `META_REPO_ROOT`·`OPENSEARCH_URL`·`OS_PORT`·`NEO4J_BOLT_PORT`·`NEO4J_HTTP_PORT`·`COLD_*`·`MEMORY_*`·`AWS_REGION`·`AWS_PROFILE`·`AWS_ENDPOINT_URL_S3`(`.env` 와 명령줄 값. 이름에 `PASSWORD`·`SECRET`·`TOKEN` 이 든 것은 빼고 — 잡이 `.env`·AWS 기본 체인에서 다시 읽는다)를 잡에 담아 돈다 — 이 값을 바꾸면 `make memory-daemon-stop && make memory-daemon-start`. 데몬이 쓰지 않는 `OS_DASH_PORT` 는 담지 않는다.
 
 | 변수 | 기본 | 뜻 |
 | --- | --- | --- |

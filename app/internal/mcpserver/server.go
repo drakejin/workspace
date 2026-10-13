@@ -142,14 +142,7 @@ func (h *Handlers) Search(ctx context.Context, in SearchInput) (string, error) {
 			"단어(서비스명, 함수명, 에러 코드)를 바꿔 다시 검색하세요. %d일보다 오래된 맥락이면 list_cold 를 확인하세요.", scope, in.Query, h.Config.HotDays), nil
 	}
 	var b strings.Builder
-	switch {
-	case listing && res.Total > len(hits):
-		fmt.Fprintf(&b, "%s · 문서 %d건 중 최신 %d건 (필터, 최신순 — 더 보려면 size 를 늘리거나 필터를 좁히세요)\n\n", scope, res.Total, len(hits))
-	case listing:
-		fmt.Fprintf(&b, "%s · 문서 %d건 (필터, 최신순)\n\n", scope, len(hits))
-	default:
-		fmt.Fprintf(&b, "%s · %d건 (BM25)\n\n", scope, len(hits))
-	}
+	b.WriteString(searchHeader(scope, listing, res.Total, hits) + "\n\n")
 	for i, hit := range hits {
 		meta := []string{string(hit.DocType)}
 		if in.Org != "" {
@@ -185,6 +178,29 @@ func (h *Handlers) Search(ctx context.Context, in SearchInput) (string, error) {
 		b.WriteString(hit.Text + "\n\n")
 	}
 	return strings.TrimRight(b.String(), "\n"), nil
+}
+
+// searchHeader 는 검색 결과의 머리 줄이다 — 질의어 검색은 청크 단위라 청크 수와 그 청크들의 문서 수를 함께
+// (한 문서의 여러 절이 size 를 나눠 쓴 것이 보인다), 필터 가져오기는 문서 하나에 한 건이라 문서 수 (잘렸으면 전체 수도).
+func searchHeader(scope string, listing bool, total int, hits []search.Hit) string {
+	shown := len(hits)
+	switch {
+	case listing && total > shown:
+		return fmt.Sprintf("%s · 문서 %d건 중 최신 %d건 (필터, 최신순 — 더 보려면 size 를 늘리거나 필터를 좁히세요)", scope, total, shown)
+	case listing:
+		return fmt.Sprintf("%s · 문서 %d건 (필터, 최신순)", scope, shown)
+	default:
+		return fmt.Sprintf("%s · 청크 %d건 · 문서 %d건 (BM25)", scope, shown, distinctDocs(hits))
+	}
+}
+
+// distinctDocs 는 결과 청크들이 나온 문서(source_path) 수다.
+func distinctDocs(hits []search.Hit) int {
+	seen := make(map[string]bool, len(hits))
+	for _, hit := range hits {
+		seen[hit.SourcePath] = true
+	}
+	return len(seen)
 }
 
 // FiltersInput 은 search_filters 입력이다.

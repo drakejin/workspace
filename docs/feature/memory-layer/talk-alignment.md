@@ -1,5 +1,5 @@
 ---
-doc_type: spec
+doc_type: guide
 date: 2026-10-13
 ---
 # 구현 정렬표 — 발표 · drakejin 회사 메모리 층 대비
@@ -18,7 +18,7 @@ date: 2026-10-13
 | --- | --- | --- |
 | 발표 §9·§14 meta-repository 구조·CLAUDE.md | ✅ | 관리 대상 repo 는 원격 골격대로 `main/{repo}` (발표의 `repos/`) |
 | 발표 §11 요구사항 네 개 | ✅ | 팀/실(org alias), hot/cold, S3 스냅샷·cold store (LocalStack e2e) |
-| 발표 §12 기능·인덱스·도구 | ✅ | 도구는 발표의 넷 + 그래프 둘. analyzer 보정, knowledge 인덱스 분리 |
+| 발표 §12 기능·인덱스·도구 | ✅ | 도구는 발표의 넷 + 필터 값(`search_filters`) + 그래프 둘 = 일곱. analyzer 보정, knowledge 인덱스 분리 |
 | 발표 §13 데모 1~4·주간 compaction | ✅ | 데모 4 는 `scripts/memory/run.sh bench` 로 측정 (아래) |
 | 발표 Q&A | 🟡 | 공식 MCP 서버 대신 직접 구현. 세션 시작 훅은 구현 |
 | drakejin 회사 memory-up · daemon-status | ✅ | Neo4j 까지 올리고 그래프 상태도 보인다 |
@@ -79,7 +79,7 @@ date: 2026-10-13
 
 #### 데모 4단계 측정
 
-`examples/sample-workspace` 사본(15 문서, 증류 켬)에서 `scripts/memory/run.sh bench -questions examples/sample-bench.yaml -model haiku -runs 2` (2026-10-13).
+`examples/sample-workspace` 사본(측정 당시 샘플 14 문서, 증류 켬)에서 `scripts/memory/run.sh bench -questions examples/sample-bench.yaml -model haiku -runs 2` (2026-10-13).
 두 조건 모두 내장 도구는 Read·Glob·Grep 뿐이고 같은 규칙(샘플의 CLAUDE.md)을 받는다 — 차이는 memory MCP 유무뿐이다.
 
 | 조건 | 정답률 | 도구 호출 | 턴 | 시간 | 입력 토큰 | 비용 |
@@ -89,7 +89,7 @@ date: 2026-10-13
 
 - with 는 거의 매번 `search_memory` 한 번으로 근거 문서를 찾고 끝났다
 - 차이는 문서가 흩어진 질문에서 컸다: "order-api 는 주문 금액을 어디에서 읽나" 는 without 이 19·16회 도구를 부르다 한 번은 최대 턴(15)에 걸려 실패했다. with 는 1~2회
-- 15 문서짜리 샘플이라 절대값보다 방향을 본다. 발표의 주장("배경 설명 없이, 더 적은 탐색으로")과 같은 방향이다
+- 문서가 열네 개뿐인 작은 샘플이라 절대값보다 방향을 본다. 발표의 주장("배경 설명 없이, 더 적은 탐색으로")과 같은 방향이다
 - 첫 측정에서는 with 쪽 memory 도구 호출이 0회였다 — `--setting-sources ""` 가 CLAUDE.md 를 읽지 않고, `--allowedTools` 는 도구를 제한하지 않아서였다. 지금은 `--tools` 로 내장 도구를 좁히고 CLAUDE.md 를 `--append-system-prompt-file` 로 넘긴다
 
 ### Q&A
@@ -158,3 +158,4 @@ date: 2026-10-13
 | 2026-10-13 | Go 를 `app/` 한 모듈로, 생성물은 `.cache/`, 설정은 seed 하나. Neo4j knowledge graph, audit, archive, org alias, SessionStart 훅, bench, launchd. 실제 ISM·S3(LocalStack)·실제 claude 판정·증류 검증 | 발표 약 97%, drakejin 회사 약 95% (질문·지식 PR 은 원장으로 대체) |
 | 2026-10-13 | 루트 Makefile 을 다섯 개(init·sync·memory-init·memory-daemon-start/stop)로 줄이고 Go 개발 타겟은 app/Makefile, 나머지는 scripts 로 | 근접도 변화 없음 |
 | 2026-10-13 | MCP 서버 `drakejin-workspace-memory-mcp`, 검색 필터(날짜·범위·주제·프로젝트) + 필터만으로 가져오기 + `search_filters`, 판정 이웃은 같은 프로젝트 안, 시나리오 테스트(scenarios/) | 발표 §12 도구 확장 |
+| 2026-10-13 | 감사가 색인 범위 밖 가이드(scenarios/·.claude/·examples/)로 가는 링크를 깨진 링크로 보지 않는다(그래프는 `out-of-scope`). 이 문서를 `doc_type: guide`(노화 없음)로 — README 에서 닿는 설계 배경이 60일 뒤 cold 로 가지 않게. 철자(대소문자)만 다른 링크는 깨진 링크로 알린다. 질의어 검색 머리는 `청크 N건 · 문서 M건`. 도구 수·샘플 문서 수 정정 | 근접도 변화 없음 |

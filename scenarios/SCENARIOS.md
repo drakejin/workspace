@@ -99,8 +99,8 @@ MCP 의 `search_memory` 와 같은 핸들러를 운영 CLI 로 확인한다. `S=
 | F14 | `$S search -project alpha-api -topic payments -from $D30` | A |
 | F15 | `$S search -type adr` | A, C, J |
 | F16 | `$S search -type knowledge` | N, H (M 은 숨김) |
-| F17 | `$S search ScnFeePolicy` | L 하나 (`… 1건 (BM25)`, score 표시) |
-| F18 | `$S search -superseded ScnFeePolicy` | L, K (K 에 superseded 표시) |
+| F17 | `$S search ScnFeePolicy` | L 하나 (머리 `… 청크 1건 · 문서 1건 (BM25)` — 질의어 검색은 청크 수와 그 문서 수를 함께 센다, score 표시) |
+| F18 | `$S search -superseded ScnFeePolicy` | L, K (K 에 superseded 표시, 머리 `… include_superseded · 청크 2건 · 문서 2건 (BM25)`) |
 | F19 | `$S search -project beta-web ScnRefundFlow` | `맞는 문서가 없습니다` (D 는 프로젝트가 없다) |
 | F20 | `$S search -date 2026-1-2 x; echo "exit=$?"` | 에러 `date 는 YYYY-MM-DD 여야 합니다`, exit≠0 |
 | F21 | `$S search; echo "exit=$?"` | 사용법 에러(exit 2) — 질의어도 필터도 없음 |
@@ -203,8 +203,8 @@ printf -- '---\ndate: %s\n---\n# 배송비 정책\n\n## 결정\n\nShippingFeePol
 | W1 | `grep -E '^[a-z][a-z0-9-]*:' Makefile \| cut -d: -f1` | 정확히 `init sync memory-init memory-daemon-start memory-daemon-stop` |
 | W2 | `make -n init sync memory-init memory-daemon-start memory-daemon-stop` | 각각 `bash scripts/{init,sync,memory-init}/run.sh`, `bash scripts/memory-daemon/run.sh start`, `… stop` |
 | W3 | `grep -E '^[a-z][a-z0-9-]*:' app/Makefile \| cut -d: -f1` | `build test test-e2e test-e2e-slow test-e2e-s3 mcp` |
-| W4 | `make init` | `[hook] pre-commit: installed`, books-guitar clone (`[clone] books-guitar: …` 또는 이미 있으면 `[skip]`), `[init] summary: 1 repos / … / 0 failed`, 이어서 sync 출력. (GitHub 인증 실패면 FAIL 로 적고 W5~W7 은 SKIP) |
-| W5 | `make sync` | `[index] INDEX.md: all repos listed` 와 pull 결과 |
+| W4 | `make init` | `[hook] pre-commit: installed`, books-guitar clone (`[clone] books-guitar: …` 또는 이미 있으면 `[skip]`), `[init] summary: 1 repos / … / 0 failed`, 이어서 sync 출력 — INDEX.md 에 books-guitar 행이 없으므로 `[index] INDEX.md: 1 new repo(s) — books-guitar` 다음 claude 가 행을 더한 `[index] INDEX.md: books-guitar → <카테고리>`. (GitHub 인증 실패면 FAIL 로 적고 W5~W7 은 SKIP) |
+| W5 | `make sync` | `[index] INDEX.md: all repos listed` (W4 가 행을 더했다) 와 pull 결과 — 기본 브랜치(origin/HEAD)에 있으면 `[sync] books-guitar: pulled '<기본 브랜치>'` |
 | W6 | `scripts/run-issues/run.sh SCN-TEST books-guitar` 후 `git -C main/books-guitar worktree list` | `worktree 'SCN-TEST' created`, 목록에 `main/books-guitar/.worktrees/SCN-TEST` |
 | W7 | `scripts/done-issue/run.sh SCN-TEST books-guitar` 후 `git -C main/books-guitar worktree list` 와 `git -C main/books-guitar branch -D SCN-TEST` | `worktree 'SCN-TEST' removed`, 목록에서 사라짐 |
 | W8 | `mkdir -p docs/specs/scn-x && echo x > docs/specs/scn-x/a.md && scripts/docs-cleaner/run.sh < /dev/null; echo "exit=$?"; ls docs/specs` | `[docs-cleaner] 취소`, exit=1, `scn-x` 가 남아 있다 |
