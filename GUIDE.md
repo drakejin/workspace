@@ -53,6 +53,11 @@ Claude Code 가 파일 트리를 뒤지는 대신 `search_memory` 로 묻게 하
 | knowledge (누가 바꾸기 전까지 유효한 사실) | `docs/knowledge/`, `doc_type: knowledge·guide`, 루트 `README`·`INDEX`·`CLAUDE`·`GUIDE`, `main/{repo}/docs/` | `mem-{team}-knowledge` | 개정판의 `supersedes:` 선언만 | 없음. 밀리면 자기 달 인덱스로 옮겨 가 그때부터 노화 |
 
 색인 범위 밖: `main/{repo}` 의 코드 트리, `.worktrees/`, `node_modules`·`.git`·`.cache`·`dist`·`build`·`vendor` 등, `.md` 가 아닌 파일, `MEMORY_MAX_FILE_BYTES` 초과, 바이너리.
+크기·바이너리 게이트는 데몬과 `ingest_path` 가 같은 규칙 하나를 쓴다 — `ingest_path` 도 이런 파일은 색인하지 않고 `N개 건너뜀` 으로 알린다.
+
+문서의 정체(`source_path`)는 디스크에 있는 철자를 유니코드 NFC 로 맞춘 경로다. macOS(APFS)는 대소문자와 NFC/NFD 를 구분하지 않아
+철자만 다른 경로가 같은 파일을 연다 — `ingest_path` 에 `docs/knowledge/LIMITS.md`(실제는 `limits.md`)나 Finder 가 NFD 로 만든 한글 이름을
+NFC 로 친 경로를 줘도 디스크의 철자 하나로 적재하고, 주제(`topic`)·프로젝트(`project`)도 NFC 로 맞춰 비교한다.
 
 ---
 
@@ -122,7 +127,7 @@ launchd 가 없는 머신은 nohup 백그라운드라(`[memory-daemon] backgroun
 | 로그 | 뜻 |
 | --- | --- |
 | `[reconcile] scanned= indexed= stat_updated= removed= skipped= failed= cold_owned= flags=` | 스캔한 파일 / 다시 색인 / mtime 만 바뀜 / 색인에서 뺌 / 건너뜀 / 쓰기 실패 / cold 소유라 되살리지 않음 / superseded_by·deprecated 수렴 |
-| `[reconcile] skip <path> (<이유>)` · `fail <path> (<오류>)` | 색인하지 않은 파일(크기·바이너리·frontmatter 오류) / 쓰다 실패한 파일 — 실패는 다음 사이클이 다시 시도하고, 나머지 파일은 계속 돈다 |
+| `[reconcile] skip <path> (<이유>)` · `fail <path> (<오류>)` | 색인하지 않은 파일(`size N > MAX`·`binary content`·frontmatter 오류) / 쓰다 실패한 파일 — 실패는 다음 사이클이 다시 시도하고, 나머지 파일은 계속 돈다 |
 | `[judge] superseded A ↔ B (latest-wins …)` · `(llm: 모순, 고확신 …)` · `question …` | 판정 결과 |
 | `[distill] path: summary N자, entities M` | 증류 |
 | `[graph] docs= entities= edges=` | 그래프 재구축 (바뀐 게 있을 때만) |
@@ -178,7 +183,7 @@ launchd 가 없는 머신은 nohup 백그라운드라(`[memory-daemon] backgroun
 | `search_filters` | `project?`, `topic?`, `date?`, `time_range?`, `doc_type?`, `team?`, `org?`, `include_superseded?` | 필터에 쓸 수 있는 값과 문서 수 — 프로젝트·주제·문서 종류·날짜 범위·날짜별 수 |
 | `related_docs` | `path`, `depth?`(1~3, 기본 2) | 그래프에서 이어진 문서와 그 경로(관계·이유). depth 2 면 같은 entity·같은 repo 를 다루는 문서도 |
 | `docs_by_entity` | `entity` (`order-api` 또는 `service:order-api`, 부분 일치) | 증류 entity 로 문서 찾기 |
-| `ingest_path` | `path`(meta-repo 기준), `team?` | 데몬보다 먼저 색인 (meta-repo 밖 경로는 거부) |
+| `ingest_path` | `path`(meta-repo 기준), `team?` | 데몬보다 먼저 색인 (meta-repo 밖 경로는 거부). 경로는 디스크의 철자(대소문자·NFC)로 맞춘다. 데몬과 같은 게이트 — 바이너리·`MEMORY_MAX_FILE_BYTES` 초과는 색인하지 않고 `N개 건너뜀 … - <path> (<이유>)` 로 알린다 |
 | `list_cold` | `team?` | cold 인덱스 목록 (스냅샷 이름·시각, 복원 여부) |
 | `restore_cold` | `index`, `confirmed?` | cold 인덱스 복원. `confirmed=true` 없이는 복원하지 않고 "사용자에게 먼저 물으라" 고 돌려준다 |
 
@@ -317,7 +322,9 @@ team=demo · project=order-api, time_range=2026-10-01~ · 문서 3건 (필터, �
 ```
 
 (4.1 의 환불 기간 두 문서를 더하기 전 샘플에서 찍은 출력이다. 주제는 `docs/feature|specs|issues/{주제}/` 경로나 frontmatter `topic`,
-프로젝트는 `docs/repository/{프로젝트}/`·`main/{프로젝트}/docs/` 경로나 frontmatter `repo`/`project` 에서 정한다. `-from` 처럼 날짜만 주면 그날 전체가 들어간다.)
+프로젝트는 `docs/repository/{프로젝트}/`·`main/{프로젝트}/docs/` 경로나 frontmatter `repo`/`project` 에서 정한다. `-from` 처럼 날짜만 주면 그날 전체가 들어간다.
+주제는 NFC·소문자로, 글자·숫자가 아닌 것은 하이픈으로 맞춰 비교한다 — Finder 가 NFD 로 만든 디렉토리 이름도 친 그대로 맞는다.
+글자·숫자가 하나도 없는 주제(`-topic '!!!'`)나 공백뿐인 프로젝트는 필터를 조용히 빼지 않고 `topic 에 글자·숫자가 없습니다` 로 거부한다.)
 
 ### 4.3 그래프
 
@@ -620,7 +627,7 @@ ISM 이 먼저 옮긴 경우다. "갖고 있다" 의 판단:
 | `MEMORY_TIME_ZONE` | 이 머신의 시간대 | 문서의 날(`date`·`time_range` 날짜 필터, `search_filters` 날짜별 수)을 정하는 IANA 시간대 (예: `Asia/Seoul`). frontmatter `date` 는 적힌 날 그대로, 없으면 커밋·mtime 시각을 이 시간대에서 본 날. 바꾸면 `scripts/memory/run.sh ingest .` 로 이미 색인된 문서의 날을 다시 쓴다 (데몬은 내용이 바뀐 문서만 다시 쓴다) |
 | `MEMORY_RECONCILE_INTERVAL_SECONDS` | `60` | 데몬 타이머 |
 | `MEMORY_RECONCILE_DEBOUNCE_MS` | `3000` | watcher 힌트 debounce |
-| `MEMORY_MAX_FILE_BYTES` | `2097152` | 이보다 큰 파일은 건너뛴다 |
+| `MEMORY_MAX_FILE_BYTES` | `2097152` | 이보다 큰 파일은 건너뛴다 (데몬·`ingest_path` 모두) |
 | `MEMORY_SANITY_MAX_FILES` | `5000` | 넘으면 설정 오류로 보고 색인 거부 (`REFUSED`) |
 | `MEMORY_JUDGE_ENABLED` | `true` | 판정 |
 | `MEMORY_JUDGE_WINDOW_DAYS` | `7` | 이보다 차이 나면 latest-wins, 이내면 LLM |
@@ -647,6 +654,7 @@ ISM 이 먼저 옮긴 경우다. "갖고 있다" 의 판단:
 | 컨테이너 이름·포트 충돌 | 같은 이름의 옛 컨테이너, 다른 스택 | `docker ps -a --filter name=dj-workspace`, `.env` 의 `OS_PORT` 등 |
 | 검색 0건 | 색인 안 됨 / 팀이 다름 / workspace 가 다름 | `scripts/memory-daemon/run.sh status` 의 docs 수, `scripts/memory/run.sh search -team <팀> <질의>`, `MEMORY_WORKSPACE` |
 | 문서가 검색에 안 나온다 | 색인 범위 밖 (§1) — 범위 밖 파일은 로그에도 남지 않는다 | §1 의 범위 확인, `scripts/memory/run.sh ingest <path>` (범위 밖이면 "색인 대상 문서가 없습니다") |
+| 같은 파일이 철자만 다른 두 문서로 검색된다 (`LIMITS.md` 와 `limits.md`, NFC·NFD 한글 경로) | 이전 판의 `ingest_path` 가 친 철자를 그대로 `source_path` 로 썼다 | 데몬 사이클(상주 데몬 또는 `scripts/memory-daemon/run.sh once`)이 디스크의 철자(NFC)로 다시 쓰고 옛 철자의 문서를 색인에서 뺀다 (`removed=`). 같은 파일이 디스크에 있으니 cold store 청크는 지우지 않는다 |
 | `[reconcile] fail <path>` · status 의 `failed=` | 그 파일만 쓰다 실패 (다른 workspace 의 팀, 일시적인 오류) | 오류 문구대로 고친다. 일시적이면 다음 사이클이 다시 시도한다 |
 | 구판·신판이 나란히 뜬다 | 판정 질문 대기 / knowledge 에 `supersedes` 누락 | `scripts/memory/run.sh questions` / 개정판에 `supersedes:` |
 | 판정이 전부 질문으로 온다 | `claude` CLI 미설치·미로그인 | `claude` 로 로그인, `MEMORY_CLAUDE_BIN` |

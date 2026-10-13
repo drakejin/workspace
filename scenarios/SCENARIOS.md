@@ -109,7 +109,14 @@ MCP 의 `search_memory` 와 같은 핸들러를 운영 CLI 로 확인한다. `S=
 | F24 | `$S search -project alpha-api -size 2` | 머리 `project=alpha-api · 문서 6건 중 최신 2건 (필터, 최신순 — …)` → A, B (잘린 가져오기는 전체 수를 알린다) |
 | F25 | `$S search -date $D0` | `CLAUDE.md`, `README.md` (frontmatter 날짜가 없는 문서는 커밋 시각을 이 머신의 시간대에서 본 날, 각 줄에 `<D0>`) |
 | F26 | `MEMORY_TIME_ZONE=Mars/Base $S filters; echo "exit=$?"` | 에러 `MEMORY_TIME_ZONE: IANA 시간대 이름이어야 합니다`, exit≠0 |
-| F27 | `scenarios/teardown.sh filters` | 정리됨 |
+| F27 | `$S search -topic '!!!'; echo "exit=$?"` | 에러 `topic 에 글자·숫자가 없습니다: "!!!"`, exit≠0 — 필터를 조용히 빼고 전체 문서를 돌려주지 않는다 |
+| F28 | `python3 -c 'import os,unicodedata as u; d=os.path.join(os.environ["META_REPO_ROOT"],"docs/feature",u.normalize("NFD","환불정책")); os.makedirs(d); open(os.path.join(d,u.normalize("NFD","메모.md")),"w").write("# 환불 메모\nScnNfdTopic\n")' && scripts/memory-daemon/run.sh once` | Finder 처럼 NFD 이름의 디렉토리·파일을 만든다. `[reconcile] scanned=17 indexed=1` |
+| F29 | `$S search -topic 환불정책` | `docs/feature/환불정책/메모.md` 하나 — NFD 디렉토리의 주제도 친(NFC) 주제로 맞고, 경로도 NFC 다 |
+| F30 | `$S ingest docs/knowledge/STATUS-CODES-V2.md && $S ingest docs/feature/환불정책/메모.md` | `1개 문서 적재 - docs/knowledge/status-codes-v2.md → …` (디스크의 철자), `1개 문서 적재 - docs/feature/환불정책/메모.md → …` |
+| F31 | `$S search ScnStatusCodes; $S search ScnNfdTopic` | 각각 N 하나, `docs/feature/환불정책/메모.md` 하나 — 철자만 다른 ingest 가 문서를 하나 더 만들지 않는다 |
+| F32 | `scripts/memory-daemon/run.sh once && ls "$META_REPO_ROOT/.cache/cold-store/scn-filters/chunks/docs/knowledge/"` | `removed=0`, 목록에 `status-codes-v2.md.jsonl` 이 있다 (진짜 문서의 cold store 청크가 지워지지 않는다) |
+| F33 | `printf '\x00\x01BinaryProbe' > "$META_REPO_ROOT/docs/knowledge/probe-bin.md" && $S ingest docs/knowledge/probe-bin.md` | `0개 문서 적재`, `1개 건너뜀 — 데몬과 같은 게이트: …`, `- docs/knowledge/probe-bin.md (binary content)` |
+| F34 | `scenarios/teardown.sh filters` | 정리됨 |
 
 ## G3. Claude Code + drakejin-workspace-memory-mcp — 이름 `claude` (최종 목표)
 

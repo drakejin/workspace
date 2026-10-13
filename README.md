@@ -142,7 +142,7 @@ claude mcp add drakejin-workspace-memory-mcp -s user -- bash ~/Workspace/drakeji
 | `search_filters(project?, topic?, date?, time_range?, doc_type?, …)` | 필터에 쓸 수 있는 값과 문서 수 — 프로젝트·주제·문서 종류·날짜 범위·날짜별 수 |
 | `related_docs(path, depth?)` | knowledge graph 에서 이어진 문서 — supersedes·derived_from·relates·링크·같은 entity·같은 repo |
 | `docs_by_entity(entity)` | 증류가 뽑은 entity(`service:order-api` 등)를 다루는 문서 |
-| `ingest_path(path, team?)` | 데몬이 아직 잡지 못한 파일·디렉토리를 바로 색인 |
+| `ingest_path(path, team?)` | 데몬이 아직 잡지 못한 파일·디렉토리를 바로 색인. 경로는 디스크의 철자(대소문자·NFC)로 맞추고, 데몬과 같은 게이트로 바이너리·`MEMORY_MAX_FILE_BYTES` 초과는 건너뛴다고 알린다 |
 | `list_cold(team?)` | 60일이 지나 cold 로 간 인덱스 목록 |
 | `restore_cold(index, confirmed?)` | cold 인덱스 복원. `confirmed=true` 가 없으면 "사용자에게 먼저 물으라" 고 돌려준다 |
 

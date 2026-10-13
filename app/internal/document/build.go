@@ -138,13 +138,13 @@ func Title(body, sourcePath string) string {
 
 var markdownLink = regexp.MustCompile(`\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)`)
 
-// MarkdownLinks 는 본문의 상대 경로 마크다운 링크(.md)다. 대상은 meta-repository 기준 경로로 바꾼다.
+// MarkdownLinks 는 본문의 상대 경로 마크다운 링크(.md)다. 대상은 meta-repository 기준 경로(NFC — source_path 와 같은 꼴)로 바꾼다.
 // 외부 URL·앵커만 있는 링크·meta-repository 밖을 가리키는 링크는 버린다.
 func MarkdownLinks(body, sourcePath string) []model.Link {
 	seen := map[string]bool{}
 	var links []model.Link
 	for _, m := range markdownLink.FindAllStringSubmatch(body, -1) {
-		target, _, _ := strings.Cut(m[1], "#")
+		target, _, _ := strings.Cut(CanonicalPath(m[1]), "#")
 		if target == "" || strings.Contains(target, "://") || strings.HasPrefix(target, "mailto:") || path.Ext(target) != ".md" {
 			continue
 		}
@@ -174,7 +174,7 @@ func ChunkID(workspace, team, sourcePath string, index int) string {
 func Links(content, sourcePath string) []model.Link {
 	fm, body := markdown.SplitFrontmatter(content)
 	links := frontmatterLinks(fm)
-	if s := firstString(fm, "supersedes"); s != "" {
+	if s := CanonicalPath(firstString(fm, "supersedes")); s != "" {
 		links = append(links, model.Link{Type: model.LinkSupersedes, To: s, Why: "frontmatter supersedes"})
 	}
 	return append(links, MarkdownLinks(body, sourcePath)...)
