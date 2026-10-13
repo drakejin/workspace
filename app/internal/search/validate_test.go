@@ -12,13 +12,17 @@ import (
 	"github.com/drakejin/workspace/app/internal/opensearch"
 )
 
-// API-3 / RUN-10: time_range 경계는 날짜(YYYY-MM-DD)·시각(ISO)·date math(now±N단위, /단위 반올림, 날짜||math) 만 받는다 —
-// 예전에는 'yesterday' 같은 값이 Validate 를 지나 OpenSearch 에서 원인 없는 "all shards failed" 로 돌아왔다.
+// API-3 / RUN-10: time_range 경계는 OpenSearch 가 읽는 꼴(strict_date_optional_time||epoch_millis, date math)만 받는다 —
+// 예전에는 'yesterday' 같은 값이 Validate 를 지나 OpenSearch 에서 원인 없는 "all shards failed" 로 돌아왔다. 받는 꼴은
+// OpenSearch 2.19 에 그대로 보내 확인한 목록이다 (연·연월, 시만 적은 시각, 숫자 없는 now-d, epoch 밀리초도 OpenSearch 가 받는다).
 func TestValidateTimeRangeBounds(t *testing.T) {
 	accepted := []string{
-		"2026-10-01", "now", "now-30d", "now-7d/d", "now/d", "now-1M+2h/d", "now/d+1h", "now-90d/d", "now+1y", "now-15m", "now-2w",
-		"2026-10-01T10:00:00", "2026-10-01T10:00:00Z", "2026-10-01T10:00:00.123+09:00", "2026-10-01T10:00", "2026-10-01T10:00Z",
-		"2026-10-01||+1M/d", "2026-10-01T10:00:00Z||-1d",
+		"2026-10-01", "2026-09", "2026", "2028-02-29",
+		"now", "now-30d", "now-7d/d", "now/d", "now-1M+2h/d", "now/d+1h", "now-90d/d", "now+1y", "now-15m", "now-2w", "now-d", "now+d/d", "now-01d", "now/d/M",
+		"2026-10-01T10", "2026-10-01T10:00", "2026-10-01T10:00:00", "2026-10-01T10:00:00.5", "2026-10-01T10:00:00.123456789",
+		"2026-10-01T10Z", "2026-10-01T10:00Z", "2026-10-01T10:00:00Z", "2026-10-01T10:00+09", "2026-10-01T10:00+0900", "2026-10-01T10:00:00.123+09:00",
+		"1759312800000",
+		"2026-10-01||+1M/d", "2026-10-01T10:00:00Z||-1d", "2026-09||+M", "2026||+1y/M", "1759312800000||+1d", "2026-10-01T10||-1h",
 	}
 	for _, v := range accepted {
 		for _, r := range []Request{{TimeRange: model.TimeRange{From: v}}, {TimeRange: model.TimeRange{To: v}}} {
@@ -27,8 +31,10 @@ func TestValidateTimeRangeBounds(t *testing.T) {
 			}
 		}
 	}
-	rejected := []string{"yesterday", "garbage", "2026-02-30T00:00:00", "2026-13-01", "now-30", "now-3x", "now-30d/", "now - 3d",
-		"2026/10/01", "1696118400000", "2026-10-01||yesterday", "||+1d", "2026-10-01T25:00"}
+	rejected := []string{"yesterday", "garbage", "NOW", "2026-02-30T00:00:00", "2026-02-29", "2026-13-01", "2026-1-1", "26-10-01", "+2026-10-01",
+		"2026/10/01", "2026-10-01 10:00", "2026-10-01t10:00", "2026-10-01T1", "2026-10-01T25:00", "2026-10-01T10:60", "2026-10-01Z", "2026-10-01+09:00",
+		"2026-10-01T10:00:00[Asia/Seoul]", "2026-10-01T10:00+19:00", "-1000", "now-30", "now-3x", "now-1D", "now-1.5d", "now+-1d", "now-30d/", "now - 3d",
+		"2026-10-01||yesterday", "||+1d"}
 	for _, v := range rejected {
 		err := Validate(Request{TimeRange: model.TimeRange{From: v}})
 
@@ -41,16 +47,44 @@ func TestValidateTimeRangeBounds(t *testing.T) {
 	}
 }
 
-// RUN-18: 날짜 범위가 뒤집히면(from 이 to 보다 늦다) 조용한 0건 대신 무엇이 잘못됐는지 알린다.
-func TestValidateRejectsReversedDayRange(t *testing.T) {
-	err := Validate(Request{TimeRange: model.TimeRange{From: "2026-10-13", To: "2026-10-03"}})
-
-	if err == nil || !strings.Contains(err.Error(), "2026-10-13") || !strings.Contains(err.Error(), "2026-10-03") || !strings.Contains(err.Error(), "늦") {
-		t.Errorf("뒤집힌 범위: %v", err)
+// RUN-18: 범위가 뒤집히면(from 이 가리키는 가장 이른 시각이 to 가 가리키는 가장 늦은 시각보다 늦다) 조용한 0건 대신
+// 무엇이 잘못됐는지 알린다 — 날짜끼리만이 아니라 시각·date math 가 섞여도. OpenSearch 처럼 to 는 올려 읽는다
+// (now/d 는 오늘 끝까지, 2026-10 은 OpenSearch 규칙대로 10월 1일 끝까지 — 그래서 읽은 시각도 함께 알린다).
+func TestValidateRejectsReversedRange(t *testing.T) {
+	reversed := []model.TimeRange{
+		{From: "2026-10-13", To: "2026-10-03"},
+		{From: "2026-10-13T00:00", To: "2026-10-03"},
+		{From: "now-1d", To: "now-30d"},
+		{From: "now/d", To: "now-1d/d"},
+		{From: "2026-11", To: "2026-10-31"},
+		{From: "2026-10-03T10:00Z", To: "2026-10-03T18:00+09:00"},
+		{From: "2026-10-03||+1d", To: "2026-10-03"},
+		{From: "now", To: "2000-01-01"},
+		{From: "2026-10-02", To: "2026-10"},
 	}
-	for _, ok := range []model.TimeRange{{From: "2026-10-03", To: "2026-10-03"}, {From: "2026-10-03", To: "2026-10-13"}, {From: "2026-10-13", To: "now"}} {
-		if err := Validate(Request{TimeRange: ok}); err != nil {
-			t.Errorf("%+v 는 받는다: %v", ok, err)
+	for _, tr := range reversed {
+		err := Validate(Request{TimeRange: tr, TimeZone: "Asia/Seoul"})
+
+		if err == nil || !strings.Contains(err.Error(), "뒤집혔") || !strings.Contains(err.Error(), tr.From) || !strings.Contains(err.Error(), tr.To) {
+			t.Errorf("뒤집힌 범위 %+v: %v", tr, err)
+		}
+	}
+	ok := []model.TimeRange{
+		{From: "2026-10-03", To: "2026-10-03"}, {From: "2026-10-03", To: "2026-10-13"}, {From: "2026-10-13", To: "now"},
+		{From: "2026-10-03", To: "2026-10-03T00:00"}, {From: "2026-10-03T23:00", To: "2026-10-03"},
+		{From: "2026-10", To: "2026-10-01"}, {From: "2026-10-02", To: "2026-10||/M"},
+		{From: "now-30d", To: "now-1d"}, {From: "now/d", To: "now/d"}, {From: "now-1d/d", To: "now/d"}, {From: "2000-01-01", To: "now"},
+		{From: "2026-01-31||+1M", To: "2026-02-28"}, // 달 더하기는 그달 끝에서 멈춘다 (1/31 + 1M = 2/28) — OpenSearch 와 같다
+		{From: "2026-10-03T18:00+09:00", To: "2026-10-03T10:00Z"},
+		{From: "1759312800000", To: "2025-10-01T10:00"},
+	}
+	err := Validate(Request{TimeRange: model.TimeRange{From: "2026-10-02", To: "2026-10"}, TimeZone: "Asia/Seoul"})
+	if err == nil || !strings.Contains(err.Error(), "2026-10-01T23:59:59.999+09:00") {
+		t.Errorf("읽은 시각을 함께 알린다: %v", err)
+	}
+	for _, tr := range ok {
+		if err := Validate(Request{TimeRange: tr, TimeZone: "Asia/Seoul"}); err != nil {
+			t.Errorf("%+v 는 받는다: %v", tr, err)
 		}
 	}
 }

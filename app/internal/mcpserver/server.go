@@ -27,7 +27,7 @@ const Version = "0.2.0"
 const (
 	listColdHint = "list_cold(CLI: list-cold)"
 	restoreHint  = "restore_cold(index, confirmed=true) (CLI: restore <index>)"
-	searchHint   = "search_memory, CLI: search"
+	searchHint   = "search_memory(CLI: search)"
 )
 
 // Deps 는 서버 의존이다.
@@ -297,7 +297,7 @@ func (h *Handlers) Restore(ctx context.Context, in RestoreInput) (string, error)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%s 을(를) snapshot %s 에서 hot 으로 복원했습니다. 이제 검색(%s)에 포함됩니다 (ISM 자동 관리 제외).",
+	return fmt.Sprintf("%s 을(를) snapshot %s 에서 hot 으로 복원했습니다. 이제 %s 결과에 포함됩니다 (ISM 자동 관리 제외).",
 		restored.Name, strings.Join(restored.Snapshots, ","), searchHint), nil
 }
 

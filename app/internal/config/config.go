@@ -183,7 +183,7 @@ func (p *parser) validate(cfg Config) {
 		p.fail("OPENSEARCH_URL: URL 이 아닙니다: %q", cfg.OpenSearchURL)
 	}
 	if cfg.Graph.URI != "" && !validGraphURI(cfg.Graph.URI) {
-		p.fail("MEMORY_GRAPH_URI: bolt://, bolt+s://, bolt+ssc://, neo4j://, neo4j+s://, neo4j+ssc:// 주소 또는 off 여야 합니다: %q", cfg.Graph.URI)
+		p.fail("MEMORY_GRAPH_URI: bolt://, bolt+s://, bolt+ssc://, neo4j://, neo4j+s://, neo4j+ssc:// 주소, bolt+unix:///소켓경로 또는 off 여야 합니다: %q", cfg.Graph.URI)
 	}
 	if !naming.ValidName(cfg.Workspace) {
 		p.fail("MEMORY_WORKSPACE: 소문자/숫자/하이픈만: %q", cfg.Workspace)
@@ -202,14 +202,29 @@ func (p *parser) validate(cfg Config) {
 	}
 }
 
-// graphSchemes 는 Neo4j 드라이버가 받는 URI scheme 이다.
-var graphSchemes = map[string]bool{"bolt": true, "bolt+s": true, "bolt+ssc": true, "neo4j": true, "neo4j+s": true, "neo4j+ssc": true}
+// graphSchemes 는 Neo4j 드라이버가 받는 URI scheme 이다. 값은 routing 여부다 — routing 이 없는 bolt 계열은 주소의
+// query(routing context)를 드라이버가 거부한다.
+var graphSchemes = map[string]bool{"bolt": false, "bolt+s": false, "bolt+ssc": false, "bolt+unix": false, "neo4j": true, "neo4j+s": true, "neo4j+ssc": true}
+
+// unixGraphScheme 은 unix 소켓 주소다 — host 없이 소켓 경로만 둔다 (bolt+unix:///var/run/neo4j.sock).
+const unixGraphScheme = "bolt+unix"
 
 // validGraphURI 는 Neo4j 드라이버가 받는 주소인가다 — scheme 오타(http://, host:port)를 graph.New 까지 미루지 않고 다른 설정
-// 오류와 함께 알리려고 Load 에서 본다. 연결은 하지 않는다 (Neo4j 가 꺼져 있어도 색인·검색은 돈다).
+// 오류와 함께 알리려고 Load 에서 본다. 드라이버(NewDriverWithContext)의 주소 검사를 따르고, 연결은 하지 않는다
+// (Neo4j 가 꺼져 있어도 색인·검색은 돈다).
 func validGraphURI(raw string) bool {
 	u, err := url.Parse(raw)
-	return err == nil && graphSchemes[u.Scheme] && u.Host != ""
+	if err != nil {
+		return false
+	}
+	routing, known := graphSchemes[u.Scheme]
+	switch {
+	case !known, !routing && u.RawQuery != "":
+		return false
+	case u.Scheme == unixGraphScheme:
+		return u.Host == "" && u.Path != ""
+	}
+	return u.Host != ""
 }
 
 var nonName = regexp.MustCompile(`[^a-z0-9-]+`)

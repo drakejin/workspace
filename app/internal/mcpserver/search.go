@@ -105,12 +105,15 @@ func scopeOf(req search.Request, f FiltersInput) string {
 	return scope
 }
 
-// noIndex 는 팀(org) alias 가 없을 때의 안내다 — "문서 0건" 과 구별해 이름이 틀렸을 수 있다고 알린다.
+// noIndex 는 팀(org) alias 가 없을 때의 안내다 — "문서 0건" 과 구별한다. alias 가 없는 까닭은 이름 오타, 아직 적재 전,
+// 문서가 모두 cold 로 내려감(tier 가 마지막 hot 인덱스를 지우면 alias 도 사라진다) 셋이라, 이름 확인과 cold 보는 방법을 함께 적는다.
 func (h *Handlers) noIndex(req search.Request) string {
 	if req.Org != "" {
-		return fmt.Sprintf("org=%s 의 색인이 없습니다 — org 이름이 맞는지 확인하세요 (팀→org 는 MEMORY_TEAM_ORGS 로 정하고, 그 팀들에 문서가 있어야 생긴다).", req.Org)
+		return fmt.Sprintf("org=%s 의 hot 색인이 없습니다 — org 이름이 틀렸거나(팀→org 는 MEMORY_TEAM_ORGS), 그 팀들에 아직 문서가 없거나, "+
+			"문서가 모두 %d일이 지나 cold 로 내려간 경우다. 오래된 맥락이면 팀마다 %s 를 확인하세요.", req.Org, h.Config.HotDays, listColdHint)
 	}
-	return fmt.Sprintf("team=%s 의 색인이 없습니다 — 팀 이름이 맞는지 확인하세요 (생략하면 기본 팀 %s). 아직 문서를 적재하지 않은 팀도 이렇다.", req.Team, h.Config.DefaultTeam)
+	return fmt.Sprintf("team=%s 의 hot 색인이 없습니다 — 팀 이름이 틀렸거나(생략하면 기본 팀 %s), 아직 문서를 적재하지 않았거나, "+
+		"문서가 모두 %d일이 지나 cold 로 내려간 팀이다. 오래된 맥락이면 %s 를 확인하세요.", req.Team, h.Config.DefaultTeam, h.Config.HotDays, listColdHint)
 }
 
 // noHits 는 0건일 때의 안내다 — 필터만 줬으면 쓸 수 있는 값을 보라고, 질의어 검색이면 낱말을 바꾸거나 cold 를 보라고.

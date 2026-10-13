@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/url"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -117,5 +118,16 @@ func TestListColdSchemaNamesTeamOnly(t *testing.T) {
 
 	if strings.Contains(desc, "실") || strings.Contains(desc, "org") || !strings.Contains(desc, "팀 이름") {
 		t.Errorf("list_cold team 설명 = %q", desc)
+	}
+}
+
+// R2-deadcode-3: 안내문의 도구·CLI 이름은 한 꼴이다 — "도구(인자) (CLI: 명령)" 또는 "도구(CLI: 명령)". 예전 searchHint 만
+// "search_memory, CLI: search" 였다.
+func TestHintsShareOneFormat(t *testing.T) {
+	form := regexp.MustCompile(`^[a-z_]+(\([^()]*\) )?\(CLI: [^()]+\)$`)
+	for _, hint := range []string{listColdHint, restoreHint, searchHint, filtersHint} {
+		if !form.MatchString(hint) {
+			t.Errorf("안내 꼴이 다르다: %q", hint)
+		}
 	}
 }

@@ -114,14 +114,19 @@ func TestTimeZone(t *testing.T) {
 // API-2: 그래프 URI 의 scheme 오타(http://, scheme 없는 host:port)는 다른 설정 오류와 함께 Load 가 모아 알린다 —
 // 예전에는 Load 를 통과하고 graph.New 에서 실패해 MCP 서버·status 를 포함한 모든 명령이 함께 멈췄다.
 func TestLoadRejectsBadGraphURIScheme(t *testing.T) {
-	for _, bad := range []string{"http://localhost:7474", "localhost:7689", "bolt//localhost:7689", "neo4j+x://h:7687", "bolt://"} {
+	// 드라이버가 거부하는 꼴: 다른 scheme, host 없는 TCP 주소, host 있는 unix 소켓, 경로 없는 unix 소켓, routing 이 없는 bolt 의 query
+	bad := []string{"http://localhost:7474", "localhost:7689", "bolt//localhost:7689", "neo4j+x://h:7687", "bolt://",
+		"bolt+unix://h/var/run/neo4j.sock", "bolt+unix://", "bolt://h:7687?policy=x"}
+	for _, bad := range bad {
 		_, err := Load(env(map[string]string{"META_REPO_ROOT": "/m", "MEMORY_GRAPH_URI": bad, "MEMORY_HOT_DAYS": "-1"}))
 
 		if err == nil || !strings.Contains(err.Error(), "MEMORY_GRAPH_URI") || !strings.Contains(err.Error(), "MEMORY_HOT_DAYS") {
 			t.Errorf("%q: 다른 설정 오류와 함께 알린다: %v", bad, err)
 		}
 	}
-	for _, good := range []string{"bolt://localhost:7689", "bolt+s://h", "bolt+ssc://h:1", "neo4j://h", "neo4j+s://h:7687", "neo4j+ssc://h", "off", "OFF"} {
+	good := []string{"bolt://localhost:7689", "bolt+s://h", "bolt+ssc://h:1", "neo4j://h", "neo4j+s://h:7687", "neo4j+ssc://h",
+		"bolt+unix:///var/run/neo4j.sock", "neo4j://h:7687?policy=x", "off", "OFF"}
+	for _, good := range good {
 		if _, err := Load(env(map[string]string{"META_REPO_ROOT": "/m", "MEMORY_GRAPH_URI": good})); err != nil {
 			t.Errorf("%q 는 받는다: %v", good, err)
 		}

@@ -17,15 +17,10 @@ import (
 const maxQueryWords = 256
 
 // boundForms 는 time_range 경계로 받는 꼴이다. 거부할 때 그대로 알린다.
-const boundForms = "날짜(YYYY-MM-DD), 시각(2026-10-01T09:00:00, 시간대 생략 가능), date math(now, now-30d, now-7d/d, 2026-10-01||+1M) 중 하나여야 합니다"
+const boundForms = "날짜(2026-10-01, 2026-10, 2026), 시각(2026-10-01T09, 2026-10-01T09:00:00.5+09:00 — 시간대 생략 가능), epoch 밀리초, " +
+	"date math(now, now-30d, now-7d/d, 2026-10-01||+1M) 중 하나여야 합니다"
 
-var (
-	dayOnly = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
-	// dateMathOps 는 date math 의 기준(now, 날짜||) 뒤에 오는 계산이다: ±N단위 더하기, /단위 반올림 (단위 y M w d h H m s).
-	dateMathOps = regexp.MustCompile(`^(?:[+-]\d+[yMwdhHms]|/[yMwdhHms])*$`)
-	// dateTimeLayouts 는 시각 경계로 받는 ISO 꼴이다 (OpenSearch strict_date_optional_time 이 읽는 꼴). 소수 초는 Go 가 함께 읽는다.
-	dateTimeLayouts = []string{time.RFC3339, "2006-01-02T15:04:05", "2006-01-02T15:04Z07:00", "2006-01-02T15:04"}
-)
+var dayOnly = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 
 // ErrBlankTopic 은 정규화하면 비는 주제(글자·숫자가 없다)다. 쓸 수 있는 값을 보는 도구 이름은 부르는 쪽(mcpserver)이 붙인다.
 var ErrBlankTopic = errors.New("topic 에 글자·숫자가 없습니다")
@@ -38,32 +33,12 @@ func isDay(v string) bool {
 	return err == nil
 }
 
-func isDateTime(v string) bool {
-	for _, layout := range dateTimeLayouts {
-		if _, err := time.Parse(layout, v); err == nil {
-			return true
-		}
-	}
-	return false
-}
-
-// validBound 는 범위 경계 하나가 OpenSearch 가 읽는 꼴인가다 — 날짜, 시각, now 기준 date math, 날짜·시각||date math.
-func validBound(v string) bool {
-	if anchor, ops, anchored := strings.Cut(v, "||"); anchored {
-		return (isDay(anchor) || isDateTime(anchor)) && dateMathOps.MatchString(ops)
-	}
-	if ops, ok := strings.CutPrefix(v, "now"); ok {
-		return dateMathOps.MatchString(ops)
-	}
-	return isDay(v) || isDateTime(v)
-}
-
 // Validate 는 필터 값과 질의어를 검사한다 — OpenSearch 에 묻기 전에, 원인을 알 수 있는 말로 거부한다.
 func Validate(r Request) error {
 	if r.Date != "" && !isDay(r.Date) {
 		return fmt.Errorf("date 는 YYYY-MM-DD 여야 합니다: %q", r.Date)
 	}
-	if err := validateTimeRange(r.TimeRange); err != nil {
+	if err := validateTimeRange(r.TimeRange, r.TimeZone); err != nil {
 		return err
 	}
 	if n := len(strings.Fields(r.Query)); n > maxQueryWords {
@@ -72,15 +47,18 @@ func Validate(r Request) error {
 	return validateNames(r)
 }
 
-// validateTimeRange 는 범위의 두 경계를 본다. 둘 다 날짜인데 from 이 to 보다 늦으면 조용한 0건 대신 거부한다.
-func validateTimeRange(tr model.TimeRange) error {
+// validateTimeRange 는 범위의 두 경계를 본다 — OpenSearch 가 읽는 꼴인지, 그리고 뒤집혔는지(맞는 문서가 있을 수 없다).
+// 뒤집힘은 날짜·시각·date math 가 섞여도 요청의 시간대(timeZone)로 계산해 조용한 0건 대신 거부한다.
+func validateTimeRange(tr model.TimeRange, timeZone string) error {
+	loc := locationOf(timeZone)
 	for _, b := range []struct{ name, v string }{{"time_range.from", tr.From}, {"time_range.to", tr.To}} {
-		if b.v != "" && !validBound(b.v) {
+		if _, ok := parseBound(b.v, loc); b.v != "" && !ok {
 			return fmt.Errorf("%s 값은 %s: %q", b.name, boundForms, b.v)
 		}
 	}
-	if isDay(tr.From) && isDay(tr.To) && tr.From > tr.To {
-		return fmt.Errorf("time_range 가 뒤집혔습니다: from(%s)이 to(%s)보다 늦습니다 — from 에 이른 날, to 에 늦은 날을 주세요", tr.From, tr.To)
+	if from, to, ok := rangeEdges(tr, time.Now(), loc); ok && from.After(to) {
+		return fmt.Errorf("time_range 가 뒤집혔습니다: from(%s → %s)이 to(%s → %s)보다 늦습니다 — from 에 이른 쪽, to 에 늦은 쪽을 주세요",
+			tr.From, from.Format(edgeLayout), tr.To, to.Format(edgeLayout))
 	}
 	return nil
 }

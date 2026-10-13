@@ -333,9 +333,12 @@ team=demo · project=order-api, time_range=2026-10-01~ · 문서 3건 (필터, �
 프로젝트는 `docs/repository/{프로젝트}/`·`main/{프로젝트}/docs/` 경로나 frontmatter `repo`/`project` 에서 정한다. `-from` 처럼 날짜만 주면 그날 전체가 들어간다.
 주제는 NFC·소문자로, 글자·숫자가 아닌 것은 하이픈으로 맞춰 비교한다 — Finder 가 NFD 로 만든 디렉토리 이름도 친 그대로 맞는다.
 글자·숫자가 하나도 없는 주제(`-topic '!!!'`)나 공백뿐인 프로젝트는 필터를 조용히 빼지 않고 `topic 에 글자·숫자가 없습니다` 로 거부한다.
-프로젝트는 대소문자를 가리지 않는다(`-project Alpha-API` 도 `alpha-api` 를 찾는다). `-from`/`-to`(`time_range`)는 날짜, 시각(`2026-10-01T09:00`, 시간대 생략 가능),
-date math(`now-30d`, `now-7d/d`, `2026-10-01||+1M`)만 받는다 — `yesterday` 같은 값이나 `-from` 이 `-to` 보다 늦은 날짜 범위는 OpenSearch 에 묻기 전에 무엇이 틀렸는지 알리며 거부한다.
-없는 팀·org(`-team`·`-org` 오타)는 0건이 아니라 `team=… 의 색인이 없습니다` 로 구별한다. 가져오기가 잘렸을 때 size 가 이미 상한(50)이면 size 대신 필터를 좁히라고 안내한다 (페이지 넘김은 없다).)
+프로젝트는 대소문자를 가리지 않는다(`-project Alpha-API` 도 `alpha-api` 를 찾는다). `-from`/`-to`(`time_range`)는 OpenSearch 가 읽는 꼴만 받는다 —
+날짜(`2026-10-01`, `2026-10`, `2026`), 시각(`2026-10-01T09`, `2026-10-01T09:00:00.5+09:00`, 시간대 생략 가능), epoch 밀리초, date math(`now-30d`, `now-d`, `now-7d/d`, `2026-10-01||+1M`).
+`yesterday` 같은 값이나 뒤집힌 범위(`-from` 이 `-to` 보다 늦다 — 날짜·시각·date math 가 섞여도 OpenSearch 처럼 계산한다)는 OpenSearch 에 묻기 전에
+무엇이 틀렸는지(뒤집혔으면 두 경계를 읽은 시각까지) 알리며 거부한다. 연·월만 적은 `-to 2026-10` 은 OpenSearch 규칙대로 10월 1일 끝까지다 — 달 전체는 `-to '2026-10||/M'`.
+팀·org 의 hot 색인이 없으면 0건이 아니라 `team=… 의 hot 색인이 없습니다` 로 구별하고 까닭 셋(이름 오타, 아직 적재 전, 문서가 모두 cold 로 내려감)과
+`list_cold(CLI: list-cold)` 를 함께 알린다. 가져오기가 잘렸을 때 size 가 이미 상한(50)이면 size 대신 필터를 좁히라고 안내한다 (페이지 넘김은 없다).)
 
 ### 4.3 그래프
 
@@ -448,7 +451,7 @@ team=demo cold 인덱스 2개 (repository mem-cold)
 - mem-demo-2026.06  snapshot=cold-mem-demo-2026.06-20261013t003025-064934000  at=2026-10-13T00:30:25.062Z
 - mem-demo-2026.08  snapshot=cold-mem-demo-2026.08-20261013t003025-237458000  at=2026-10-13T00:30:25.062Z
 
-mem-demo-2026.06 을(를) snapshot cold-mem-demo-2026.06-20261013t003025-064934000 에서 hot 으로 복원했습니다. 이제 검색(search_memory, CLI: search)에 포함됩니다 (ISM 자동 관리 제외).
+mem-demo-2026.06 을(를) snapshot cold-mem-demo-2026.06-20261013t003025-064934000 에서 hot 으로 복원했습니다. 이제 search_memory(CLI: search) 결과에 포함됩니다 (ISM 자동 관리 제외).
 
 [1] docs/repository/order-api/prd/2026-06-order-launch.md › 주문 API 1차 출시 PRD > 활성 주문 정의  (prd, project=order-api, 2026-06-15; score 3.03)
 ```
@@ -671,7 +674,7 @@ ISM 이 먼저 옮긴 경우다. "갖고 있다" 의 판단:
 | `MEMORY_DISTILL_ENABLED` | `false` | 증류 (본문이 LLM 으로 간다) |
 | `MEMORY_DISTILL_CONCURRENCY` | `2` | 증류 동시 실행 |
 | `MEMORY_CLAUDE_BIN` / `MEMORY_LLM_MODEL` / `MEMORY_LLM_TIMEOUT_MS` | `claude` / `opus` / `120000` | 판정·증류 LLM. 격리 실행(`--setting-sources ""`, 도구 없음, JSON 스키마), 실패하면 폴백 |
-| `MEMORY_GRAPH_URI` | `bolt://localhost:${NEO4J_BOLT_PORT}` | Neo4j — `bolt://`·`bolt+s://`·`bolt+ssc://`·`neo4j://`·`neo4j+s://`·`neo4j+ssc://` 주소. `off` 면 그래프를 끈다. scheme 이 틀리면(`http://`, `host:port`) 다른 설정 오류와 함께 시작할 때 거부한다 |
+| `MEMORY_GRAPH_URI` | `bolt://localhost:${NEO4J_BOLT_PORT}` | Neo4j — `bolt://`·`bolt+s://`·`bolt+ssc://`·`neo4j://`·`neo4j+s://`·`neo4j+ssc://` 주소, 또는 unix 소켓 `bolt+unix:///소켓경로`. `off` 면 그래프를 끈다. 드라이버가 거부할 주소(`http://`, `host:port`, host 가 붙은 `bolt+unix`, query 가 붙은 `bolt` 계열)는 다른 설정 오류와 함께 시작할 때 거부한다 |
 | `MEMORY_GRAPH_USER` / `MEMORY_GRAPH_PASSWORD` / `MEMORY_GRAPH_DATABASE` | — / — / `neo4j` | 인증을 켠 Neo4j 일 때만 |
 | `COLD_SNAPSHOT_REPOSITORY` / `COLD_SNAPSHOT_TYPE` | `mem-cold` / `fs` | 스냅샷 repository |
 | `COLD_SNAPSHOT_FS_LOCATION` | `/usr/share/opensearch/snapshots` | fs repository 경로 (컨테이너 안 — `path.repo`) |

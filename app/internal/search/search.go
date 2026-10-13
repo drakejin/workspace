@@ -23,7 +23,7 @@ type Request struct {
 	Query             string
 	Date              string          // 날짜: 그날 하루 (YYYY-MM-DD) — 문서의 날(event_day)과 맞춘다
 	TimeRange         model.TimeRange // 범위: from~to. 날짜만 주면 그날 전체를 포함한다. date math(now-30d) 도 된다
-	TimeZone          string          // date math·시각 경계를 읽을 시간대 (+09:00). 비면 UTC
+	TimeZone          string          // date math·시각 경계를 읽을 시간대 (Asia/Seoul, 이름이 없으면 +09:00). 비면 UTC
 	Project           string          // 프로젝트 — 관리 대상 repository 이름 (색인 필드 repo)
 	Topic             string          // 주제 — docs/{feature,specs,issues}/{주제}/ 또는 frontmatter topic
 	DocType           model.DocType

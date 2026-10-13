@@ -117,9 +117,9 @@ MCP 의 `search_memory` 와 같은 핸들러를 운영 CLI 로 확인한다. `S=
 | F32 | `scripts/memory-daemon/run.sh once && ls "$META_REPO_ROOT/.cache/cold-store/scn-filters/chunks/docs/knowledge/"` | `removed=0`, 목록에 `status-codes-v2.md.jsonl` 이 있다 (진짜 문서의 cold store 청크가 지워지지 않는다) |
 | F33 | `printf '\x00\x01BinaryProbe' > "$META_REPO_ROOT/docs/knowledge/probe-bin.md" && $S ingest docs/knowledge/probe-bin.md` | `0개 문서 적재`, `1개 건너뜀 — 데몬과 같은 게이트: …`, `- docs/knowledge/probe-bin.md (binary content)` |
 | F34 | `$S search -project Alpha-API` | F11 과 같다 (A, B, I, F, H, J) — 프로젝트는 대소문자를 가리지 않는다 |
-| F35 | `$S search -from yesterday; echo "exit=$?"` | 에러 `time_range.from 값은 날짜(YYYY-MM-DD), 시각(…), date math(now, now-30d, …) 중 하나여야 합니다: "yesterday"`, exit≠0 (원인 없는 `all shards failed` 가 아니다) |
-| F36 | `$S search -from $D2 -to $D5; echo "exit=$?"` | 에러 `time_range 가 뒤집혔습니다: from(<D2>)이 to(<D5>)보다 늦습니다`, exit≠0 |
-| F37 | `$S search -team scn-nosuch memory; $S search -org scn-nosuch memory` | `team=scn-nosuch 의 색인이 없습니다 — 팀 이름이 맞는지 확인하세요 …`, `org=scn-nosuch 의 색인이 없습니다 — org 이름이 맞는지 …` (0건 안내 `맞는 문서가 없습니다` 가 아니다) |
+| F35 | `$S search -from yesterday; echo "exit=$?"` | 에러 `time_range.from 값은 날짜(2026-10-01, 2026-10, 2026), 시각(…), epoch 밀리초, date math(now, now-30d, …) 중 하나여야 합니다: "yesterday"`, exit≠0 (원인 없는 `all shards failed` 가 아니다) |
+| F36 | `$S search -from $D2 -to $D5; echo "exit=$?"; $S search -from now-1d -to now-30d; echo "exit=$?"` | 둘 다 에러 `time_range 가 뒤집혔습니다: from(<D2> → <D2>T00:00:00.000<오프셋>)이 to(<D5> → <D5>T23:59:59.999<오프셋>)보다 늦습니다`(오프셋은 MEMORY_TIME_ZONE 의 것, 둘째는 now-1d·now-30d 를 읽은 시각), exit≠0 |
+| F37 | `$S search -team scn-nosuch memory; $S search -org scn-nosuch memory` | `team=scn-nosuch 의 hot 색인이 없습니다 — 팀 이름이 틀렸거나(…), 아직 문서를 적재하지 않았거나, 문서가 모두 60일이 지나 cold 로 내려간 팀이다. 오래된 맥락이면 list_cold(CLI: list-cold) 를 확인하세요.`, `org=scn-nosuch 의 hot 색인이 없습니다 — org 이름이 틀렸거나(…MEMORY_TEAM_ORGS)…` (0건 안내 `맞는 문서가 없습니다` 가 아니다) |
 | F38 | `scenarios/teardown.sh filters` | 정리됨 |
 
 ## G3. Claude Code + drakejin-workspace-memory-mcp — 이름 `claude` (최종 목표)

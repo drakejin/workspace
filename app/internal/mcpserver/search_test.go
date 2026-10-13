@@ -87,7 +87,9 @@ func (notFoundOS) Bulk(context.Context, []any, url.Values) (opensearch.BulkRespo
 	return opensearch.BulkResponse{}, nil
 }
 
-// RUN-18: 없는 팀·org 는 "문서 0건" 과 구별해 이름을 확인하라고 알린다 (검색도 필터 값도).
+// RUN-18: 없는 팀·org 는 "문서 0건" 과 구별해 알린다 (검색도 필터 값도). alias 가 없는 까닭은 이름 오타·아직 적재 전·
+// 문서가 모두 cold 로 내려감 셋이라, 이름만 의심하지 않고 cold 를 보는 방법(list_cold·CLI)도 함께 적는다 — 끝난 프로젝트의
+// 팀은 hot 인덱스가 모두 tier 되면 alias 가 사라지는데, 이 안내가 cold 로 가는 유일한 길잡이다.
 func TestMissingTeamOrOrgIsNamed(t *testing.T) {
 	h := &Handlers{Deps: Deps{Config: config.Config{Workspace: "ws", DefaultTeam: "default", HotDays: 60}, OS: notFoundOS{}}, ready: true}
 	ctx := context.Background()
@@ -97,11 +99,11 @@ func TestMissingTeamOrOrgIsNamed(t *testing.T) {
 		want []string
 	}{
 		{"없는 org 검색", func() (string, error) { return h.Search(ctx, SearchInput{Org: "nosuchorg", Query: "memory"}) },
-			[]string{"org=nosuchorg", "색인이 없습니다", "MEMORY_TEAM_ORGS"}},
+			[]string{"org=nosuchorg", "색인이 없습니다", "MEMORY_TEAM_ORGS", "cold", "list_cold(CLI: list-cold)"}},
 		{"없는 팀 검색", func() (string, error) { return h.Search(ctx, SearchInput{Team: "nosuchteam", Query: "memory"}) },
-			[]string{"team=nosuchteam", "색인이 없습니다", "기본 팀 default"}},
+			[]string{"team=nosuchteam", "색인이 없습니다", "기본 팀 default", "cold", "60일", "list_cold(CLI: list-cold)"}},
 		{"없는 팀 필터 값", func() (string, error) { return h.Filters(ctx, FiltersInput{Team: "nosuchteam"}) },
-			[]string{"team=nosuchteam", "색인이 없습니다"}},
+			[]string{"team=nosuchteam", "색인이 없습니다", "list_cold(CLI: list-cold)"}},
 	}
 	for _, c := range cases {
 		out, err := c.call()
@@ -218,5 +220,21 @@ func TestRenderFacets(t *testing.T) {
 	}
 	if empty != "team=demo · topic=x · 문서 0건" {
 		t.Errorf("0건 = %q", empty)
+	}
+}
+
+// API-5: 0건 안내 두 가지 — 필터만 줬으면 쓸 수 있는 값을 보라고, 질의어 검색이면 낱말을 바꾸거나 cold 를 보라고.
+func TestNoHitsTexts(t *testing.T) {
+	h := &Handlers{Deps: Deps{Config: config.Config{HotDays: 60}}}
+
+	listing := h.noHits("team=a · project=p", "  ")
+	query := h.noHits("team=a", "RefundSplitter")
+
+	if want := "team=a · project=p · 필터에 맞는 문서가 없습니다. search_filters(CLI: filters) 로 쓸 수 있는 프로젝트·주제·날짜를 확인하세요."; listing != want {
+		t.Errorf("필터 0건\n got  %q\n want %q", listing, want)
+	}
+	if want := "team=a hot 영역에서 \"RefundSplitter\" 에 맞는 문서가 없습니다.\n" +
+		"단어(서비스명, 함수명, 에러 코드)를 바꿔 다시 검색하세요. 60일보다 오래된 맥락이면 list_cold(CLI: list-cold) 를 확인하세요."; query != want {
+		t.Errorf("질의어 0건\n got  %q\n want %q", query, want)
 	}
 }
