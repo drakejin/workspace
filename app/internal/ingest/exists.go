@@ -13,6 +13,6 @@ func ExistsAsSpelled(root, rel string) bool {
 	if _, err := os.Stat(abs); err != nil {
 		return false
 	}
-	onDisk, found := onDiskSpelling(root, inside)
+	onDisk, found := onDiskSpelling(root, inside, matchEntry)
 	return found && CanonicalRel(onDisk) == CanonicalRel(inside)
 }

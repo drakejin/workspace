@@ -9,18 +9,18 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
-
-	"golang.org/x/text/unicode/norm"
+	"time"
 
 	"github.com/drakejin/workspace/app/internal/document"
 )
 
 var docExtensions = map[string]bool{".md": true, ".markdown": true, ".mdx": true}
 
-// IgnoredSegments 는 색인도 watch 도 하지 않는 디렉토리다. .worktrees 는 작업 중 사본이라 원본과 중복된다.
+// IgnoredSegments 는 어디에 있든 색인도 watch 도 하지 않는 디렉토리다 — 의존성·VCS·캐시·작업 사본이다. .worktrees 는 작업 중
+// 사본이라 원본과 중복된다. 코드 트리의 빌드 산출물 이름(build·dist·bin·coverage·vendor)은 두지 않는다: 색인 범위(docs/**,
+// main/{repo}/docs/**) 안에서는 docs/feature/build/ 처럼 주제 디렉토리 이름일 수 있고, 코드 트리는 InScope 가 내려가지 않는다.
 var IgnoredSegments = map[string]bool{
-	"node_modules": true, ".git": true, ".worktrees": true, ".cache": true,
-	"dist": true, "build": true, "bin": true, ".next": true, "coverage": true, ".claude": true, "vendor": true,
+	"node_modules": true, ".git": true, ".worktrees": true, ".cache": true, ".next": true, ".claude": true,
 }
 
 // IsIndexable 는 색인 대상인가: 메타레포 루트 문서, docs/ 아래, 관리 대상 repository(main/{repo})의 docs/ 아래 마크다운.
@@ -86,10 +86,15 @@ func CanonicalRel(rel string) string {
 // abs 는 실제 이름의 경로(IO 용), rel 은 그 이름의 NFC 다 (문서의 정체). 디스크에 없는 세그먼트부터는 입력 철자를 그대로 쓴다
 // (읽는 쪽이 실패한다).
 func ResolveOnDisk(root, input string) (abs, rel string, err error) {
+	return resolveOnDisk(root, input, matchEntry)
+}
+
+// resolveOnDisk 는 ResolveOnDisk 이되 디렉토리 항목 찾기(match)를 고를 수 있다 — Indexer 는 나열을 다시 쓰는 것을 꽂는다.
+func resolveOnDisk(root, input string, match entryMatcher) (abs, rel string, err error) {
 	if _, rel, err = ResolveInsideRoot(root, input); err != nil {
 		return "", "", err
 	}
-	onDisk, _ := onDiskSpelling(root, rel)
+	onDisk, _ := onDiskSpelling(root, rel, match)
 	return filepath.Join(root, filepath.FromSlash(onDisk)), CanonicalRel(onDisk), nil
 }
 
@@ -100,12 +105,15 @@ func LiveUnderOtherSpelling(root, rel string) bool {
 	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
 		return false
 	}
-	onDisk, found := onDiskSpelling(root, rel)
+	onDisk, found := onDiskSpelling(root, rel, matchEntry)
 	return found && CanonicalRel(onDisk) != rel
 }
 
+// entryMatcher 는 dir 안에서 name 과 같은 항목의 실제 이름을 찾는다 (matchEntry 또는 listingCache.match).
+type entryMatcher func(dir, name string) (string, bool)
+
 // onDiskSpelling 은 rel(posix)의 세그먼트를 디스크의 실제 이름으로 바꾼다. 모든 세그먼트를 찾았으면 found.
-func onDiskSpelling(root, rel string) (string, bool) {
+func onDiskSpelling(root, rel string, match entryMatcher) (string, bool) {
 	if rel == "" || rel == "." {
 		return rel, true
 	}
@@ -113,7 +121,7 @@ func onDiskSpelling(root, rel string) (string, bool) {
 	names := make([]string, 0, len(segs))
 	dir := root
 	for i, seg := range segs {
-		name, ok := matchEntry(dir, seg)
+		name, ok := match(dir, seg)
 		if !ok {
 			return path.Join(path.Join(names...), path.Join(segs[i:]...)), false
 		}
@@ -126,21 +134,11 @@ func onDiskSpelling(root, rel string) (string, bool) {
 // matchEntry 는 dir 안에서 name 과 같은 항목의 실제 이름이다: 그 철자 그대로 있으면 그것, 없으면 대소문자·유니코드 정규화만
 // 다른 것(여럿이면 이름순 첫째). 디렉토리를 나열할 수 없으면(실행 권한만 있는 디렉토리 등) 입력 철자를 그대로 믿는다.
 func matchEntry(dir, name string) (string, bool) {
-	entries, err := os.ReadDir(dir)
+	l, err := readListing(dir, time.Time{})
 	if err != nil {
 		return name, !errors.Is(err, fs.ErrNotExist)
 	}
-	want := norm.NFC.String(name)
-	loose := ""
-	for _, e := range entries {
-		if e.Name() == name {
-			return name, true
-		}
-		if loose == "" && strings.EqualFold(norm.NFC.String(e.Name()), want) {
-			loose = e.Name()
-		}
-	}
-	return loose, loose != ""
+	return l.match(name)
 }
 
 // RealInsideRoot 는 abs 가 심볼릭 링크를 다 풀어도 root 안인지 본다. 링크로 meta-repo 밖의 파일을 읽어

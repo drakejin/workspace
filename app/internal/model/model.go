@@ -58,7 +58,7 @@ type Chunk struct {
 	GitSHA       string   `json:"git_sha,omitempty"`
 	HeaderPath   string   `json:"header_path"`
 	ChunkIndex   int      `json:"chunk_index"`
-	Text         string   `json:"text"`
+	Text         string   `json:"text,omitempty"` // 본문이 없는 문서(빈 파일·frontmatter 만)의 청크 0 은 비어 필드째 빠진다 — 검색은 text 가 있는 청크만 보인다
 	IngestedAt   string   `json:"ingested_at"`
 	ContentSHA   string   `json:"content_sha"`
 	BodySHA      string   `json:"body_sha"`

@@ -1,9 +1,11 @@
 package state
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -220,6 +222,64 @@ func ReleaseLock(root string) error {
 	}
 	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 	return f.Close()
+}
+
+// 문서 쓰기 락. 파생물의 주 writer 는 데몬이지만 ingest_path·CLI ingest·audit -apply 도 같은 Write 를 부른다 — Write 는 여러 단계
+// (청크 0 무효 표시 → 옛 청크 정리 → 나머지 청크 → cold store → 청크 0)라, 두 writer 가 같은 문서를 엇갈려 쓰면 청크 0 은 새 내용
+// (최신 stat)이고 나머지는 옛 내용인 섞인 문서가 최신으로 고정된다. 그래서 문서 하나를 쓰는 동안은 그 문서의 락을 쥔다.
+const (
+	// docLockStripes 는 문서 쓰기 락 파일 수다. source_path 의 해시로 나눠 쥔다 — 서로 다른 문서는 거의 기다리지 않고, 락 파일은
+	// 이 수를 넘지 않는다 (문서마다 두면 지운 문서의 락 파일이 쌓이고, 쓰는 중에 지우면 두 writer 가 다른 파일을 쥔다).
+	docLockStripes = 64
+	// docLockPoll 은 다른 writer 가 쥔 문서 락을 다시 시도하는 간격이다.
+	docLockPoll = 5 * time.Millisecond
+)
+
+func docLockFile(root, sourcePath string) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(sourcePath)) // hash.Hash 의 Write 는 실패하지 않는다
+	return filepath.Join(RuntimeDir(root), "doc-locks", fmt.Sprintf("%02d.lock", h.Sum32()%docLockStripes))
+}
+
+// LockDoc 은 문서 하나의 쓰기 락을 잡는다. flock 이라 프로세스 사이(데몬·MCP 서버·CLI)도, 한 프로세스 안의 두 호출(열 때마다 다른
+// open file 이다)도 막고, 쥔 프로세스가 죽으면 커널이 푼다. 다른 writer 가 쥐고 있으면 ctx 가 끝날 때까지 기다린다. 돌려준 함수로 푼다.
+// 락을 쥔 채로 다른 문서의 락을 잡지 않는다 (같은 파일을 나눠 쥐는 두 문서가 서로 기다리지 않게).
+func LockDoc(ctx context.Context, root, sourcePath string) (func(), error) {
+	if root == "" {
+		return nil, errors.New("doc lock: meta-repo 루트가 비었습니다")
+	}
+	path := docLockFile(root, sourcePath)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, fmt.Errorf("doc lock: %w", err)
+	}
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("doc lock: %w", err)
+	}
+	if err := flockWait(ctx, f); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("doc lock %s: %w", sourcePath, err)
+	}
+	return func() {
+		// 풀기 실패는 되돌릴 방법이 없다 — 파일을 닫으면 커널이 어차피 푼다
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = f.Close()
+	}, nil
+}
+
+// flockWait 는 f 의 배타 flock 을 잡을 때까지 기다린다. ctx 가 끝나면 그 오류다.
+func flockWait(ctx context.Context, f *os.File) error {
+	for {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(docLockPoll):
+		}
+	}
 }
 
 // Tick 은 주기 작업(주간 audit, 일간 tier)의 마지막 성공 시각이다. 성공 뒤에 찍는다 —

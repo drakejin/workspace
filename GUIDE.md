@@ -45,6 +45,9 @@ Claude Code 가 파일 트리를 뒤지는 대신 `search_memory` 로 묻게 하
 2. **파생물의 writer 는 데몬 하나다.** 인덱스를 직접 고치지 않는다. 문서를 고치면 데몬이 따라 맞춘다. 데몬은 pid 락으로 하나만 돈다.
    `ingest_path`·`scripts/memory/run.sh ingest`·`audit -apply` 가 데몬보다 먼저 색인한 문서는 청크 0 에 넘김 표시(`pending_cycle`)를 남기고,
    다음 데몬 사이클이 그 문서를 판정·증류·그래프로 넘긴 뒤 표시를 지운다 (`[reconcile] handoff <path>`).
+   이 셋과 데몬은 문서 하나를 쓰는 동안 그 문서의 쓰기 락(`.cache/daemon/doc-locks/`, flock)을 쥐어 같은 문서를 엇갈려 쓰지 않는다.
+   넘김 표시가 생기기 전 판에서 데몬 밖으로 적재한 문서는 판정을 거치지 않았을 수 있다 — 같은 내용을 다시 적재해도 넘기지 않으므로,
+   판정에 넘기려면 그 파일을 고쳐 저장한다 (그래프와 증류 백필은 색인 전체를 보므로 따로 할 일이 없다).
 3. **검색은 경로를 돌려주고, 본문은 원문을 읽는다.** 에이전트는 결과의 `source_path` 를 Read 한다.
 
 문서는 두 성질로 나뉜다.
@@ -54,10 +57,14 @@ Claude Code 가 파일 트리를 뒤지는 대신 `search_memory` 로 묻게 하
 | episodic (시간이 지나면 낡는 기록) | `docs/` 의 spec·adr·prd·plan·note, `docs/issues/` | 유효 시각(`date`) 달의 인덱스 | 비슷한 문서끼리 자동 판정 | 60일 뒤 cold |
 | knowledge (누가 바꾸기 전까지 유효한 사실) | `docs/knowledge/`, `doc_type: knowledge·guide`, 루트 `README`·`INDEX`·`CLAUDE`·`GUIDE`, `main/{repo}/docs/` | `mem-{team}-knowledge` | 개정판의 `supersedes:` 선언만 | 없음. 밀리면 자기 달 인덱스로 옮겨 가 그때부터 노화 |
 
-색인 범위 밖: 루트의 다른 디렉토리(`scenarios/`·`examples/`·`.claude/`·`app/`·`scripts/`), `main/{repo}` 의 코드 트리, `.worktrees/`, `node_modules`·`.git`·`.cache`·`dist`·`build`·`vendor` 등, `.md` 가 아닌 파일, `MEMORY_MAX_FILE_BYTES` 초과, 바이너리.
+색인 범위 밖: 루트의 다른 디렉토리(`scenarios/`·`examples/`·`.claude/`·`app/`·`scripts/`), `main/{repo}` 의 코드 트리(`dist`·`build`·`vendor` 같은 빌드 산출물 포함), 어디에 있든 `.worktrees`·`node_modules`·`.git`·`.cache`·`.next`·`.claude` 디렉토리, `.md` 가 아닌 파일, `MEMORY_MAX_FILE_BYTES` 초과, 바이너리.
+`docs/`·`main/{repo}/docs/` 아래의 `build`·`dist`·`bin`·`coverage`·`vendor` 디렉토리는 주제 이름일 수 있어 색인한다 (예: `docs/feature/build/`).
 범위 밖이어도 디스크에 있는 파일을 가리키는 링크는 산 링크다 — 감사는 `broken-link` 로 보지 않고, 그래프는 그 노드를 `out-of-scope` 로 둔다.
 크기·바이너리 게이트는 데몬과 `ingest_path` 가 같은 규칙 하나를 쓴다 — `ingest_path` 도 이런 파일은 색인하지 않고 `N개 건너뜀` 으로 알린다.
-빈 파일·frontmatter 만 있는 `.md` 도 빈 청크 하나로 색인한다 — 한 번 쓰면 다음 사이클은 건너뛴다. 본문이 없으니 판정·증류 대상은 아니다.
+이미 색인된 문서가 커지거나 바이너리가 되면 둘 다 색인 범위 밖이라 데몬이 색인과 cold store 청크에서 뺀다 (`[reconcile] remove <path> (<이유> — 색인 범위 밖)`).
+frontmatter 오류처럼 고치면 되는 실패는 색인에 있던 판을 그대로 두고 `fail` 로 알린다.
+빈 파일·frontmatter 만 있는 `.md` 도 빈 청크 하나로 색인한다 — 한 번 쓰면 다음 사이클은 건너뛴다. 본문이 없으니 판정·증류 대상은 아니고,
+검색 결과(질의어 검색·필터로만 가져오기·세션 훅)에도 나오지 않는다 (`search_filters` 의 수에는 든다).
 
 문서의 정체(`source_path`)는 디스크에 있는 철자를 유니코드 NFC 로 맞춘 경로다. macOS(APFS)는 대소문자와 NFC/NFD 를 구분하지 않아
 철자만 다른 경로가 같은 파일을 연다 — `ingest_path` 에 `docs/knowledge/LIMITS.md`(실제는 `limits.md`)나 Finder 가 NFD 로 만든 한글 이름을
@@ -130,8 +137,8 @@ launchd 가 없는 머신은 nohup 백그라운드라(`[memory-daemon] backgroun
 
 | 로그 | 뜻 |
 | --- | --- |
-| `[reconcile] scanned= indexed= stat_updated= removed= skipped= failed= cold_owned= flags=` | 스캔한 파일 / 다시 색인 / mtime 만 바뀜 / 색인에서 뺌 / 건너뜀 / 쓰기 실패 / cold 소유라 되살리지 않음 / superseded_by·deprecated 수렴 |
-| `[reconcile] skip <path> (<이유>)` · `fail <path> (<오류>)` | 색인하지 않은 파일(`size N > MAX`·`binary content`·frontmatter 오류) / 쓰다 실패한 파일 — 실패는 다음 사이클이 다시 시도하고, 나머지 파일은 계속 돈다 |
+| `[reconcile] scanned= indexed= stat_updated= removed= skipped= failed= cold_owned= flags=` | 스캔한 파일 / 다시 색인 / mtime 만 바뀜 / 색인에서 뺌 / 게이트에 걸림 / 준비·쓰기 실패 / cold 소유라 되살리지 않음 / superseded_by·deprecated 수렴 |
+| `[reconcile] skip <path> (<이유>)` · `remove <path> (<이유>)` · `fail <path> (<오류>)` | 게이트(`size N > MAX`·`binary content`)에 걸려 색인하지 않는 파일 / 색인에서 뺀 문서(디스크에 없다, 게이트에 걸렸다, 색인 범위 밖 경로) / 준비·쓰기에 실패한 파일(frontmatter 오류, 다른 workspace 의 팀, 일시적인 오류) — 실패는 색인에 있던 판을 그대로 두고 다음 사이클이 다시 시도하며, 나머지 파일은 계속 돈다 |
 | `[reconcile] handoff <path> (…)` | `ingest_path`·`ingest`·`audit -apply` 가 먼저 색인한 문서를 판정·증류·그래프로 넘긴다 (다시 쓰지 않으므로 `indexed=` 에는 세지 않는다) |
 | `[judge] superseded A ↔ B (latest-wins …)` · `(llm: 모순, 고확신 …)` · `question …` | 판정 결과 |
 | `[distill] path: summary N자, entities M` | 증류 |
@@ -660,7 +667,7 @@ ISM 이 먼저 옮긴 경우다. "갖고 있다" 의 판단:
 | `MEMORY_TIME_ZONE` | 이 머신의 시간대 | 문서의 날(`date`·`time_range` 날짜 필터, `search_filters` 날짜별 수)을 정하는 IANA 시간대 (예: `Asia/Seoul`). frontmatter `date` 는 적힌 날 그대로, 없으면 커밋·mtime 시각을 이 시간대에서 본 날. 바꾸면 `scripts/memory/run.sh ingest .` 로 이미 색인된 문서의 날을 다시 쓴다 (데몬은 내용이 바뀐 문서만 다시 쓴다) |
 | `MEMORY_RECONCILE_INTERVAL_SECONDS` | `60` | 데몬 타이머 |
 | `MEMORY_RECONCILE_DEBOUNCE_MS` | `3000` | watcher 힌트 debounce |
-| `MEMORY_MAX_FILE_BYTES` | `2097152` | 이보다 큰 파일은 건너뛴다 (데몬·`ingest_path` 모두) |
+| `MEMORY_MAX_FILE_BYTES` | `2097152` | 이보다 큰 파일은 색인하지 않는다 (데몬·`ingest_path` 모두). 이미 색인된 문서가 커지면 데몬이 색인에서 뺀다 |
 | `MEMORY_SANITY_MAX_FILES` | `5000` | 넘으면 설정 오류로 보고 색인 거부 (`REFUSED`) |
 | `MEMORY_JUDGE_ENABLED` | `true` | 판정 |
 | `MEMORY_JUDGE_WINDOW_DAYS` | `7` | 이보다 차이 나면 latest-wins, 이내면 LLM |
@@ -688,7 +695,7 @@ ISM 이 먼저 옮긴 경우다. "갖고 있다" 의 판단:
 | 검색 0건 | 색인 안 됨 / 팀이 다름 / workspace 가 다름 | `scripts/memory-daemon/run.sh status` 의 docs 수, `scripts/memory/run.sh search -team <팀> <질의>`, `MEMORY_WORKSPACE` |
 | 문서가 검색에 안 나온다 | 색인 범위 밖 (§1) — 범위 밖 파일은 로그에도 남지 않는다 | §1 의 범위 확인, `scripts/memory/run.sh ingest <path>` (범위 밖이면 "색인 대상 문서가 없습니다") |
 | 같은 파일이 철자만 다른 두 문서로 검색된다 (`LIMITS.md` 와 `limits.md`, NFC·NFD 한글 경로) | 이전 판의 `ingest_path` 가 친 철자를 그대로 `source_path` 로 썼다 | 데몬 사이클(상주 데몬 또는 `scripts/memory-daemon/run.sh once`)이 디스크의 철자(NFC)로 다시 쓰고 옛 철자의 문서를 색인에서 뺀다 (`removed=`). 같은 파일이 디스크에 있으니 cold store 청크는 지우지 않는다 |
-| `[reconcile] fail <path>` · status 의 `failed=` | 그 파일만 쓰다 실패 (다른 workspace 의 팀, 일시적인 오류) | 오류 문구대로 고친다. 일시적이면 다음 사이클이 다시 시도한다 |
+| `[reconcile] fail <path>` · status 의 `failed=` | 그 파일만 준비·쓰기에 실패 (frontmatter 오류, 다른 workspace 의 팀, 일시적인 오류) — 색인에 있던 판은 그대로다 | 오류 문구대로 고친다. 일시적이면 다음 사이클이 다시 시도한다 |
 | 구판·신판이 나란히 뜬다 | 판정 질문 대기 / knowledge 에 `supersedes` 누락 | `scripts/memory/run.sh questions` / 개정판에 `supersedes:` |
 | 판정이 전부 질문으로 온다 | `claude` CLI 미설치·미로그인 | `claude` 로 로그인, `MEMORY_CLAUDE_BIN` |
 | `다른 workspace 가 쓰는 팀입니다` | 다른 meta-repo 가 같은 팀 이름을 쓴다 | 이 meta-repo 는 다른 `MEMORY_DEFAULT_TEAM`/frontmatter team |

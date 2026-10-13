@@ -117,10 +117,11 @@ func TestSyncFileHandsOverADocumentWrittenOutsideTheDaemon(t *testing.T) {
 				t.Fatal(err)
 			}
 			var sum state.CycleSummary
-			entry, err := r.syncFile(ctx, f, cycleState{indices: indices, existing: existing}, &sum)
+			res, err := r.syncFile(ctx, f, cycleState{indices: indices, existing: existing}, &sum)
 			if err != nil {
 				t.Fatal(err)
 			}
+			entry := res.entry
 			if (entry != nil) != c.handed {
 				t.Fatalf("diff = %+v, want handed=%v", entry, c.handed)
 			}
