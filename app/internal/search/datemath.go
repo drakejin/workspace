@@ -51,8 +51,10 @@ const maxOffset = 18 * time.Hour
 // maxYear 는 받는 시각의 마지막 해다 — 날짜·시각의 연은 네 자리이고, epoch 도 그 꼴(UTC 시각)로 바꿔 보낸다.
 const maxYear = 9999
 
-// noPreference 는 벽시계를 시각으로 읽을 때 고집할 오프셋이 없다는 뜻이다 — 어떤 시간대 오프셋(±18시간 안)과도 같지 않다.
-const noPreference = 2 * maxOffset
+// parsedOffset 은 날짜·시각 경계의 벽시계가 두 번 올 때(겹침) 고르는 오프셋이다 — OpenSearch 는 적힌 벽시계를 UTC 로 읽어
+// 요청의 시간대로 옮기므로(java.time withZoneSameLocal) +00:00 이 맞으면 그쪽, 아니면 앞의 것이다 (런던 01:30 → GMT, 베를린
+// 02:30 → CEST — 재 보니 그렇다).
+const parsedOffset time.Duration = 0
 
 // isoMillis 는 epoch 기준을 OpenSearch 에 보낼 꼴이다 (UTC, 밀리초까지 — strict_date_optional_time 이 그대로 읽는다).
 const isoMillis = "2006-01-02T15:04:05.000Z"
@@ -61,6 +63,7 @@ const isoMillis = "2006-01-02T15:04:05.000Z"
 type bound struct {
 	isNow  bool
 	anchor time.Time // now 가 아니면 적힌 시각 (빠진 칸은 가장 이른 값)
+	wall   time.Time // 날짜·시각이면 적힌 벽시계 (칸을 UTC 로 둔 값) — 올려 읽을 때 빠진 칸을 끝으로 채워 다시 읽는다
 	unit   byte      // anchor 에 적힌 가장 작은 단위 — 올려 읽으면 그 단위의 끝으로 간다
 	plain  bool      // date math 없는 날짜·시각이다 (|| 뒤에 계산이 붙으면 기준 날짜는 올리지 않는다)
 	ops    []mathOp
@@ -150,8 +153,12 @@ func epochOf(s string) (time.Time, bool) {
 // OpenSearch 2.19 는 time_zone 을 epoch 밀리초에도 입혀 UTC 벽시계를 그 시간대의 벽시계로 읽는다 (서울이면 9시간 이르다 — 재
 // 보니 그렇다). 시간대를 적은 시각은 그대로 읽고 뒤의 date math 만 time_zone 에서 계산하므로, 바꾼 값은 다른 경계처럼
 // time_zone 을 붙여 보내도 된다. epoch 기준이 아니면 v 그대로다.
+// 네 자리 수(2026)는 epoch 가 아니라 연도다 — OpenSearch 도, parseAbsolute 도 날짜 꼴을 먼저 읽는다.
 func epochAsISO(v string) string {
 	anchor, ops, anchored := strings.Cut(v, "||")
+	if absoluteBound.MatchString(anchor) {
+		return v
+	}
 	t, ok := epochOf(anchor)
 	if !ok {
 		return v
@@ -162,10 +169,10 @@ func epochAsISO(v string) string {
 	return t.Format(isoMillis)
 }
 
-// inZone 은 UTC 로 둔 벽시계 wall 을 loc 의 벽시계로 읽은 시각이다 — 날짜·시각 경계는 OpenSearch(java.time)처럼 겹치면 앞의
-// 것, DST 틈에 빠지면 틈 앞의 오프셋으로 읽는다 (resolveLocal).
+// inZone 은 UTC 로 둔 벽시계 wall 을 loc 의 벽시계로 읽은 시각이다 — 날짜·시각 경계는 OpenSearch(java.time)처럼 겹치면
+// +00:00 쪽(맞지 않으면 앞의 것), DST 틈에 빠지면 틈 앞의 오프셋으로 읽는다 (parsedOffset·resolveLocal).
 func inZone(wall time.Time, loc *time.Location) time.Time {
-	return resolveLocal(wall, loc, noPreference)
+	return resolveLocal(wall, loc, parsedOffset)
 }
 
 // wallLike 는 t 의 시간대에서 벽시계(넘친 칸은 다음 칸으로 넘긴다)가 가리키는 시각이다 — date math 의 더하기·반올림 뒤처럼,
@@ -220,11 +227,11 @@ func dateBound(m []string, loc *time.Location) (bound, bool) {
 		unit = exact
 	}
 	// time.Date 는 넘친 칸을 다음 칸으로 넘겨 맞추므로 UTC 로 만들어 적은 값 그대로인지 본다 (시간대의 DST 틈·겹침은 inZone 이 고른다)
-	check := time.Date(f[0], time.Month(f[1]), f[2], f[3], f[4], f[5], 0, time.UTC)
-	if int(check.Month()) != f[1] || check.Day() != f[2] || check.Hour() != f[3] || check.Minute() != f[4] || check.Second() != f[5] {
+	wall := time.Date(f[0], time.Month(f[1]), f[2], f[3], f[4], f[5], nanos, time.UTC)
+	if int(wall.Month()) != f[1] || wall.Day() != f[2] || wall.Hour() != f[3] || wall.Minute() != f[4] || wall.Second() != f[5] {
 		return bound{}, false
 	}
-	return bound{anchor: inZone(time.Date(f[0], time.Month(f[1]), f[2], f[3], f[4], f[5], nanos, time.UTC), zone), unit: unit, plain: true}, true
+	return bound{anchor: inZone(wall, zone), wall: wall, unit: unit, plain: true}, true
 }
 
 // zoneOf 는 시각에 붙은 시간대다 — 없으면 loc, Z 면 UTC, ±HH[:MM]·±HHMM 이면 그 오프셋 (±18:00 까지).
@@ -281,12 +288,13 @@ func rangeEdges(tr model.TimeRange, now time.Time, loc *time.Location) (from, to
 }
 
 // at 은 경계가 가리키는 시각이다 — OpenSearch 처럼 from(gte)은 그대로, to(lte)는 올려 읽는다(roundUp): 날짜·시각은 빠진 시각
-// 칸을 끝으로(빠진 월·일은 1 이라 to=2026-10 은 10월 1일 끝까지다 — 달 전체는 2026-10||/M), /단위 반올림은 그 단위의
-// 끝으로. date math 는 요청의 시간대(loc)에서 계산한다.
+// 칸을 끝으로 채운 벽시계를(빠진 월·일은 1 이라 to=2026-10 은 10월 1일 끝까지다 — 달 전체는 2026-10||/M), /단위 반올림은 그
+// 단위의 끝으로. 채운 벽시계는 그대로 다시 읽으므로 30분에 바뀌는 시간대도 02 → 02:59:59.999 다. date math 는 요청의
+// 시간대(loc)에서 계산한다.
 func (b bound) at(now time.Time, loc *time.Location, roundUp bool) time.Time {
 	if b.plain {
-		if roundUp {
-			return endOf(b.anchor, roundUpUnit(b.unit))
+		if roundUp && b.unit != exact {
+			return inZone(endOf(b.wall, roundUpUnit(b.unit)), b.anchor.Location())
 		}
 		return b.anchor
 	}

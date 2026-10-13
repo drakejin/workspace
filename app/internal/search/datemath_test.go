@@ -71,7 +71,8 @@ func TestLocationOf(t *testing.T) {
 
 // R4-query-a-1: 서머타임이 바뀌는 날의 벽시계를 OpenSearch 2.19(java.time)가 읽는 그대로 읽는다 — UTC 서쪽(LA)만이 아니라
 // 동쪽(베를린·런던·로드하우)도. DST 틈에 빠진(없는) 벽시계는 틈 앞의 오프셋으로 읽어 틈 길이만큼 늦어지고, 두 번 오는(겹치는)
-// 벽시계는 앞의 것이다. date math 의 더하기·반올림이 틈·겹침에 닿으면 계산하던 시각의 오프셋을 고집한다(맞지 않으면 앞과 같다).
+// 벽시계는 +00:00 이 그중 하나면 그쪽(런던·리스본), 아니면 앞의 것이다. 시각만 적은 경계를 올려 읽으면 빠진 칸을 끝으로 채운
+// 벽시계를 같은 규칙으로 읽는다. date math 의 더하기·반올림이 틈·겹침에 닿으면 계산하던 시각의 오프셋을 고집한다(맞지 않으면 앞과 같다).
 // 기댓값은 모두 OpenSearch 2.19 의 _validate/query?explain 이 보인 경계다 (datemath_e2e_test.go 가 실제 클러스터와 견준다).
 // 예전에는 time.Date 가 고르는 쪽에 기댔는데, 그 쪽이 UTC 서쪽과 동쪽에서 달라 베를린 02:30(틈)을 한 시간 이르게 읽었다.
 func TestBoundQuirksMatchOpenSearch(t *testing.T) {
@@ -112,6 +113,14 @@ var dstCases = []struct {
 	{"Europe/Berlin", "2026-10-25T02:30||/h", true, utc(2026, 10, 25, 0, 59, 59).Add(999 * time.Millisecond)},
 	{"Europe/Berlin", "2026-03-29T02", false, utc(2026, 3, 29, 1, 0, 0)},
 	{"Europe/Berlin", "2026-03-29T02", true, utc(2026, 3, 29, 1, 59, 59).Add(999 * time.Millisecond)},
+	// 겹침의 두 오프셋 중 하나가 +00:00 이면 OpenSearch 는 그쪽을 고른다 (UTC 로 읽은 벽시계를 그 시간대로 옮긴다)
+	{"Europe/London", "2026-10-25T01:30", false, utc(2026, 10, 25, 1, 30, 0)}, // 겹침 → GMT (앞의 BST 가 아니다)
+	{"Europe/London", "2026-10-25T01:30", true, utc(2026, 10, 25, 1, 30, 59).Add(999 * time.Millisecond)},
+	{"Europe/Lisbon", "2026-10-25T01:30", false, utc(2026, 10, 25, 1, 30, 0)},
+	{"Europe/London", "2026-10-25T01:30||+1h", false, utc(2026, 10, 25, 2, 30, 0)},
+	// 시각만 적은 경계를 올려 읽으면 빠진 칸을 끝(…:59:59.999)으로 채운 벽시계를 읽는다 — 30분·45분에 바뀌는 시간대도
+	{"Australia/Lord_Howe", "2026-10-04T02", true, utc(2026, 10, 3, 15, 59, 59).Add(999 * time.Millisecond)}, // 02:59:59.999 +11:00
+	{"Pacific/Chatham", "2026-04-05T03", true, utc(2026, 4, 4, 15, 14, 59).Add(999 * time.Millisecond)},      // 03:59:59.999 +12:45
 }
 
 func utc(y int, mo time.Month, d, h, mi, s int) time.Time {

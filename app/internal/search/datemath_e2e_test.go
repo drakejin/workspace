@@ -34,6 +34,10 @@ func TestBoundsResolveLikeOpenSearch(t *testing.T) {
 		{"Asia/Seoul", "1759312800000", true, utc(2025, 10, 1, 10, 0, 0)},
 		{"Asia/Seoul", "1759312800000||/d", false, utc(2025, 9, 30, 15, 0, 0)},
 		{"Asia/Seoul", "1759312800000||+1d/d", true, utc(2025, 10, 2, 14, 59, 59).Add(999 * time.Millisecond)},
+		// 네 자리 수는 epoch 가 아니라 연도다
+		{"Asia/Seoul", "2026", false, utc(2025, 12, 31, 15, 0, 0)},
+		{"Asia/Seoul", "2026", true, utc(2026, 1, 1, 14, 59, 59).Add(999 * time.Millisecond)},
+		{"Asia/Seoul", "2026||+1M", false, utc(2026, 1, 31, 15, 0, 0)},
 	}, dstCases...)
 	for _, tc := range cases {
 		loc, err := time.LoadLocation(tc.zone)

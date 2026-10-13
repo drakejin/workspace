@@ -100,6 +100,8 @@ func TestValidateAcceptsRangesAcrossDSTGapsEastOfUTC(t *testing.T) {
 		{"Europe/Berlin", model.TimeRange{From: "2026-03-29T01:45", To: "2026-03-29T02:30"}},
 		{"Europe/London", model.TimeRange{From: "2026-03-29T00:45", To: "2026-03-29T01:30"}},
 		{"America/Los_Angeles", model.TimeRange{From: "2026-03-08T01:45", To: "2026-03-08T02:30"}},
+		// 겹침(01:00~02:00 이 두 번)의 01:30 을 OpenSearch 는 GMT(01:30Z)로 읽는다 — 00:50Z 부터는 뒤집히지 않았다
+		{"Europe/London", model.TimeRange{From: "2026-10-25T00:50Z", To: "2026-10-25T01:30"}},
 	}
 	for _, r := range ranges {
 		if err := Validate(Request{TimeRange: r.tr, TimeZone: r.zone}); err != nil {

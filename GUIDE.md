@@ -351,8 +351,9 @@ team=demo · project=order-api, time_range=2026-10-01~ · 문서 3건 (필터, �
 프로젝트는 대소문자를 가리지 않는다(`-project Alpha-API` 도 `alpha-api` 를 찾는다). `-from`/`-to`(`time_range`)는 OpenSearch 가 읽는 꼴 중 흔한 것만 받는다 —
 날짜(`2026-10-01`, `2026-10`, `2026`), 시각(`2026-10-01T09`, `2026-10-01T09:00:00.5+09:00`, 시간대 생략 가능), epoch 밀리초, date math(`now-30d`, `now-d`, `now-7d/d`, `2026-10-01||+1M`).
 OpenSearch 가 읽더라도 드문 꼴(쉼표 소수 `…:00,5`, 초까지 적은 오프셋 `+09:00:00`, 소수 epoch, 끝의 `T`, 다섯 자리 연도, 오프셋 뒤의 `Z`)과 없는 날(`2026-02-30` — OpenSearch 는 `-to` 에서 그달 끝으로 당긴다)은 거부한다.
-epoch 밀리초는 시간대를 입히지 않은 그 시각이다 (OpenSearch 는 epoch 에도 `time_zone` 을 입혀 서울이면 9시간 이르게 읽으므로 같은 시각의 UTC 표기로 바꿔 보낸다 — 뒤의 date math 는 다른 경계처럼 `MEMORY_TIME_ZONE` 에서 계산한다).
-시간대 없는 시각과 date math 는 서머타임이 바뀌는 날도 OpenSearch(java.time)처럼 읽는다 — 없는 시각(틈)은 틈 길이만큼 늦게, 두 번 오는 시각(겹침)은 앞의 것으로.
+epoch 밀리초는 시간대를 입히지 않은 그 시각이다 — 네 자리 수(`2026`, `2026||+1M`)는 OpenSearch 처럼 epoch 가 아니라 연도로 읽는다 (OpenSearch 는 epoch 에도 `time_zone` 을 입혀 서울이면 9시간 이르게 읽으므로 같은 시각의 UTC 표기로 바꿔 보낸다 — 뒤의 date math 는 다른 경계처럼 `MEMORY_TIME_ZONE` 에서 계산한다).
+시간대 없는 시각과 date math 는 서머타임이 바뀌는 날도 OpenSearch(java.time)처럼 읽는다 — 없는 시각(틈)은 틈 길이만큼 늦게, 두 번 오는 시각(겹침)은 +00:00 이 그중 하나면 그쪽(런던·리스본의 10월 01:30 은 GMT), 아니면 앞의 것(베를린 02:30 은 CEST)으로.
+시각만 적은 `-to`(`2026-10-04T02`)는 빠진 칸을 끝(`02:59:59.999`)으로 채운 벽시계를 같은 규칙으로 읽는다 — 30분에 바뀌는 시간대(로드하우)도 OpenSearch 와 같다.
 `yesterday` 같은 값이나 뒤집힌 범위(`-from` 이 `-to` 보다 늦다 — 날짜·시각·date math 가 섞여도 OpenSearch 처럼 계산한다)는 OpenSearch 에 묻기 전에
 무엇이 틀렸는지(뒤집혔으면 두 경계를 읽은 시각까지) 알리며 거부한다. 연·월만 적은 `-to 2026-10` 은 OpenSearch 규칙대로 10월 1일 끝까지다 — 달 전체는 `-to '2026-10||/M'`.
 팀·org 의 hot 색인이 없으면 0건이 아니라 `team=… 의 hot 색인이 없습니다` 로 구별하고 까닭 셋(이름 오타, 아직 적재 전, 문서가 모두 cold 로 내려감 — org 는 하나 더: 검색은 org alias 를 만들지 않으므로 `MEMORY_TEAM_ORGS` 를 바꾼 뒤 `scripts/memory/run.sh bootstrap`·데몬 재시작 전)과

@@ -147,6 +147,21 @@ func TestEpochBoundIsSentAsUTCInstant(t *testing.T) {
 	}
 }
 
+// 네 자리 수(2026, 2026||+1M)는 epoch 밀리초가 아니라 연도다 — OpenSearch 는 날짜 꼴을 epoch 보다 먼저 읽고, 검사(parseAbsolute)
+// 도 같은 순서다. 연도를 epoch 로 바꿔 보내면 1970-01-01T00:00:02.026Z 가 되어 조용히 엉뚱한 문서가 나온다.
+func TestYearBoundIsSentAsTyped(t *testing.T) {
+	for _, v := range []string{"2026", "2026||+1M", "9999||/y"} {
+		q := BuildQuery(Request{Query: "x", TimeZone: "Asia/Seoul", TimeRange: model.TimeRange{From: v}})
+
+		got, _ := json.Marshal(filterOf(t, q))
+
+		want := `[{"range":{"event_time":{"gte":"` + v + `","time_zone":"Asia/Seoul"}}}]`
+		if string(got) != want {
+			t.Errorf("연도 경계 %q\n got  %s\n want %s", v, got, want)
+		}
+	}
+}
+
 func TestFilterOnlyListingIsOneHitPerDocumentNewestFirst(t *testing.T) {
 	q := BuildQuery(Request{Project: "beta-web"})
 	b := q["query"].(map[string]any)["bool"].(map[string]any)
