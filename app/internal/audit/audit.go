@@ -316,7 +316,8 @@ func (r *runner) checkColdCopy(ctx context.Context, team, key, rel string, head 
 		return r.removeChunks(ctx, key, rel, orphanChunksDetail)
 	}
 	r.add(StrandedCold, rel, fmt.Sprintf("%s 의 스냅샷 어디에도 없어 cold store 사본만 남았다 — 되살리려면 %s/%s 를 hot 의 %s 에 다시 두면 "+
-		"데몬이 색인하고 다음 tier 가 다시 cold 로 보낸다", index, r.Cold.Location(), cold.RawKey(team, rel), rel), false)
+		"데몬이 색인한다. git meta-repo 면 그 파일을 커밋까지 해야 다음 tier 가 다시 cold 로 보낸다 (커밋 전에는 tier 가 hot 에 남긴다)",
+		index, r.Cold.Location(), cold.RawKey(team, rel), rel), false)
 	return nil
 }
 

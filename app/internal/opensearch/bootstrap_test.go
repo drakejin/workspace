@@ -92,6 +92,29 @@ func TestPolicyFromAnotherSettingIsOnlyClaimedByTheBootstrapCommand(t *testing.T
 	}
 }
 
+// OPS-9: 이 판의 본문에서 뺀 필드가 클러스터 정책에 남아 있으면 다른 정책이다 — 클러스터가 덧붙인 필드(시각·판·retry)만 빼고
+// 본다. 그러지 않으면 코드가 정책에서 무언가를 뺐을 때 bootstrap 명령으로도 클러스터 정책을 고칠 수 없다. 설명은 같고 본문만
+// 다르면 경고는 그렇다고 말한다 (이 레포를 업데이트해 정책 본문이 바뀌었다).
+func TestPolicyWithAFieldThisVersionDroppedIsDifferent(t *testing.T) {
+	cluster := clusterShaped(t, HotColdPolicyBody(60, "mem-cold"))
+	mine := HotColdPolicyBody(60, "mem-cold")
+	delete(mine["policy"].(map[string]any), "ism_template") // 이 판이 정책에서 뺀 필드
+
+	os := policyCluster(cluster)
+	var warned warnings
+	err := ensurePolicy(context.Background(), os, HotColdPolicy, mine, claimCluster, warned.add)
+	if err != nil || strings.Join(os.calls, "|") != "GET /_plugins/_ism/policies/mem-hot-cold|PUT /_plugins/_ism/policies/mem-hot-cold" {
+		t.Errorf("bootstrap 명령은 뺀 필드까지 맞춘다: %v %v", os.calls, err)
+	}
+
+	os = policyCluster(cluster)
+	warned = nil
+	err = ensurePolicy(context.Background(), os, HotColdPolicy, mine, leaveCluster, warned.add)
+	if err != nil || len(os.calls) != 1 || len(warned) != 1 || !strings.Contains(warned[0], "본문") {
+		t.Errorf("시작하는 프로세스는 본문이 다르다고 경고만 한다: %v %v %v", os.calls, warned, err)
+	}
+}
+
 func TestPolicyIsCreatedWhenMissing(t *testing.T) {
 	for _, mode := range []clusterWrite{leaveCluster, claimCluster} {
 		os := policyCluster(nil)

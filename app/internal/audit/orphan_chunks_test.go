@@ -169,5 +169,9 @@ func TestOrphanChunksReportsStrandedColdDocumentsWithoutDeleting(t *testing.T) {
 		if f.Kind == StrandedCold && (f.Fixed || !strings.Contains(f.Detail, cold.RawKey(unitTeam, f.Path))) {
 			t.Errorf("stranded-cold 는 보고만 하고 되살리는 길(raw 위치)을 알린다: %+v", f)
 		}
+		// git meta-repo 에서 되살린 파일은 추적되지 않는다 (tier 가 git rm 했다) — 커밋해야 tier 가 다시 cold 로 보낸다
+		if f.Kind == StrandedCold && !strings.Contains(f.Detail, "커밋") {
+			t.Errorf("되살리는 길은 git meta-repo 면 커밋까지라고 말한다: %+v", f)
+		}
 	}
 }

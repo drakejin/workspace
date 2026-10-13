@@ -328,6 +328,7 @@ type sourceDoc struct {
 	team       string
 	sourcePath string
 	contentSHA string
+	ingestedAt string // cold store 청크에서 읽은 적재 시각 (hotCandidates 만 채운다)
 }
 
 // sourcesIn 은 인덱스 안의 이 workspace 문서다 (다른 meta-repo 의 원본은 건드리지 않는다).
@@ -365,15 +366,17 @@ func hotCandidates(ctx context.Context, store Store, root, team string) (map[str
 		}
 		head := chunks[0]
 		index := naming.IndexFor(head)
-		out[index] = append(out[index], sourceDoc{team: head.Team, sourcePath: head.SourcePath, contentSHA: head.ContentSHA})
+		out[index] = append(out[index], sourceDoc{team: head.Team, sourcePath: head.SourcePath, contentSHA: head.ContentSHA, ingestedAt: head.IngestedAt})
 	}
 	return out, nil
 }
 
-// coldOwned 는 docs 중 index 의 스냅샷이 그 내용을 담은 문서다.
+// coldOwned 는 docs 중 index 의 스냅샷이 그 내용을 담은 문서다. hotCandidates 가 읽어 둔 적재 시각을 판단기에 넘겨
+// ISM 달에서 같은 청크 JSONL 을 다시 읽지 않게 한다.
 func coldOwned(ctx context.Context, own *Ownership, team, index string, docs []sourceDoc) ([]sourceDoc, error) {
 	var out []sourceDoc
 	for _, d := range docs {
+		own.knowIngested(team, d.sourcePath, d.contentSHA, d.ingestedAt)
 		owned, err := own.Owns(ctx, team, index, d.sourcePath, d.contentSHA)
 		if err != nil {
 			return nil, err
@@ -452,17 +455,33 @@ func verifiedCopy(ctx context.Context, store Store, root string, d sourceDoc) (b
 	return ok && document.SHA256(raw) == d.contentSHA, nil // cold store 에 같은 원본이 없으면 지우지 않는다
 }
 
-// gitWorkTree 는 root 가 git working tree 안인가다.
+// notAGitRepository 는 git 레포 밖에서 git 이 내는 문구다 (gitOutput 은 LC_ALL=C 로 돌려 번역되지 않는다).
+const notAGitRepository = "not a git repository"
+
+// gitWorkTree 는 root 의 원본을 git 으로 다루는가다: root 가 git 레포의 꼭대기이거나, 바깥 레포가 root 아래 파일을 추적한다
+// (모노레포의 한 디렉토리). 바깥 레포가 root 를 추적하지 않으면(홈 디렉토리의 dotfiles 레포 등) git 레포가 아닌 meta-repo 로
+// 본다 — 그 레포에 커밋하라는 안내는 맞지 않다. git 이 레포를 거부하면(소유자가 달라 믿지 않는다 등) 커밋 여부를 알 수 없어
+// 에러다 — git 레포가 아니라고 보고 지우면 커밋 안 된 원본이 cold store 에만 남는다.
 func gitWorkTree(ctx context.Context, root string) (bool, error) {
-	out, err := gitOutput(ctx, root, "rev-parse", "--is-inside-work-tree")
-	var exit *exec.ExitError
-	if errors.As(err, &exit) {
-		return false, nil // git 레포가 아니다
+	prefix, err := gitOutput(ctx, root, "rev-parse", "--show-prefix")
+	if err != nil && strings.Contains(prefix, notAGitRepository) {
+		return false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("git 으로 %s 를 확인하지 못해 hot 원본을 지우지 않았습니다: %w", root, err)
+		return false, gitCheckError(root, err, prefix)
 	}
-	return strings.TrimSpace(out) == "true", nil
+	if strings.TrimSpace(prefix) == "" {
+		return true, nil // root 가 레포의 꼭대기다
+	}
+	tracked, err := gitOutput(ctx, root, "ls-files", "--", ".")
+	if err != nil {
+		return false, gitCheckError(root, err, tracked)
+	}
+	return strings.TrimSpace(tracked) != "", nil
+}
+
+func gitCheckError(root string, err error, out string) error {
+	return fmt.Errorf("git 으로 %s 를 확인하지 못해 hot 원본을 지우지 않았습니다: %w %s", root, err, strings.TrimSpace(out))
 }
 
 // committedAsIs 는 rel 을 git 이 추적하고 지금 내용이 HEAD 와 같은가다 (지워도 git 히스토리에서 되살릴 수 있다).
@@ -492,6 +511,7 @@ func removeOriginal(ctx context.Context, root, rel string, inGit bool) error {
 func gitOutput(ctx context.Context, root string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "LC_ALL=C") // 문구(notAGitRepository)를 번역하지 않게
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }

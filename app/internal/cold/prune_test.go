@@ -32,6 +32,15 @@ func (s *countingStore) Get(ctx context.Context, key string) (string, bool, erro
 // coldMonthFixture 는 팀 t 의 cold 로 간 달 months 개를 만든다 — 달마다 tier 스냅샷 하나와 문서 docsPerMonth 개
 // (목록·raw·청크 JSONL, 그리고 내용이 같은 hot 원본). 스냅샷 목록을 돌려주는 OpenSearch 와 hot 원본 경로를 돌려준다.
 func coldMonthFixture(t *testing.T, store Store, root string, months, docsPerMonth int) (*fakeOS, []string) {
+	return monthFixture(t, store, root, months, docsPerMonth, false)
+}
+
+// ismMonthFixture 는 같은 달들을 ISM 이 옮긴 것이다 — 달마다 목록 없는 ism-cold 스냅샷 하나 (문서를 적재한 한참 뒤에 떴다).
+func ismMonthFixture(t *testing.T, store Store, root string, months, docsPerMonth int) (*fakeOS, []string) {
+	return monthFixture(t, store, root, months, docsPerMonth, true)
+}
+
+func monthFixture(t *testing.T, store Store, root string, months, docsPerMonth int, ism bool) (*fakeOS, []string) {
 	t.Helper()
 	ctx := context.Background()
 	var snaps []any
@@ -39,6 +48,9 @@ func coldMonthFixture(t *testing.T, store Store, root string, months, docsPerMon
 	for m := 1; m <= months; m++ {
 		index := fmt.Sprintf("mem-t-2026.%02d", m)
 		snap := "cold-" + index + "-20261001t000000-000000001"
+		if ism {
+			snap = fmt.Sprintf("ism-cold-2026.10.01-00:00:%02d.000", m)
+		}
 		snaps = append(snaps, map[string]any{"snapshot": snap, "indices": []string{index}, "state": snapshotSuccess, "start_time": "2026-10-01T00:00:00.000Z"})
 		var entries []ManifestEntry
 		for d := 0; d < docsPerMonth; d++ {
@@ -55,7 +67,9 @@ func coldMonthFixture(t *testing.T, store Store, root string, months, docsPerMon
 			entries = append(entries, ManifestEntry{SourcePath: rel, ContentSHA: sha})
 			hot = append(hot, rel)
 		}
-		mustDo(t, AppendManifest(ctx, store, "t", index, snap, entries))
+		if !ism {
+			mustDo(t, AppendManifest(ctx, store, "t", index, snap, entries))
+		}
 	}
 	fake := &fakeOS{route: func(method, path string, _ map[string]any) (any, error) {
 		if method == http.MethodGet && path == "/_snapshot/mem-cold/_all" {
@@ -93,6 +107,34 @@ func TestPruneReadsEachChunkFileOnce(t *testing.T) {
 	if strings.Join(removed, ",") != strings.Join(hot, ",") {
 		t.Errorf("치운 원본 = %v, want %v", removed, hot)
 	}
+	assertChunkFilesReadOnce(t, store)
+}
+
+// OPS-12: ISM 이 옮긴 달(목록 없음)은 소유를 청크의 적재 시각으로 판단한다 — prune 이 이미 읽은 청크 JSONL 의 적재 시각을
+// 쓰고, 문서마다 같은 청크 JSONL 을 다시 읽지 않는다.
+func TestPruneOfISMMonthsReadsEachChunkFileOnce(t *testing.T) {
+	cfg := tierConfig(t)
+	store := &countingStore{Store: NewLocalStore(t.TempDir()), gets: map[string]int{}}
+	fake, hot := ismMonthFixture(t, store, cfg.MetaRepoRoot, 2, 3)
+
+	decisions, err := pruneArchived(context.Background(), fake, store, cfg, "t", map[string]bool{})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	var removed []string
+	for _, d := range decisions {
+		removed = append(removed, d.RemovedFiles...)
+	}
+	sort.Strings(removed)
+	if strings.Join(removed, ",") != strings.Join(hot, ",") {
+		t.Errorf("ISM 스냅샷 전에 적재된 원본을 치운다 = %v, want %v", removed, hot)
+	}
+	assertChunkFilesReadOnce(t, store)
+}
+
+func assertChunkFilesReadOnce(t *testing.T, store *countingStore) {
+	t.Helper()
 	for key, n := range store.gets {
 		if strings.HasPrefix(key, ChunksPrefix("t")) && n > 1 {
 			t.Errorf("%s 를 %d번 읽었다 (한 번이면 된다)", key, n)

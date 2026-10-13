@@ -212,9 +212,23 @@ func (o *Ownership) judgeISM(ctx context.Context, team, sourcePath, contentSHA s
 	return verdictStranded, nil
 }
 
+// ingestKey 는 적재 시각 기억의 키다 (청크 키 + 내용 sha).
+func ingestKey(team, sourcePath, contentSHA string) string {
+	return ChunksKey(team, sourcePath) + "\x00" + contentSHA
+}
+
+// knowIngested 는 호출하는 쪽이 이미 읽은 cold store 청크(내용 contentSHA)의 적재 시각을 기억해 둔다 — 같은 청크 JSONL 을
+// 다시 읽지 않게 (tier 의 prune 은 팀의 청크를 한 번 읽어 둔다). 빈 값은 모른다(zero)로 기억한다.
+func (o *Ownership) knowIngested(team, sourcePath, contentSHA, ingestedAt string) {
+	at := model.ParseTime(ingestedAt)
+	o.mu.Lock()
+	o.ingested[ingestKey(team, sourcePath, contentSHA)] = at
+	o.mu.Unlock()
+}
+
 // ingestedAt 은 cold store 청크에 남은 이 내용의 적재 시각이다. 사본이 없거나 다른 내용이면 zero (모른다).
 func (o *Ownership) ingestedAt(ctx context.Context, team, sourcePath, contentSHA string) (time.Time, error) {
-	key := ChunksKey(team, sourcePath) + "\x00" + contentSHA
+	key := ingestKey(team, sourcePath, contentSHA)
 	o.mu.Lock()
 	at, seen := o.ingested[key]
 	o.mu.Unlock()

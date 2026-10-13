@@ -133,16 +133,16 @@ func ensurePolicy(ctx context.Context, c Client, id string, body map[string]any,
 		err = c.Do(ctx, http.MethodPut, path, body, nil, nil)
 	case err != nil:
 		return err
-	case hasAll(existing.Policy, normalized(body["policy"])):
+	case samePolicy(existing.Policy, normalized(body["policy"])):
 		return nil
 	case mode == leaveCluster:
-		warn("[bootstrap] 경고: ISM 정책 %s 이 클러스터에 다른 내용으로 있어 덮어쓰지 않습니다 — 클러스터: %q, 이 설정: %q. "+
+		warn("[bootstrap] 경고: ISM 정책 %s 이 클러스터에 다른 내용으로 있어 덮어쓰지 않습니다 — %s. "+
 			"정책은 클러스터에 하나라(같은 스택을 쓰는 모든 workspace 의 새 mem-* 인덱스에 걸린다) 이 설정으로 바꾸려면 %s",
-			id, description(existing.Policy), description(body["policy"]), claimCommand)
+			id, policyDifference(existing.Policy, body["policy"], ", 이 설정: "), claimCommand)
 		return nil
 	default:
-		warn("[bootstrap] ISM 정책 %s 을 이 설정으로 바꿉니다 — 클러스터: %q → %q (같은 스택을 쓰는 모든 workspace 의 새 mem-* 인덱스에 걸린다)",
-			id, description(existing.Policy), description(body["policy"]))
+		warn("[bootstrap] ISM 정책 %s 을 이 설정으로 바꿉니다 — %s (같은 스택을 쓰는 모든 workspace 의 새 mem-* 인덱스에 걸린다)",
+			id, policyDifference(existing.Policy, body["policy"], " → "))
 		err = c.Do(ctx, http.MethodPut, path, body, url.Values{
 			"if_seq_no":       {strconv.FormatInt(existing.SeqNo, 10)},
 			"if_primary_term": {strconv.FormatInt(existing.PrimaryTerm, 10)},
@@ -153,6 +153,15 @@ func ensurePolicy(ctx context.Context, c Client, id string, body map[string]any,
 		return nil
 	}
 	return err
+}
+
+// policyDifference 는 클러스터 정책과 이 판의 정책이 어떻게 다른가다. 설명(hot 기간·repository)이 다르면 두 설명을 sep 로 잇고,
+// 설명이 같으면 본문만 다르다고 말한다 — 이 레포를 업데이트해 코드가 정책 본문을 바꿨거나, 다른 판의 프로세스가 썼다.
+func policyDifference(cluster, mine any, sep string) string {
+	if theirs, ours := description(cluster), description(mine); theirs != ours {
+		return fmt.Sprintf("클러스터: %q%s%q", theirs, sep, ours)
+	}
+	return fmt.Sprintf("설명(%q)은 같고 본문이 다르다 — 이 레포를 업데이트해 정책 본문이 바뀌었거나 다른 판의 프로세스가 썼다", description(mine))
 }
 
 // description 은 정책의 설명이다 (hot 기간·스냅샷 repository 가 들어 있다).
@@ -175,28 +184,26 @@ func normalized(v any) any {
 	return out
 }
 
-// hasAll 은 want 의 모든 값이 got 에 같은 값으로 있는가다. 클러스터가 덧붙인 필드(시각·판·retry 기본값)는 보지 않는다.
+// clusterAddedPolicyKeys 는 클러스터가 정책을 돌려줄 때 덧붙이는 필드다 (판·시각·action 의 retry 기본값, 보안 플러그인의 user).
+var clusterAddedPolicyKeys = map[string]bool{
+	"policy_id": true, "last_updated_time": true, "schema_version": true, "error_notification": true, "retry": true, "user": true,
+}
+
+// samePolicy 는 클러스터가 돌려준 정책 got 이 이 판의 정책 want 와 같은가다. want 의 값은 모두 같아야 하고, got 에만 있는 필드는
+// 클러스터가 덧붙인 것(clusterAddedPolicyKeys)이나 null 이어야 한다 — 이 판이 본문에서 뺀 필드가 클러스터에 남아 있으면 다르다.
 // 배열은 길이와 순서까지 같아야 한다.
-func hasAll(got, want any) bool {
+func samePolicy(got, want any) bool {
 	switch w := want.(type) {
 	case map[string]any:
 		g, ok := got.(map[string]any)
-		if !ok {
-			return false
-		}
-		for k, v := range w {
-			if !hasAll(g[k], v) {
-				return false
-			}
-		}
-		return true
+		return ok && onlyClusterAdded(g, w) && sameFields(g, w)
 	case []any:
 		g, ok := got.([]any)
 		if !ok || len(g) != len(w) {
 			return false
 		}
 		for i := range w {
-			if !hasAll(g[i], w[i]) {
+			if !samePolicy(g[i], w[i]) {
 				return false
 			}
 		}
@@ -204,6 +211,26 @@ func hasAll(got, want any) bool {
 	default:
 		return reflect.DeepEqual(got, want)
 	}
+}
+
+// sameFields 는 want 의 필드가 모두 got 에 같은 값으로 있는가다.
+func sameFields(got, want map[string]any) bool {
+	for k, v := range want {
+		if !samePolicy(got[k], v) {
+			return false
+		}
+	}
+	return true
+}
+
+// onlyClusterAdded 는 got 에만 있는 필드가 모두 클러스터가 덧붙인 것(또는 null)인가다.
+func onlyClusterAdded(got, want map[string]any) bool {
+	for k, v := range got {
+		if _, mine := want[k]; !mine && v != nil && !clusterAddedPolicyKeys[k] {
+			return false
+		}
+	}
+	return true
 }
 
 // IndexAliases 는 새 인덱스에 붙일 alias 다: 팀 hot alias, 그리고 팀이 org 에 속하면 org alias.

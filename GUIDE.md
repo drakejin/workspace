@@ -74,6 +74,7 @@ NFC 로 친 경로를 줘도 디스크의 철자 하나로 적재하고, 주제(
 1. Docker 확인 → 2. Go 1.25 (`app/mise.toml`, mise 가 있으면 설치) → 3. 빌드(`.cache/bin/memory-mcp`, `.cache/bin/memory-daemon`)
 → 4. `docker compose up -d` (OpenSearch 2.19.2 + Neo4j 5.26) → 5. 둘 다 응답할 때까지 최대 5분 대기
 → 6. `memory-daemon -once`: 인덱스 템플릿·매핑·ISM 정책 둘·스냅샷 repository·org alias 를 맞추고 사이클 1회(색인 + 판정 + 그래프).
+(단 ISM 정책·스냅샷 repository 는 클러스터 전역이라 없을 때만 만든다 — 다른 내용으로 이미 있으면 덮어쓰지 않고 `[bootstrap] 경고` 만 남긴다. 바꾸는 것은 `scripts/memory/run.sh bootstrap`, §8)
 
 ```
 [memory-init] docker: ok
@@ -590,7 +591,7 @@ knowledge 인덱스는 `mem-knowledge-keep`(우선순위 200)이라 ISM 이 건�
 | `unindexed` | 파일이 있는데 색인에도 cold 에도 없다 | 색인한다 (다음 데몬 사이클이 판정·증류·그래프로 넘긴다) |
 | `stale-content` | 색인 내용(sha)이 파일과 다르다 (stat 이 보존된 복사 등) | 다시 색인한다 (다음 데몬 사이클이 판정·증류·그래프로 넘긴다) |
 | `orphan-chunks` | cold store 에 청크만 남았다. 또는 옛 철자(대소문자·NFD)의 청크 사본 — 같은 파일의 지금 철자 키가 따로 있을 때 (S3 처럼 철자를 가리는 보관소) | 지운다 (raw 원본은 이력이라 남긴다) |
-| `stranded-cold` | cold 로 간 달의 문서인데 어느 스냅샷에도 없다 — 담았던 스냅샷이 지워졌거나(예전 판 archive 의 손상, 손으로 지움), ISM 스냅샷 뒤에 그 달로 적재됐다. cold store 사본이 유일하다 | 보고만 — 지우지 않는다. 설명의 raw 를 hot 의 그 경로에 다시 두면 데몬이 색인하고 다음 tier 가 다시 cold 로 보낸다 (`reload` 는 hot 파일이 없는 이 문서를 싣지 않는다) |
+| `stranded-cold` | cold 로 간 달의 문서인데 어느 스냅샷에도 없다 — 담았던 스냅샷이 지워졌거나(예전 판 archive 의 손상, 손으로 지움), ISM 스냅샷 뒤에 그 달로 적재됐다. cold store 사본이 유일하다 | 보고만 — 지우지 않는다. 설명의 raw 를 hot 의 그 경로에 다시 두면 데몬이 색인한다. git meta-repo 면 그 파일을 커밋까지 해야 다음 tier 가 다시 cold 로 보낸다 (tier 가 예전에 git rm 해 추적되지 않는 파일이라, 커밋 전에는 `hot 에 남김` 으로 남긴다). `reload` 는 hot 파일이 없는 이 문서를 싣지 않는다 |
 | `broken-link` | 링크 대상이 디스크에도 hot 에도 cold 에도 없다. 디스크에 있는 파일과 대소문자만 다른 링크도 알린다(GitHub 에서 깨진다 — 설명에 디스크의 철자). 원본이 이미 cold 로 간 문서는 철자를 대조할 파일이 없어서, 대소문자를 가리지 않는 로컬 cold store(macOS 기본)에서는 대소문자만 다른 링크도 산 링크로 본다. 색인 범위 밖이어도 디스크에 그 철자로 있으면 산 링크다 | 보고만 |
 | `unsourced-fact` | knowledge 에 근거가 없다 | 보고만 |
 | `stale-question` | 14일 넘게 답을 기다리는 판정 질문 | 보고만 |
@@ -666,7 +667,7 @@ ISM 이 먼저 옮긴 경우다. "갖고 있다" 의 판단:
 | `MEMORY_WORKSPACE` | 루트 디렉토리 이름 | 같은 스택을 쓰는 meta-repo 끼리의 격리 축 (소문자·숫자·하이픈) |
 | `MEMORY_DEFAULT_TEAM` | `default` | frontmatter 에 team 이 없을 때 |
 | `MEMORY_TEAM_ORGS` | — | `팀=org,팀=org` — org alias |
-| `MEMORY_HOT_DAYS` | `60` | hot/cold 경계. tier 는 바로 따른다. ISM 정책(`mem-hot-cold`)은 클러스터에 하나라(같은 스택을 쓰는 모든 meta-repo 의 새 `mem-*` 인덱스에 걸린다) 시작하는 프로세스(MCP·CLI·데몬)는 없을 때만 만들고, 이 값과 다르게 이미 있으면 덮어쓰지 않고 두 값을 stderr 로 경고한다. 이 값으로 바꾸려면 `scripts/memory/run.sh bootstrap` (그 명령의 설정이 이긴다). **이미 정책이 붙은 인덱스는 처음 붙은 기간을 유지한다** (새로 만드는 인덱스부터) |
+| `MEMORY_HOT_DAYS` | `60` | hot/cold 경계. tier 는 바로 따른다. ISM 정책은 bootstrap 이 고치지만 **이미 정책이 붙은 인덱스는 처음 붙은 기간을 유지한다** (새로 만드는 인덱스부터) |
 | `MEMORY_TIME_ZONE` | 이 머신의 시간대 | 문서의 날(`date`·`time_range` 날짜 필터, `search_filters` 날짜별 수)을 정하는 IANA 시간대 (예: `Asia/Seoul`). frontmatter `date` 는 적힌 날 그대로, 없으면 커밋·mtime 시각을 이 시간대에서 본 날. 바꾸면 `scripts/memory/run.sh ingest .` 로 이미 색인된 문서의 날을 다시 쓴다 (데몬은 내용이 바뀐 문서만 다시 쓴다) |
 | `MEMORY_RECONCILE_INTERVAL_SECONDS` | `60` | 데몬 타이머 |
 | `MEMORY_RECONCILE_DEBOUNCE_MS` | `3000` | watcher 힌트 debounce |
@@ -687,6 +688,12 @@ ISM 이 먼저 옮긴 경우다. "갖고 있다" 의 판단:
 | `COLD_STORE_S3_BUCKET` / `COLD_STORE_S3_PREFIX` / `AWS_REGION` | — / `memory` / `ap-northeast-2` | 값이 있으면 S3 cold store |
 | `AWS_ENDPOINT_URL_S3` / `COLD_STORE_S3_PATH_STYLE` | — / `false` | S3 호환 저장소 |
 
+**클러스터 전역 설정** — `MEMORY_HOT_DAYS` 로 만드는 ISM 정책(`mem-hot-cold`)과 `COLD_SNAPSHOT_*` 의 스냅샷 repository 는 클러스터에 하나라,
+같은 스택을 쓰는 모든 meta-repo 의 새 `mem-*` 인덱스가 따른다. 그래서 시작하는 프로세스(MCP·CLI·데몬·`make memory-init` 의 `-once`)는
+없을 때만 만들고, 다른 내용으로 이미 있으면 덮어쓰지 않고 클러스터 값과 이 설정 값을 `[bootstrap] 경고: …` 로 stderr(데몬은 로그)에 남긴다.
+바꾸는 것은 `scripts/memory/run.sh bootstrap` 뿐이다 — 그 명령을 돌린 쪽의 설정이 이긴다. 이 레포를 업데이트해 코드가 정책 본문을 바꾼 때도 같다:
+경고가 `설명(…)은 같고 본문이 다르다` 면 `scripts/memory/run.sh bootstrap` 을 한 번 돌린다.
+
 ---
 
 ## 9. 트러블슈팅
@@ -704,6 +711,7 @@ ISM 이 먼저 옮긴 경우다. "갖고 있다" 의 판단:
 | `다른 workspace 가 쓰는 팀입니다` | 다른 meta-repo 가 같은 팀 이름을 쓴다 | 이 meta-repo 는 다른 `MEMORY_DEFAULT_TEAM`/frontmatter team |
 | `데몬이 이미 돌고 있습니다` | 데몬 중복 실행 | `scripts/memory-daemon/run.sh status` 로 pid 확인 |
 | `cold_owned` 가 계속 찍힌다 | cold 로 간 원본이 hot 에 남아 있다 (ISM 이 옮긴 경우 등) | `scripts/memory/run.sh tier` 가 정리한다 |
+| `[bootstrap] 경고: ISM 정책 … 덮어쓰지 않습니다` (또는 스냅샷 repository) | 클러스터의 정책·repository 가 이 설정과 다르다 — 같은 스택을 쓰는 다른 meta-repo 가 다른 `MEMORY_HOT_DAYS`·`COLD_SNAPSHOT_*` 로 만들었거나, 이 레포를 업데이트해 정책 본문이 바뀌었다 (`설명(…)은 같고 본문이 다르다`) | 이 설정이 맞으면 `scripts/memory/run.sh bootstrap` (클러스터 전역 — §8) |
 | `graph: failed …` / 그래프 도구가 "꺼져 있다" | Neo4j 가 꺼져 있다 / `MEMORY_GRAPH_URI=off` | `make memory-init`, 그다음 `scripts/memory/run.sh graph rebuild` |
 | `related_docs` 에 entity 경로가 없다 | 증류가 꺼져 있다 | `.env` 에 `MEMORY_DISTILL_ENABLED=true` 후 `make memory-daemon-stop && make memory-daemon-start` (본문이 LLM 으로 간다) |
 | Claude 에 도구가 안 보인다 | `.mcp.json` 승인 전 | `claude mcp get drakejin-workspace-memory-mcp` → `claude` 실행해 승인, 세션에서 `/mcp` |

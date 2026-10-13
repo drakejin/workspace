@@ -189,3 +189,76 @@ func decisionOfIndex(decisions []TierDecision, index string) TierDecision {
 	}
 	return TierDecision{}
 }
+
+// verifiedDocs 는 root 의 rels 를 cold store raw 에 지금 내용 그대로 넣고 tier 가 넘기는 문서 목록으로 돌려준다.
+func verifiedDocs(t *testing.T, store Store, root string, rels ...string) []sourceDoc {
+	t.Helper()
+	var docs []sourceDoc
+	for _, rel := range rels {
+		body, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		mustDo(t, err)
+		mustDo(t, store.Put(context.Background(), RawKey("t", rel), string(body)))
+		docs = append(docs, sourceDoc{team: "t", sourcePath: rel, contentSHA: document.SHA256(string(body))})
+	}
+	return docs
+}
+
+// OPS-3: git 이 레포를 거부하면(소유자가 달라 "detected dubious ownership" 등) git 레포가 아니라고 보고 지우지 않는다 —
+// 커밋 여부를 확인하지 못한 채 지우면 커밋 안 된 원본이 cold store 에만 남는다. 지우지 않고 까닭을 에러로 알린다.
+func TestRemoveHotOriginalsKeepsFilesWhenGitRefusesTheRepo(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store := NewLocalStore(t.TempDir())
+	gitIn(t, root, "init", "-q")
+	writeHot(t, root, "docs/specs/untracked.md", "# 커밋한 적 없다\n")
+	docs := verifiedDocs(t, store, root, "docs/specs/untracked.md")
+	t.Setenv("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1") // git 이 이 레포의 소유자를 믿지 않는다
+
+	removed, kept, err := removeHotOriginals(ctx, store, root, docs)
+
+	if err == nil || len(removed) != 0 || len(kept) != 0 {
+		t.Errorf("git 이 레포를 거부하면 지우지 않고 알린다: removed=%v kept=%v err=%v", removed, kept, err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "docs/specs/untracked.md")); statErr != nil {
+		t.Errorf("커밋 안 된 원본을 지웠다: %v", statErr)
+	}
+}
+
+// OPS-3: meta-repo 가 이 meta-repo 를 추적하지 않는 바깥 git 레포(홈 디렉토리의 dotfiles 레포 등) 안에 있으면 git 레포가 아닌
+// meta-repo 처럼 다룬다 — 바깥 레포에 커밋하라는 안내는 맞지 않고, 원본은 영영 남는다. 바깥 레포가 meta-repo 의 파일을
+// 추적하면(모노레포의 한 디렉토리) git 레포로 다룬다.
+func TestRemoveHotOriginalsInsideAnEnclosingRepo(t *testing.T) {
+	ctx := context.Background()
+	t.Run("바깥 레포가 meta-repo 를 추적하지 않는다", func(t *testing.T) {
+		outer := t.TempDir()
+		gitIn(t, outer, "init", "-q")
+		writeHot(t, outer, ".zshrc", "# dotfiles\n")
+		gitIn(t, outer, "add", ".zshrc")
+		gitIn(t, outer, "commit", "-q", "-m", "dotfiles")
+		root := filepath.Join(outer, "work", "meta")
+		writeHot(t, root, "docs/specs/a.md", "# a\n")
+		store := NewLocalStore(t.TempDir())
+
+		removed, kept, err := removeHotOriginals(ctx, store, root, verifiedDocs(t, store, root, "docs/specs/a.md"))
+
+		if err != nil || strings.Join(removed, ",") != "docs/specs/a.md" || len(kept) != 0 {
+			t.Errorf("git 레포가 아닌 meta-repo 처럼 지운다: removed=%v kept=%v err=%v", removed, kept, err)
+		}
+	})
+	t.Run("바깥 레포가 meta-repo 를 추적한다", func(t *testing.T) {
+		outer := t.TempDir()
+		gitIn(t, outer, "init", "-q")
+		root := filepath.Join(outer, "meta")
+		writeHot(t, root, "docs/specs/committed.md", "# 커밋됨\n")
+		gitIn(t, outer, "add", "-A")
+		gitIn(t, outer, "commit", "-q", "-m", "meta")
+		writeHot(t, root, "docs/specs/untracked.md", "# 커밋한 적 없다\n")
+		store := NewLocalStore(t.TempDir())
+
+		removed, kept, err := removeHotOriginals(ctx, store, root, verifiedDocs(t, store, root, "docs/specs/committed.md", "docs/specs/untracked.md"))
+
+		if err != nil || strings.Join(removed, ",") != "docs/specs/committed.md" || strings.Join(kept, ",") != "docs/specs/untracked.md" {
+			t.Errorf("git 이 되살릴 수 있는 원본만 지운다: removed=%v kept=%v err=%v", removed, kept, err)
+		}
+	})
+}
