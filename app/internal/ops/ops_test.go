@@ -169,6 +169,22 @@ func TestRenderTier(t *testing.T) {
 	}
 }
 
+// OPS-3: git 이 되살릴 수 없어 hot 에 남긴 원본은 지운 원본과 따로, 무엇을 하면 되는지와 함께 보인다.
+func TestRenderTierShowsOriginalsKeptForGit(t *testing.T) {
+	out := renderTier([]cold.TierDecision{
+		{Index: "mem-a-2026.06", Action: cold.TierMoved, NewestEvent: "2026-06-15", RemovedFiles: []string{"docs/a.md"}, KeptFiles: []string{"docs/new.md"}},
+		{Index: "mem-a-2026.05", Action: cold.TierKeptUncommitted, KeptFiles: []string{"docs/old.md"}},
+	})
+	for _, want := range []string{"hot 에서 뺌: docs/a.md", "hot 에 남김: docs/new.md", "hot 에 남김: docs/old.md", "kept-uncommitted", "커밋"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("%q 없음:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "hot 에서 뺌: docs/new.md") {
+		t.Errorf("남긴 원본을 뺐다고 하지 않는다:\n%s", out)
+	}
+}
+
 func TestRepoOfAndBranchWords(t *testing.T) {
 	root := "/meta"
 	cases := map[string][2]string{

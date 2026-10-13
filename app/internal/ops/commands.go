@@ -14,7 +14,6 @@ import (
 	"github.com/drakejin/workspace/app/internal/ingest"
 	"github.com/drakejin/workspace/app/internal/mcpserver"
 	"github.com/drakejin/workspace/app/internal/model"
-	"github.com/drakejin/workspace/app/internal/naming"
 	"github.com/drakejin/workspace/app/internal/opensearch"
 	"github.com/drakejin/workspace/app/internal/state"
 )
@@ -23,7 +22,8 @@ func runBootstrap(ctx context.Context, c *CLI, args []string) (string, error) {
 	if _, err := newFlags("bootstrap").parse(args); err != nil {
 		return "", err
 	}
-	if err := opensearch.Bootstrap(ctx, c.OS, c.Config); err != nil {
+	// 명시적인 bootstrap 명령만 클러스터 전역 객체(ISM 정책·스냅샷 repository)를 이 설정으로 바꾼다
+	if err := opensearch.BootstrapClaim(ctx, c.OS, c.Config); err != nil {
 		return "", err
 	}
 	return "bootstrap 완료", nil
@@ -182,15 +182,15 @@ func runReload(ctx context.Context, c *CLI, args []string) (string, error) {
 	if _, err := f.parse(args); err != nil {
 		return "", err
 	}
-	// cold 로 간 달은 되살리지 않는다 (필요하면 restore)
+	// cold 로 간 달은 되살리지 않는다 (필요하면 restore). 어느 스냅샷에도 없는 갇힌 문서는 hot 파일이 있을 때만 싣는다
+	// (없으면 데몬이 파일 없는 문서로 보고 cold store 청크까지 지운다 — 감사가 stranded-cold 로 알린다)
 	archived, err := cold.ArchivedMonths(ctx, c.OS, c.Config)
 	if err != nil {
 		return "", err
 	}
 	own := cold.NewOwnership(archived, c.Cold)
 	report, err := ingest.Reload(ctx, c.Cold, c.Indexer, *team, func(ch model.Chunk) bool {
-		owned, err := own.Owns(ctx, ch.Team, naming.IndexFor(ch), ch.SourcePath, ch.ContentSHA)
-		return err != nil || !owned // 모르면 싣는다 — 빠뜨리는 쪽보다 낫다
+		return own.Reloadable(ctx, c.Config.MetaRepoRoot, ch)
 	})
 	if err != nil {
 		return "", err
@@ -357,16 +357,23 @@ func renderTier(decisions []cold.TierDecision) string {
 		return "대상 인덱스 없음"
 	}
 	var b strings.Builder
-	removed := 0
+	removed, kept := 0, 0
 	for _, d := range decisions {
 		fmt.Fprintf(&b, "%-16s %s  newest=%s\n", d.Action, d.Index, orDash(d.NewestEvent))
 		for _, f := range d.RemovedFiles {
 			fmt.Fprintf(&b, "  - hot 에서 뺌: %s\n", f)
 			removed++
 		}
+		for _, f := range d.KeptFiles {
+			fmt.Fprintf(&b, "  - hot 에 남김: %s (git 에 커밋된 내용이 아니다)\n", f)
+			kept++
+		}
 	}
 	if removed > 0 {
 		fmt.Fprintf(&b, "\nhot 원본 %d개를 cold 로 넘겼습니다 (git rm). 원본은 cold store raw 와 스냅샷에 있습니다 — 'git commit' 하세요.", removed)
+	}
+	if kept > 0 {
+		fmt.Fprintf(&b, "\nhot 원본 %d개는 git 이 되살릴 수 없어(커밋하지 않았거나 커밋 뒤 고쳤다) 남겼습니다 — 커밋하면 다음 tier 가 hot 에서 뺍니다.", kept)
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

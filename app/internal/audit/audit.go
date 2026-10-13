@@ -31,6 +31,7 @@ const (
 	Unindexed       Kind = "unindexed"        // 파일이 있는데 색인에 없고 cold 소유도 아니다 (고칠 수 있음: 색인)
 	StaleContent    Kind = "stale-content"    // 색인 내용과 파일 내용(sha)이 다르다 (고칠 수 있음: 재색인)
 	OrphanChunks    Kind = "orphan-chunks"    // cold store 청크 JSONL 의 파일도, cold 보관도 없다 (고칠 수 있음: JSONL 삭제)
+	StrandedCold    Kind = "stranded-cold"    // cold 로 간 달의 문서인데 어느 스냅샷에도 없다 — cold store 사본이 유일하다 (보고만)
 	BrokenLink      Kind = "broken-link"      // 링크 대상이 디스크에도(색인 범위 밖 포함) hot 에도 cold 에도 없다, 또는 철자만 다르다
 	UnsourcedFact   Kind = "unsourced-fact"   // knowledge 에 근거(derived_from 또는 ## 출처)가 없다
 	StaleQuestion   Kind = "stale-question"   // 답을 오래 기다리는 판정 질문
@@ -255,41 +256,89 @@ func (r *runner) orphanChunks(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("audit cold store: %w", err)
 		}
+		listed := make(map[string]bool, len(keys))
 		for _, key := range keys {
-			rel := strings.TrimSuffix(strings.TrimPrefix(key, cold.ChunksPrefix(team)), ".jsonl")
-			if _, onDisk := r.files[rel]; onDisk {
-				continue
-			}
-			if ingest.LiveUnderOtherSpelling(r.Config.MetaRepoRoot, rel) {
-				// 같은 파일이 다른 철자(대소문자·NFD)로 디스크에 있다 — APFS 위의 로컬 cold store 에서는 지금 문서의 청크 파일이다
-				continue
-			}
-			if _, indexed := r.docs[rel]; indexed {
-				continue // orphan-index 로 이미 보고했다 — 그 조치(RemoveFile)가 청크 JSONL 까지 지운다
-			}
-			chunks, ok, err := cold.Archived(ctx, r.Cold, team, rel)
-			if err != nil {
+			listed[key] = true
+		}
+		for _, key := range keys {
+			if err := r.checkChunks(ctx, team, key, listed); err != nil {
 				return err
 			}
-			if ok {
-				owned, err := r.owner.Owns(ctx, team, naming.IndexFor(chunks[0]), rel, chunks[0].ContentSHA)
-				if err != nil {
-					return err
-				}
-				if owned {
-					continue // cold 로 간 문서 — 정상
-				}
-			}
-			fixed := false
-			if r.apply {
-				if err := r.Cold.Remove(ctx, key); err != nil {
-					return fmt.Errorf("audit cold store: %w", err)
-				}
-				fixed = true
-			}
-			r.add(OrphanChunks, rel, "cold store 에 청크만 남았다 (파일도 cold 보관도 없다)", fixed)
 		}
 	}
+	return nil
+}
+
+// checkChunks 는 청크 JSONL 하나가 파일·색인·cold 보관 중 어디에 속하는지 본다. listed 는 보관소가 보여 준 키 전부다.
+func (r *runner) checkChunks(ctx context.Context, team, key string, listed map[string]bool) error {
+	rel := strings.TrimSuffix(strings.TrimPrefix(key, cold.ChunksPrefix(team)), ".jsonl")
+	if _, onDisk := r.files[rel]; onDisk {
+		return nil
+	}
+	if ingest.LiveUnderOtherSpelling(r.Config.MetaRepoRoot, rel) {
+		// 같은 파일이 다른 철자(대소문자·NFD)로 디스크에 있다. 지금 철자의 키가 따로 보이면(S3 처럼 철자를 가리는 보관소) 이 키는
+		// 옛 철자의 사본이다. 따로 보이지 않으면 APFS 위의 로컬 cold store 에서 지금 문서의 청크 파일이라 남긴다
+		canonical := r.canonicalChunkKey(team, rel)
+		if canonical == key || !listed[canonical] {
+			return nil
+		}
+		return r.removeChunks(ctx, key, rel, "옛 철자의 청크 사본이다 (지금 철자의 청크 "+canonical+" 가 따로 있다)")
+	}
+	if _, indexed := r.docs[rel]; indexed {
+		return nil // orphan-index 로 이미 보고했다 — 그 조치(RemoveFile)가 청크 JSONL 까지 지운다
+	}
+	chunks, ok, err := cold.Archived(ctx, r.Cold, team, rel)
+	if err != nil {
+		return err
+	}
+	if ok {
+		return r.checkColdCopy(ctx, team, key, rel, chunks[0])
+	}
+	return r.removeChunks(ctx, key, rel, orphanChunksDetail)
+}
+
+// orphanChunksDetail 은 파일도 cold 보관도 없는 청크 JSONL 의 설명이다.
+const orphanChunksDetail = "cold store 에 청크만 남았다 (파일도 cold 보관도 없다)"
+
+// checkColdCopy 는 파일도 색인도 없는 문서의 청크(head 는 청크 0)다. 스냅샷이 가졌으면 정상, cold 로 간 달인데 어느 스냅샷에도
+// 없으면(stranded) cold store 사본이 유일하므로 지우지 않고 되살리는 길을 알린다. 둘 다 아니면 orphan-chunks.
+func (r *runner) checkColdCopy(ctx context.Context, team, key, rel string, head model.Chunk) error {
+	index := naming.IndexFor(head)
+	owned, err := r.owner.Owns(ctx, team, index, rel, head.ContentSHA)
+	if err != nil || owned {
+		return err // cold 로 간 문서 — 정상
+	}
+	stranded, err := r.owner.Stranded(ctx, team, index, rel, head.ContentSHA)
+	if err != nil {
+		return err
+	}
+	if !stranded {
+		return r.removeChunks(ctx, key, rel, orphanChunksDetail)
+	}
+	r.add(StrandedCold, rel, fmt.Sprintf("%s 의 스냅샷 어디에도 없어 cold store 사본만 남았다 — 되살리려면 %s/%s 를 hot 의 %s 에 다시 두면 "+
+		"데몬이 색인하고 다음 tier 가 다시 cold 로 보낸다", index, r.Cold.Location(), cold.RawKey(team, rel), rel), false)
+	return nil
+}
+
+// canonicalChunkKey 는 디스크에 다른 철자로 있는 rel 의 지금 철자(디스크 이름의 NFC) 청크 키다. 찾지 못하면 "".
+func (r *runner) canonicalChunkKey(team, rel string) string {
+	_, canonical, err := ingest.ResolveOnDisk(r.Config.MetaRepoRoot, rel)
+	if err != nil {
+		return ""
+	}
+	return cold.ChunksKey(team, canonical)
+}
+
+// removeChunks 는 orphan-chunks 를 알리고, -apply 면 그 청크 JSONL 을 지운다.
+func (r *runner) removeChunks(ctx context.Context, key, rel, detail string) error {
+	fixed := false
+	if r.apply {
+		if err := r.Cold.Remove(ctx, key); err != nil {
+			return fmt.Errorf("audit cold store: %w", err)
+		}
+		fixed = true
+	}
+	r.add(OrphanChunks, rel, detail, fixed)
 	return nil
 }
 

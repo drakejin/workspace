@@ -433,6 +433,8 @@ hot 원본 3개를 cold 로 넘겼습니다 (git rm). 원본은 cold store raw �
 현행 knowledge(`order-status-v2.md`)는 노화하지 않는다. 하지만 v2 에 밀린 구판 `order-status.md`(2026-06-20)는 자기 달 인덱스로 옮겨 가 있어서
 episodic 과 같이 cold 로 간다 — 리포트(episodic 만 보는 수명 확인)에는 없지만 tier 에는 나온다.
 지우기 전에 cold store 에 같은 내용(sha)이 있는지 확인하므로 그 사이에 고친 문서는 지우지 않는다. git 레포면 `git rm` 으로 지워 커밋만 하면 된다.
+git 이 되살릴 수 없는 원본 — 커밋하지 않았거나 커밋 뒤 고친(add 만 한) 파일 — 은 지우지 않고 `- hot 에 남김: … (git 에 커밋된 내용이 아니다)` 로 알린다
+(그 달의 원본만 남았으면 결정이 `kept-uncommitted`). 커밋하면 다음 tier 가 뺀다.
 
 ```bash
 scripts/memory/run.sh list-cold
@@ -452,13 +454,17 @@ mem-demo-2026.06 을(를) snapshot cold-mem-demo-2026.06-20261013t003025-0649340
 
 복원본은 스냅샷을 다 합치고 그 사이 deprecate 된 표시를 다시 입힌 **뒤에** 검색 alias 를 붙인다. 합치다 멈추면 `… 를 일부만 복원했습니다` 오류를 내고
 (deprecate 표시는 그래도 다시 입힌다) 새로 연 복원본은 검색에 나오지 않는다 — restore 를 다시 하면 빠진 문서만 더해 마무리한다.
+그동안 `list-cold`(`list_cold`)는 그 인덱스에 `[복원 중단 — restore_cold 로 다시]` 를 붙인다 (다 복원돼 검색에 나오면 `[현재 복원됨]`).
+복원본에는 지금 판의 매핑을 더한다 — 예전 판이 뜬 스냅샷이어도 그 달에 `ingest_path` 로 쓸 수 있다.
 ISM·tier 대상에서 빠지고(`auto_manage=false`), 데몬도 건드리지 않는다.
 
 한 달이 스냅샷 여러 개에 나뉘어 있을 수 있다 — 그 달을 tier 한 뒤 그 달 날짜의 문서가 늦게 들어오면(예: seed 에 repo 를 더해 옛 커밋의 문서가 들어온다)
 인덱스가 hot 에 다시 생기고, 다음 tier 가 또 스냅샷을 뜬다. 이때 `list-cold` 는 `snapshot=A,B` 로 전부 보여 주고, 복원은 전부를 합친다
 (같은 문서는 더 최근 스냅샷의 것). 이미 복원돼 있으면 빠진 스냅샷 문서만 더한다. 그 달의 인덱스가 hot 에 다시 열려 있는 동안은
 (`[hot 에 다시 열림 — 다음 tier 뒤에 복원할 수 있다]`) 복원·archive 를 거부한다 — 데몬이 관리하는 인덱스에 cold 문서를 섞으면
-데몬이 파일 없는 문서로 보고 지운다. 다음 tier 가 그 달을 다시 cold 로 보낸 뒤에 한다.
+데몬이 파일 없는 문서로 보고 지운다. 다음 tier 가 그 달을 다시 cold 로 보낸 뒤에 한다 — 늦게 들어온 문서가 hot 기간 안이면 tier 도 그 달을
+hot 에 두므로(`kept-hot`) 몇 주 걸릴 수 있다. 그 문서의 유효 시각 + hot 기간이 지난 뒤 첫 tier(tier-tick 이 하루 한 번 돈다)가 옮긴다 —
+거부 오류가 그 시각을 알려 주고, 이미 지났으면 지금 `scripts/memory/run.sh tier` 를 돌리라고 한다.
 
 ### 4.7 효과 재기 — `bench` (발표 데모 4단계)
 
@@ -558,7 +564,7 @@ knowledge 는 유사도로 판정하지 않으므로 선언이 없으면 구판�
 | | `tier` | ISM `mem-hot-cold` |
 | --- | --- | --- |
 | 기준 | 인덱스 안 문서의 **유효 시각** 중 가장 최근 것 | 인덱스 **생성 시각** |
-| 하는 일 | 쓰기 막기 → 스냅샷(끝까지 뜬 것만 믿는다) → 스냅샷 목록(manifest) 기록 → 인덱스 삭제 → hot 원본 제거(sha 가 cold store raw 와 같을 때만) | 스냅샷 → 인덱스 삭제 (파일은 모른다) |
+| 하는 일 | 쓰기 막기 → 스냅샷(끝까지 뜬 것만 믿는다) → 스냅샷 목록(manifest) 기록 → 인덱스 삭제 → hot 원본 제거(sha 가 cold store raw 와 같고, git 레포면 커밋된 그대로일 때만) | 스냅샷 → 인덱스 삭제 (파일은 모른다) |
 | 범위 | 이 workspace 의 팀 인덱스만 (`-team` 이 없으면 이 workspace 의 모든 팀) | 클러스터의 모든 `mem-*` 월별 인덱스 |
 | 놓치는 것 | 돌리지 않으면 아무 일도 없다 | 늦게 적재된 오래된 문서 (생성은 최근) |
 
@@ -571,6 +577,7 @@ knowledge 는 유사도로 판정하지 않으므로 선언이 없으면 구판�
 뒤의 인덱스에서 실패해도 그때까지 한 일(지운 인덱스, hot 에서 뺀 원본)을 `[tier] 중간에 실패했습니다 — 그 전에 한 일:` 아래에 에러와 함께 출력한다.
 
 ISM 이 먼저 옮긴 달은 hot 원본이 남아 데몬 로그에 `cold_owned` 가 찍힌다. 다음 `scripts/memory/run.sh tier` 가 그 원본을 치운다(`pruned`).
+ISM 스냅샷 뒤에 그 달로 늦게 쓴 문서는 스냅샷에 없으므로 치우지 않는다 — 데몬이 다시 색인하고, tier 가 스냅샷에 넣은 뒤에야 뺀다 (§7 cold 소유).
 knowledge 인덱스는 `mem-knowledge-keep`(우선순위 200)이라 ISM 이 건드리지 않는다.
 
 ### 6.3 정합성 감사 — `audit`
@@ -582,7 +589,8 @@ knowledge 인덱스는 `mem-knowledge-keep`(우선순위 200)이라 ISM 이 건�
 | `orphan-index` | 색인에는 있는데 파일이 없다. 같은 파일이 디스크에 다른 철자(대소문자·NFD)로 있으면 옛 철자의 색인이라고 디스크의 철자를 알린다 | 색인에서 뺀다 (청크 JSONL 도 — 다른 철자로 살아 있는 파일의 것은 남긴다) |
 | `unindexed` | 파일이 있는데 색인에도 cold 에도 없다 | 색인한다 (다음 데몬 사이클이 판정·증류·그래프로 넘긴다) |
 | `stale-content` | 색인 내용(sha)이 파일과 다르다 (stat 이 보존된 복사 등) | 다시 색인한다 (다음 데몬 사이클이 판정·증류·그래프로 넘긴다) |
-| `orphan-chunks` | cold store 에 청크만 남았다 | 지운다 (raw 원본은 이력이라 남긴다) |
+| `orphan-chunks` | cold store 에 청크만 남았다. 또는 옛 철자(대소문자·NFD)의 청크 사본 — 같은 파일의 지금 철자 키가 따로 있을 때 (S3 처럼 철자를 가리는 보관소) | 지운다 (raw 원본은 이력이라 남긴다) |
+| `stranded-cold` | cold 로 간 달의 문서인데 어느 스냅샷에도 없다 — 담았던 스냅샷이 지워졌거나(예전 판 archive 의 손상, 손으로 지움), ISM 스냅샷 뒤에 그 달로 적재됐다. cold store 사본이 유일하다 | 보고만 — 지우지 않는다. 설명의 raw 를 hot 의 그 경로에 다시 두면 데몬이 색인하고 다음 tier 가 다시 cold 로 보낸다 (`reload` 는 hot 파일이 없는 이 문서를 싣지 않는다) |
 | `broken-link` | 링크 대상이 디스크에도 hot 에도 cold 에도 없다. 디스크에 있는 파일과 대소문자만 다른 링크도 알린다(GitHub 에서 깨진다 — 설명에 디스크의 철자). 원본이 이미 cold 로 간 문서는 철자를 대조할 파일이 없어서, 대소문자를 가리지 않는 로컬 cold store(macOS 기본)에서는 대소문자만 다른 링크도 산 링크로 본다. 색인 범위 밖이어도 디스크에 그 철자로 있으면 산 링크다 | 보고만 |
 | `unsourced-fact` | knowledge 에 근거가 없다 | 보고만 |
 | `stale-question` | 14일 넘게 답을 기다리는 판정 질문 | 보고만 |
@@ -631,9 +639,11 @@ OpenSearch 쪽 S3 설정 예는 `app/test/s3/` (repository-s3 플러그인을 �
 ISM 이 먼저 옮긴 경우다. "갖고 있다" 의 판단:
 
 - 그 달의 스냅샷이 모두 목록(`{team}/manifests/{index}.jsonl`, tier·archive 가 남긴다)으로 덮이면: 목록에 그 (경로, 내용 sha) 가 있을 때.
+  목록의 줄은 그 스냅샷이 지금 있을 때만 센다 — 지워진 스냅샷의 줄만 남은 문서는 어느 스냅샷에도 없는 갇힌 문서다 (감사의 `stranded-cold`)
   tier·archive 의 스냅샷(이름 `cold-…`)은 문서가 없었어도 표시 줄을 남기고, 줄이 없어도(목록을 쓰기 전에 끊김) 목록이 덮는 것으로 본다
-- 목록이 덮지 못하는 스냅샷(ISM 이 만든 `ism-cold-…`)이 하나라도 있으면: 그 달이 스냅샷에 있고 cold store 청크의 내용 sha 가 파일과 같을 때
-  (ISM 의 스냅샷과 삭제 사이에 그 달로 쓴 내용은 놓칠 수 있다)
+- 목록이 덮지 못하는 스냅샷(ISM 이 만든 `ism-cold-…`)이 하나라도 있으면: cold store 청크의 내용 sha 가 파일과 같고, 그 내용이 스냅샷 시작보다
+  먼저 적재됐을 때 (청크의 `ingested_at` — 이 머신과 OpenSearch 의 시계 차이를 5분 넉넉히 본다). 스냅샷 뒤에 그 달로 늦게 쓴 문서는 스냅샷에
+  없으므로 cold 소유가 아니다 — 데몬이 다시 색인하고, hot 재구축 뒤 `reload` 가 싣고, tier 가 스냅샷에 넣은 뒤에야 hot 원본을 뺀다
 
 로컬 cold store 는 임시 파일에 다 쓰고 rename 으로 바꿔, 쓰다 끊겨도 정본이 잘리지 않는다. 목록 읽기-고치기-쓰기는 잠금 파일
 (`{COLD_STORE_DIR}/.locks/`, S3 cold store 도 이 로컬 디렉토리)로 직렬화해 tier-tick 과 archive 가 겹쳐도 줄을 잃지 않는다 — 같은 머신의 프로세스 사이만 막는다.
@@ -656,7 +666,7 @@ ISM 이 먼저 옮긴 경우다. "갖고 있다" 의 판단:
 | `MEMORY_WORKSPACE` | 루트 디렉토리 이름 | 같은 스택을 쓰는 meta-repo 끼리의 격리 축 (소문자·숫자·하이픈) |
 | `MEMORY_DEFAULT_TEAM` | `default` | frontmatter 에 team 이 없을 때 |
 | `MEMORY_TEAM_ORGS` | — | `팀=org,팀=org` — org alias |
-| `MEMORY_HOT_DAYS` | `60` | hot/cold 경계. tier 는 바로 따른다. ISM 정책은 bootstrap 이 고치지만 **이미 정책이 붙은 인덱스는 처음 붙은 기간을 유지한다** (새로 만드는 인덱스부터) |
+| `MEMORY_HOT_DAYS` | `60` | hot/cold 경계. tier 는 바로 따른다. ISM 정책(`mem-hot-cold`)은 클러스터에 하나라(같은 스택을 쓰는 모든 meta-repo 의 새 `mem-*` 인덱스에 걸린다) 시작하는 프로세스(MCP·CLI·데몬)는 없을 때만 만들고, 이 값과 다르게 이미 있으면 덮어쓰지 않고 두 값을 stderr 로 경고한다. 이 값으로 바꾸려면 `scripts/memory/run.sh bootstrap` (그 명령의 설정이 이긴다). **이미 정책이 붙은 인덱스는 처음 붙은 기간을 유지한다** (새로 만드는 인덱스부터) |
 | `MEMORY_TIME_ZONE` | 이 머신의 시간대 | 문서의 날(`date`·`time_range` 날짜 필터, `search_filters` 날짜별 수)을 정하는 IANA 시간대 (예: `Asia/Seoul`). frontmatter `date` 는 적힌 날 그대로, 없으면 커밋·mtime 시각을 이 시간대에서 본 날. 바꾸면 `scripts/memory/run.sh ingest .` 로 이미 색인된 문서의 날을 다시 쓴다 (데몬은 내용이 바뀐 문서만 다시 쓴다) |
 | `MEMORY_RECONCILE_INTERVAL_SECONDS` | `60` | 데몬 타이머 |
 | `MEMORY_RECONCILE_DEBOUNCE_MS` | `3000` | watcher 힌트 debounce |
@@ -670,7 +680,7 @@ ISM 이 먼저 옮긴 경우다. "갖고 있다" 의 판단:
 | `MEMORY_CLAUDE_BIN` / `MEMORY_LLM_MODEL` / `MEMORY_LLM_TIMEOUT_MS` | `claude` / `opus` / `120000` | 판정·증류 LLM. 격리 실행(`--setting-sources ""`, 도구 없음, JSON 스키마), 실패하면 폴백 |
 | `MEMORY_GRAPH_URI` | `bolt://localhost:${NEO4J_BOLT_PORT}` | Neo4j. `off` 면 그래프를 끈다 |
 | `MEMORY_GRAPH_USER` / `MEMORY_GRAPH_PASSWORD` / `MEMORY_GRAPH_DATABASE` | — / — / `neo4j` | 인증을 켠 Neo4j 일 때만 |
-| `COLD_SNAPSHOT_REPOSITORY` / `COLD_SNAPSHOT_TYPE` | `mem-cold` / `fs` | 스냅샷 repository |
+| `COLD_SNAPSHOT_REPOSITORY` / `COLD_SNAPSHOT_TYPE` | `mem-cold` / `fs` | 스냅샷 repository. ISM 정책과 같이 클러스터 전역이다 — 다른 설정으로 이미 있으면 경고만 하고, `scripts/memory/run.sh bootstrap` 이 이 설정으로 바꾼다 |
 | `COLD_SNAPSHOT_FS_LOCATION` | `/usr/share/opensearch/snapshots` | fs repository 경로 (컨테이너 안 — `path.repo`) |
 | `COLD_SNAPSHOT_S3_BUCKET` | — | `COLD_SNAPSHOT_TYPE=s3` 일 때 필수 |
 | `COLD_STORE_DIR` | `.cache/cold-store` | 로컬 cold store. S3 cold store 여도 목록 쓰기 잠금 파일(`.locks/`)은 여기 둔다 |
@@ -697,7 +707,7 @@ ISM 이 먼저 옮긴 경우다. "갖고 있다" 의 판단:
 | `graph: failed …` / 그래프 도구가 "꺼져 있다" | Neo4j 가 꺼져 있다 / `MEMORY_GRAPH_URI=off` | `make memory-init`, 그다음 `scripts/memory/run.sh graph rebuild` |
 | `related_docs` 에 entity 경로가 없다 | 증류가 꺼져 있다 | `.env` 에 `MEMORY_DISTILL_ENABLED=true` 후 `make memory-daemon-stop && make memory-daemon-start` (본문이 LLM 으로 간다) |
 | Claude 에 도구가 안 보인다 | `.mcp.json` 승인 전 | `claude mcp get drakejin-workspace-memory-mcp` → `claude` 실행해 승인, 세션에서 `/mcp` |
-| `.cache` 를 지웠다 | 파생물·원장·**cold 정본** 삭제 | 인덱스·그래프는 `make memory-daemon-stop` → `make memory-init` → `make memory-daemon-start` 로 다시 만들고 (데몬이 지워진 락을 모른 채 돌지 않게 먼저 멈춘다), 판정은 다시 묻고 증류는 다시 한다. 하지만 `cold-store/`·`snapshots/` 에만 있던 원본(tier 가 git 에서 지운 것)은 git 히스토리에서 되살려야 한다 — 이 둘은 지우지 않는다 |
+| `.cache` 를 지웠다 | 파생물·원장·**cold 정본** 삭제 | 인덱스·그래프는 `make memory-daemon-stop` → `make memory-init` → `make memory-daemon-start` 로 다시 만들고 (데몬이 지워진 락을 모른 채 돌지 않게 먼저 멈춘다), 판정은 다시 묻고 증류는 다시 한다. tier 가 git 에서 지운 원본은 git 히스토리에 커밋된 판이 있다 (tier 는 커밋된 그대로인 원본만 지운다). 하지만 스냅샷, archive edit 로 고친 본문, 이 판 전의 tier 가 지운 커밋 안 된 원본, git 레포가 아닌 meta-repo 의 원본은 `cold-store/`·`snapshots/` 에만 있다 — 이 둘은 지우지 않는다 |
 
 ---
 

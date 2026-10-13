@@ -32,6 +32,8 @@ const (
 	// TierDropped 는 문서가 하나도 없는 지난달 인덱스를 스냅샷 없이 지운 것이다 (그 달을 cold 가 가졌다고 남기지 않는다).
 	TierDropped   TierAction = "dropped-empty"
 	TierWouldDrop TierAction = "would-drop-empty"
+	// TierKeptUncommitted 는 cold 로 간 달의 hot 원본을 git 이 되살릴 수 없어(커밋하지 않았거나 커밋 뒤 고쳤다) 남긴 것이다.
+	TierKeptUncommitted TierAction = "kept-uncommitted"
 )
 
 // TierDecision 은 tier 결과 한 줄이다.
@@ -41,6 +43,7 @@ type TierDecision struct {
 	Action       TierAction
 	Snapshot     string
 	RemovedFiles []string // cold 로 넘어가 hot 에서 뺀 원본
+	KeptFiles    []string // cold 로 넘어갔지만 git 이 되살릴 수 없어 hot 에 남긴 원본 (커밋하면 다음 tier 가 뺀다)
 }
 
 // TierOptions 는 tier 실행 옵션이다.
@@ -99,7 +102,34 @@ func Tier(ctx context.Context, c opensearch.Client, store Store, cfg config.Conf
 		return decisions, err
 	}
 	pruned, err := pruneArchived(ctx, c, store, cfg, opt.Team, live)
-	return append(decisions, pruned...), err
+	return append(decisions, withoutReportedKeeps(pruned, decisions)...), err
+}
+
+// withoutReportedKeeps 는 prune 결정에서 방금 tier 한 달의 결정이 이미 알린 남긴 원본을 뺀다 — 방금 옮긴 달도 prune 이 다시
+// 보므로 같은 원본을 두 번 알리게 된다. 남는 것이 없는 kept-uncommitted 결정은 버린다.
+func withoutReportedKeeps(pruned, reported []TierDecision) []TierDecision {
+	seen := map[string]bool{}
+	for _, d := range reported {
+		for _, f := range d.KeptFiles {
+			seen[d.Index+"\x00"+f] = true
+		}
+	}
+	out := make([]TierDecision, 0, len(pruned))
+	for _, d := range pruned {
+		var kept []string
+		for _, f := range d.KeptFiles {
+			if !seen[d.Index+"\x00"+f] {
+				kept = append(kept, f)
+			}
+		}
+		if len(d.RemovedFiles) == 0 && len(kept) == 0 {
+			continue
+		}
+		next := d
+		next.KeptFiles = kept
+		out = append(out, next)
+	}
+	return out
 }
 
 func tierOne(ctx context.Context, c opensearch.Client, store Store, cfg config.Config, name string, cutoff time.Time, opt TierOptions) (TierDecision, error) {
@@ -184,7 +214,7 @@ func moveToCold(ctx context.Context, c opensearch.Client, store Store, cfg confi
 	}
 	d.Action = TierMoved
 	if !opt.KeepFiles {
-		if d.RemovedFiles, err = removeHotOriginals(ctx, store, cfg.MetaRepoRoot, docs); err != nil {
+		if d.RemovedFiles, d.KeptFiles, err = removeHotOriginals(ctx, store, cfg.MetaRepoRoot, docs); err != nil {
 			return d, err
 		}
 	}
@@ -250,6 +280,7 @@ func recordManifest(ctx context.Context, store Store, index, snapshot string, do
 }
 
 // pruneArchived 는 ISM 이 이미 cold 로 보낸(스냅샷에 있고 지금 열려 있지 않은) 달의 hot 원본을 정리한다.
+// 팀의 청크 JSONL 은 한 번만 읽어 달별로 나눈다 — 달마다 다시 읽으면 S3 cold store 의 GET 이 "달 수 × 문서 수" 가 된다.
 func pruneArchived(ctx context.Context, c opensearch.Client, store Store, cfg config.Config, team string, live map[string]bool) ([]TierDecision, error) {
 	archived, err := ArchivedMonths(ctx, c, cfg)
 	if err != nil {
@@ -264,19 +295,30 @@ func pruneArchived(ctx context.Context, c opensearch.Client, store Store, cfg co
 	}
 	sort.Strings(names)
 	own := NewOwnership(archived, store)
+	candidates := map[string]map[string][]sourceDoc{} // 팀 → 인덱스 → hot 원본이 남은 문서
 	var out []TierDecision
 	for _, name := range names {
 		idx, _ := naming.ParseIndex(name)
-		docs, err := coldOwnedFiles(ctx, store, idx.Team, name, own)
+		byIndex, seen := candidates[idx.Team]
+		if !seen {
+			if byIndex, err = hotCandidates(ctx, store, cfg.MetaRepoRoot, idx.Team); err != nil {
+				return out, err
+			}
+			candidates[idx.Team] = byIndex
+		}
+		docs, err := coldOwned(ctx, own, idx.Team, name, byIndex[name])
 		if err != nil {
 			return out, err
 		}
-		removed, err := removeHotOriginals(ctx, store, cfg.MetaRepoRoot, docs)
+		removed, kept, err := removeHotOriginals(ctx, store, cfg.MetaRepoRoot, docs)
 		if err != nil {
 			return out, err
 		}
-		if len(removed) > 0 {
-			out = append(out, TierDecision{Index: name, Action: TierPruned, RemovedFiles: removed})
+		switch {
+		case len(removed) > 0:
+			out = append(out, TierDecision{Index: name, Action: TierPruned, RemovedFiles: removed, KeptFiles: kept})
+		case len(kept) > 0:
+			out = append(out, TierDecision{Index: name, Action: TierKeptUncommitted, KeptFiles: kept})
 		}
 	}
 	return out, nil
@@ -299,84 +341,159 @@ func sourcesIn(ctx context.Context, c opensearch.Client, index, workspace string
 	return docs, err
 }
 
-// coldOwnedFiles 는 cold store 청크 JSONL 중 이 달 인덱스로 라우팅됐고 그 내용이 스냅샷에 들어 있는 문서다
-// (이 workspace 의 cold store 만 보므로 다른 meta-repo 의 원본은 고르지 않는다).
-func coldOwnedFiles(ctx context.Context, store Store, team, index string, own *Ownership) ([]sourceDoc, error) {
+// hotCandidates 는 팀의 cold store 청크 JSONL 중 hot 원본이 아직 남은 문서를 그 청크가 라우팅된 인덱스별로 묶는다.
+// 청크 JSONL 은 한 번씩만 읽고, 원본이 없는 문서는 읽지도 않는다 (이 workspace 의 cold store 만 보므로 다른 meta-repo 의
+// 원본은 고르지 않는다).
+func hotCandidates(ctx context.Context, store Store, root, team string) (map[string][]sourceDoc, error) {
 	keys, err := store.List(ctx, ChunksPrefix(team))
 	if err != nil {
 		return nil, err
 	}
-	var docs []sourceDoc
+	out := map[string][]sourceDoc{}
 	for _, key := range keys {
+		rel := strings.TrimSuffix(strings.TrimPrefix(key, ChunksPrefix(team)), ".jsonl")
+		if !hotOriginalExists(root, rel) {
+			continue
+		}
 		body, ok, err := store.Get(ctx, key)
 		if err != nil {
 			return nil, fmt.Errorf("cold store %s: %w", key, err)
 		}
-		if !ok {
-			continue
-		}
 		chunks, _ := DecodeChunks(body)
-		if len(chunks) == 0 || naming.IndexFor(chunks[0]) != index {
+		if !ok || len(chunks) == 0 {
 			continue
 		}
-		owned, err := own.Owns(ctx, team, index, chunks[0].SourcePath, chunks[0].ContentSHA)
+		head := chunks[0]
+		index := naming.IndexFor(head)
+		out[index] = append(out[index], sourceDoc{team: head.Team, sourcePath: head.SourcePath, contentSHA: head.ContentSHA})
+	}
+	return out, nil
+}
+
+// coldOwned 는 docs 중 index 의 스냅샷이 그 내용을 담은 문서다.
+func coldOwned(ctx context.Context, own *Ownership, team, index string, docs []sourceDoc) ([]sourceDoc, error) {
+	var out []sourceDoc
+	for _, d := range docs {
+		owned, err := own.Owns(ctx, team, index, d.sourcePath, d.contentSHA)
 		if err != nil {
 			return nil, err
 		}
-		if !owned {
-			continue
+		if owned {
+			out = append(out, d)
 		}
-		docs = append(docs, sourceDoc{team: chunks[0].Team, sourcePath: chunks[0].SourcePath, contentSHA: chunks[0].ContentSHA})
 	}
-	return docs, nil
+	return out, nil
+}
+
+// hotOriginalPrefix 는 tier 가 hot 에서 빼는 원본의 위치다 (이 meta-repo 의 docs/ 만).
+const hotOriginalPrefix = "docs/"
+
+// hotOriginalExists 는 rel 이 tier 가 빼는 원본이고 working tree 에 아직 있는가다.
+func hotOriginalExists(root, rel string) bool {
+	if !strings.HasPrefix(rel, hotOriginalPrefix) {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel)))
+	return err == nil
 }
 
 // removeHotOriginals 는 hot(working tree) 원본을 지운다. 이 meta-repo 의 docs/ 원본만,
 // 그리고 지금 내용이 색인·cold store 에 있던 내용과 같을 때만 지운다 (그 사이 고친 문서는 남긴다).
-// git 이 추적하는 파일은 git rm 으로 지워 다음 커밋에 들어가게 한다.
-func removeHotOriginals(ctx context.Context, store Store, root string, docs []sourceDoc) ([]string, error) {
-	var removed []string
+// git 레포면 git 이 되살릴 수 있는 원본(추적하고 HEAD 와 같다)만 git rm 으로 지워 다음 커밋에 들어가게 하고, 추적하지 않거나
+// 커밋 뒤 고친 원본은 남겨 kept 로 알린다 — 지우면 그 내용은 .gitignore 된 cold store 에만 남는다. git 레포가 아니면
+// 되살릴 히스토리가 처음부터 없으므로 cold store raw 확인만으로 지운다.
+func removeHotOriginals(ctx context.Context, store Store, root string, docs []sourceDoc) (removed, kept []string, err error) {
+	if len(docs) == 0 {
+		return nil, nil, nil
+	}
+	inGit, err := gitWorkTree(ctx, root)
+	if err != nil {
+		return nil, nil, err
+	}
 	for _, d := range docs {
-		if !strings.HasPrefix(d.sourcePath, "docs/") {
-			continue
-		}
-		abs := filepath.Join(root, filepath.FromSlash(d.sourcePath))
-		content, err := os.ReadFile(abs)
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
+		ok, err := verifiedCopy(ctx, store, root, d)
 		if err != nil {
-			return removed, fmt.Errorf("read %s: %w", d.sourcePath, err)
+			return removed, kept, err
 		}
-		if document.SHA256(string(content)) != d.contentSHA {
+		if !ok {
 			continue
 		}
-		raw, ok, err := store.Get(ctx, RawKey(d.team, d.sourcePath))
-		if err != nil {
-			return removed, fmt.Errorf("cold store raw %s: %w", d.sourcePath, err)
+		if inGit && !committedAsIs(ctx, root, d.sourcePath) {
+			kept = append(kept, d.sourcePath)
+			continue
 		}
-		if !ok || document.SHA256(raw) != d.contentSHA {
-			continue // cold store 에 같은 원본이 없으면 지우지 않는다
-		}
-		if err := gitRemove(ctx, root, d.sourcePath); err != nil {
-			return removed, err
+		if err := removeOriginal(ctx, root, d.sourcePath, inGit); err != nil {
+			return removed, kept, err
 		}
 		removed = append(removed, d.sourcePath)
 	}
-	return removed, nil
+	return removed, kept, nil
 }
 
-func gitRemove(ctx context.Context, root, rel string) error {
-	cmd := exec.CommandContext(ctx, "git", "rm", "-q", "-f", "--", rel)
-	cmd.Dir = root
-	if err := cmd.Run(); err == nil {
+// verifiedCopy 는 d 가 tier 가 빼는 원본이고, 지금 파일 내용과 cold store raw 가 모두 색인에 있던 내용(sha)과 같은가다.
+func verifiedCopy(ctx context.Context, store Store, root string, d sourceDoc) (bool, error) {
+	if !strings.HasPrefix(d.sourcePath, hotOriginalPrefix) {
+		return false, nil
+	}
+	content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(d.sourcePath)))
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read %s: %w", d.sourcePath, err)
+	}
+	if document.SHA256(string(content)) != d.contentSHA {
+		return false, nil
+	}
+	raw, ok, err := store.Get(ctx, RawKey(d.team, d.sourcePath))
+	if err != nil {
+		return false, fmt.Errorf("cold store raw %s: %w", d.sourcePath, err)
+	}
+	return ok && document.SHA256(raw) == d.contentSHA, nil // cold store 에 같은 원본이 없으면 지우지 않는다
+}
+
+// gitWorkTree 는 root 가 git working tree 안인가다.
+func gitWorkTree(ctx context.Context, root string) (bool, error) {
+	out, err := gitOutput(ctx, root, "rev-parse", "--is-inside-work-tree")
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return false, nil // git 레포가 아니다
+	}
+	if err != nil {
+		return false, fmt.Errorf("git 으로 %s 를 확인하지 못해 hot 원본을 지우지 않았습니다: %w", root, err)
+	}
+	return strings.TrimSpace(out) == "true", nil
+}
+
+// committedAsIs 는 rel 을 git 이 추적하고 지금 내용이 HEAD 와 같은가다 (지워도 git 히스토리에서 되살릴 수 있다).
+// 확인하지 못하면 아니라고 본다 — 남기는 쪽이 안전하다.
+func committedAsIs(ctx context.Context, root, rel string) bool {
+	if _, err := gitOutput(ctx, root, "ls-files", "--error-unmatch", "--", rel); err != nil {
+		return false
+	}
+	_, err := gitOutput(ctx, root, "diff", "--quiet", "HEAD", "--", rel)
+	return err == nil
+}
+
+// removeOriginal 은 원본 하나를 지운다. git 레포면 git rm 으로 지워 다음 커밋에 들어가게 한다.
+func removeOriginal(ctx context.Context, root, rel string, inGit bool) error {
+	if inGit {
+		if out, err := gitOutput(ctx, root, "rm", "-q", "-f", "--", rel); err != nil {
+			return fmt.Errorf("git rm %s: %w %s", rel, err, strings.TrimSpace(out))
+		}
 		return nil
 	}
-	// git 밖이거나 추적하지 않는 파일
 	if err := os.Remove(filepath.Join(root, filepath.FromSlash(rel))); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("remove %s: %w", rel, err)
 	}
 	return nil
+}
+
+func gitOutput(ctx context.Context, root string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	return string(out), err
 }
 
 func newestEventTime(ctx context.Context, c opensearch.Client, index string) (string, error) {

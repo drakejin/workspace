@@ -110,7 +110,8 @@ func TestBootstrapToleratesConcurrentPolicyWrite(t *testing.T) {
 		}
 		return map[string]any{}, nil
 	}}
-	if err := Bootstrap(context.Background(), os, cfg); err != nil {
+	// 다른 내용의 정책을 바꾸는 것은 bootstrap 명령뿐이다 (RUN-9) — 그 PUT 이 다른 프로세스와 겹친 경우
+	if err := bootstrap(context.Background(), os, cfg, claimCluster, func(string, ...any) {}); err != nil {
 		t.Fatalf("409 는 성공으로 본다: %v", err)
 	}
 	want := []string{
@@ -272,18 +273,22 @@ func TestSnapshotRepositoryIsLeftAloneWhenUnchanged(t *testing.T) {
 		}
 		return nil, &Error{Status: 500, Reason: "should not PUT"}
 	}}
-	if err := ensureSnapshotRepository(context.Background(), same, cfg); err != nil || strings.Join(same.calls, "|") != "GET /_snapshot/mem-cold" {
+	quiet := func(string, ...any) {}
+	if err := ensureSnapshotRepository(context.Background(), same, cfg, claimCluster, quiet); err != nil || strings.Join(same.calls, "|") != "GET /_snapshot/mem-cold" {
 		t.Errorf("같으면 다시 쓰지 않는다: %v %v", same.calls, err)
 	}
-	// 스냅샷·복원이 도는 동안 OpenSearch 는 repository 를 바꾸지 못하게 한다 — 이미 있으면 그대로 쓴다
+	// 스냅샷·복원이 도는 동안 OpenSearch 는 repository 를 바꾸지 못하게 한다 — bootstrap 명령은 바꾸지 못했다고 알린다
 	busy := &fakeOS{reply: func(method, path string, _ any) (any, error) {
 		if method == http.MethodGet {
 			return map[string]any{"mem-cold": map[string]any{"type": "fs", "settings": map[string]any{"location": "/old"}}}, nil
 		}
 		return nil, &Error{Status: 500, Reason: "trying to modify or unregister repository that is currently used"}
 	}}
-	if err := ensureSnapshotRepository(context.Background(), busy, cfg); err != nil {
-		t.Errorf("쓰는 중인 repository 는 다음 bootstrap 에 맞춘다: %v", err)
+	if err := ensureSnapshotRepository(context.Background(), busy, cfg, claimCluster, quiet); err == nil || !strings.Contains(err.Error(), "다시") {
+		t.Errorf("쓰는 중인 repository 는 끝난 뒤 다시 하라고 한다: %v", err)
+	}
+	if err := ensureSnapshotRepository(context.Background(), busy, cfg, leaveCluster, quiet); err != nil {
+		t.Errorf("다른 프로세스의 bootstrap 은 바꾸려 하지 않는다: %v", err)
 	}
 	missing := &fakeOS{reply: func(method, path string, _ any) (any, error) {
 		if method == http.MethodGet {
@@ -291,7 +296,7 @@ func TestSnapshotRepositoryIsLeftAloneWhenUnchanged(t *testing.T) {
 		}
 		return map[string]any{}, nil
 	}}
-	if err := ensureSnapshotRepository(context.Background(), missing, cfg); err != nil || strings.Join(missing.calls, "|") != "GET /_snapshot/mem-cold|PUT /_snapshot/mem-cold" {
+	if err := ensureSnapshotRepository(context.Background(), missing, cfg, leaveCluster, quiet); err != nil || strings.Join(missing.calls, "|") != "GET /_snapshot/mem-cold|PUT /_snapshot/mem-cold" {
 		t.Errorf("없으면 만든다: %v %v", missing.calls, err)
 	}
 }
