@@ -197,14 +197,10 @@ func (r *Reconciler) syncFile(ctx context.Context, f ingest.ScannedFile, st cycl
 		sum.ColdOwned++
 		return nil, nil
 	}
-	if binary, err := ingest.IsProbablyBinary(f.Abs); err != nil || binary {
-		r.Log("[reconcile] skip %s (binary content)", f.Rel)
-		sum.Skipped++
-		return nil, nil
-	}
+	// Prepare 가 게이트(바이너리·크기 — ingest_path 와 같은 규칙)를 거친다
 	prepared, err := r.Indexer.Prepare(ctx, f.Abs, "")
 	if err != nil {
-		r.Log("[reconcile] skip %s (%v)", f.Rel, err)
+		r.Log("[reconcile] skip %s (%s)", f.Rel, skipReason(err))
 		sum.Skipped++
 		return nil, nil
 	}
@@ -250,6 +246,15 @@ func (r *Reconciler) syncFile(ctx context.Context, f ingest.ScannedFile, st cycl
 	}
 	entry := diffFrom(f.Rel, b, change)
 	return &entry, nil
+}
+
+// skipReason 은 skip 로그의 사유다 — 게이트에 걸렸으면 그 사유(binary content, size N > M)만, 아니면 오류 그대로.
+func skipReason(err error) string {
+	var skip *ingest.SkipError
+	if errors.As(err, &skip) {
+		return skip.Reason
+	}
+	return err.Error()
 }
 
 // isColdOwned 는 이 workspace 의 cold store 에 지금과 같은 내용이 보관돼 있고, 그 내용이 들어갔던 인덱스가

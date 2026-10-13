@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -167,12 +166,9 @@ func (r *runner) hotVsIndex(ctx context.Context) error {
 }
 
 func (r *runner) checkFile(ctx context.Context, f ingest.ScannedFile) error {
-	if binary, err := ingest.IsProbablyBinary(f.Abs); err != nil || binary {
-		return nil
-	}
 	p, err := r.Indexer.Prepare(ctx, f.Abs, "")
 	if err != nil {
-		return nil // frontmatter 오류 등은 데몬 로그가 이미 남긴다
+		return nil // 게이트(바이너리·크기)에 걸린 파일, frontmatter 오류 등은 데몬 로그가 이미 남긴다
 	}
 	b := p.Built
 	if b.Meta.Kind == model.KindKnowledge && b.Meta.DocType == model.DocKnowledge && !hasSources(b) {
@@ -243,6 +239,10 @@ func (r *runner) orphanChunks(ctx context.Context) error {
 			if _, onDisk := r.files[rel]; onDisk {
 				continue
 			}
+			if ingest.LiveUnderOtherSpelling(r.Config.MetaRepoRoot, rel) {
+				// 같은 파일이 다른 철자(대소문자·NFD)로 디스크에 있다 — APFS 위의 로컬 cold store 에서는 지금 문서의 청크 파일이다
+				continue
+			}
 			if _, indexed := r.docs[rel]; indexed {
 				continue // orphan-index 로 이미 보고했다 — 그 조치(RemoveFile)가 청크 JSONL 까지 지운다
 			}
@@ -280,7 +280,7 @@ func (r *runner) links(ctx context.Context) error {
 	}
 	sort.Strings(rels)
 	for _, rel := range rels {
-		b, err := os.ReadFile(filepath.Join(r.Config.MetaRepoRoot, filepath.FromSlash(rel)))
+		b, err := os.ReadFile(r.files[rel].Abs) // rel 은 NFC 다 — IO 는 디스크의 이름으로
 		if err != nil {
 			continue
 		}

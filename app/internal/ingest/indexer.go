@@ -26,6 +26,8 @@ type Result struct {
 	SourcePath string
 	Index      string
 	Chunks     int
+	// Skipped 는 게이트(바이너리·MEMORY_MAX_FILE_BYTES 초과)에 걸려 색인하지 않았을 때의 사유다. 색인했으면 "".
+	Skipped string
 }
 
 // Prepared 는 쓰기 전에 읽어 둔 문서다. 데몬이 변경·cold 소유 여부를 판단할 때 쓴다.
@@ -42,7 +44,8 @@ type Indexer interface {
 	Write(ctx context.Context, p Prepared) (Result, error)
 	IngestFile(ctx context.Context, input, teamOverride string) (*Result, error)
 	IngestPath(ctx context.Context, input, teamOverride string) ([]Result, error)
-	// RemoveFile 은 문서를 색인과 청크 JSONL 에서 뺀다. indices 가 nil 이면 모든 메모리 인덱스에서.
+	// RemoveFile 은 문서를 색인과 청크 JSONL 에서 뺀다. indices 가 nil 이면 모든 메모리 인덱스에서. input 은 색인에 있는
+	// source_path 그대로 지운다 — 같은 파일이 디스크에 다른 철자로 있으면 청크 JSONL 은 남긴다 (LiveUnderOtherSpelling).
 	RemoveFile(ctx context.Context, input string, indices []string) (int, error)
 	BulkChunks(ctx context.Context, chunks []model.Chunk) (int, error)
 }
@@ -79,8 +82,10 @@ func New(d Deps) Indexer {
 	return &indexer{Deps: d, owned: map[string]bool{}}
 }
 
+// Prepare 는 파일 하나를 읽어 청크로 만든다. 입력 철자는 디스크의 철자로 바꾸고 NFC 로 맞춘 rel 이 문서의 정체다 (ResolveOnDisk).
+// 게이트(바이너리·크기)에 걸리면 *SkipError 다.
 func (ix *indexer) Prepare(ctx context.Context, input, teamOverride string) (Prepared, error) {
-	abs, rel, err := ResolveInsideRoot(ix.Config.MetaRepoRoot, input)
+	abs, rel, err := ResolveOnDisk(ix.Config.MetaRepoRoot, input)
 	if err != nil {
 		return Prepared{}, err
 	}
@@ -90,13 +95,9 @@ func (ix *indexer) Prepare(ctx context.Context, input, teamOverride string) (Pre
 	if err := RealInsideRoot(ix.Config.MetaRepoRoot, abs); err != nil {
 		return Prepared{}, err
 	}
-	content, err := os.ReadFile(abs)
+	content, info, err := ix.readGated(abs, rel)
 	if err != nil {
-		return Prepared{}, fmt.Errorf("read %s: %w", rel, err)
-	}
-	info, err := os.Stat(abs)
-	if err != nil {
-		return Prepared{}, fmt.Errorf("stat %s: %w", rel, err)
+		return Prepared{}, err
 	}
 	git := document.LastCommit(ctx, abs)
 	fallback := git.CommittedAt
@@ -128,6 +129,26 @@ func (ix *indexer) Prepare(ctx context.Context, input, teamOverride string) (Pre
 		built.Chunks[i].SupersededBy, built.Chunks[i].Deprecated = by, deprecated
 	}
 	return Prepared{Abs: abs, Rel: rel, Content: string(content), Built: built}, nil
+}
+
+// readGated 는 게이트(크기·바이너리 — 데몬과 같은 규칙)를 거친 파일 내용과 stat 이다. 걸리면 *SkipError. 크기는 읽기 전에 본다.
+func (ix *indexer) readGated(abs, rel string) ([]byte, fs.FileInfo, error) {
+	info, err := os.Stat(abs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("stat %s: %w", rel, err)
+	}
+	reason, err := Gate(abs, info.Size(), ix.Config.Reconcile.MaxFileBytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read %s: %w", rel, err)
+	}
+	if reason != "" {
+		return nil, nil, &SkipError{Rel: rel, Reason: reason}
+	}
+	content, err := os.ReadFile(abs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read %s: %w", rel, err)
+	}
+	return content, info, nil
 }
 
 // flagsOf 는 다시 쓸 문서에 이어 붙일 superseded_by·deprecated 다. 데몬은 정본(선언·원장)에서 계산한 값을 꽂고(SupersededBy),
@@ -202,8 +223,9 @@ func (ix *indexer) Write(ctx context.Context, p Prepared) (Result, error) {
 	return Result{SourcePath: p.Rel, Index: index, Chunks: len(b.Chunks)}, nil
 }
 
+// IngestFile 은 파일 하나를 적재한다. 색인 대상이 아니면 nil, 게이트에 걸리면 Skipped 에 사유를 담은 결과다.
 func (ix *indexer) IngestFile(ctx context.Context, input, teamOverride string) (*Result, error) {
-	_, rel, err := ResolveInsideRoot(ix.Config.MetaRepoRoot, input)
+	_, rel, err := ResolveOnDisk(ix.Config.MetaRepoRoot, input)
 	if err != nil {
 		return nil, err
 	}
@@ -211,6 +233,10 @@ func (ix *indexer) IngestFile(ctx context.Context, input, teamOverride string) (
 		return nil, nil
 	}
 	p, err := ix.Prepare(ctx, input, teamOverride)
+	var skip *SkipError
+	if errors.As(err, &skip) {
+		return &Result{SourcePath: skip.Rel, Skipped: skip.Reason}, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -221,8 +247,9 @@ func (ix *indexer) IngestFile(ctx context.Context, input, teamOverride string) (
 	return &r, nil
 }
 
+// IngestPath 는 파일 또는 디렉토리를 적재한다. 디렉토리도 디스크의 철자로 바꿔 걷는다 (색인 대상 판단이 실제 이름으로 되게).
 func (ix *indexer) IngestPath(ctx context.Context, input, teamOverride string) ([]Result, error) {
-	abs, _, err := ResolveInsideRoot(ix.Config.MetaRepoRoot, input)
+	abs, _, err := ResolveOnDisk(ix.Config.MetaRepoRoot, input)
 	if err != nil {
 		return nil, err
 	}
@@ -289,6 +316,11 @@ func (ix *indexer) RemoveFile(ctx context.Context, input string, indices []strin
 	deleted, err := opensearch.DeleteDoc(ctx, ix.OS, indices, ix.Config.Workspace, rel)
 	if err != nil {
 		return 0, err
+	}
+	if LiveUnderOtherSpelling(ix.Config.MetaRepoRoot, rel) {
+		// 같은 파일이 디스크에 다른 철자로 있다 — rel 은 옛 철자의 색인일 뿐이다. APFS 위의 로컬 cold store 에서는 두 철자의 키가
+		// 같은 파일이라, 청크 JSONL 을 지우면 진짜 문서의 사본(isColdOwned·archive·reload 가 기대는 것)이 사라진다
+		return deleted, nil
 	}
 	for _, team := range teams {
 		if err := ix.Cold.Remove(ctx, cold.ChunksKey(team, rel)); err != nil {

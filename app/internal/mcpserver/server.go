@@ -214,6 +214,9 @@ func (h *Handlers) Filters(ctx context.Context, in FiltersInput) (string, error)
 		}
 		req.DocType = t
 	}
+	if err := search.Validate(req); err != nil {
+		return "", err
+	}
 	if err := h.Ready(ctx); err != nil {
 		return "", err
 	}
@@ -288,12 +291,26 @@ func (h *Handlers) Ingest(ctx context.Context, in IngestInput) (string, error) {
 	return FormatIngest(results), nil
 }
 
-// FormatIngest 는 적재 결과 목록이다.
+// FormatIngest 는 적재 결과 목록이다. 게이트(바이너리·MEMORY_MAX_FILE_BYTES 초과)에 걸린 파일은 건너뛴 것으로 따로 적는다.
 func FormatIngest(results []ingest.Result) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%d개 문서 적재", len(results))
+	var indexed, skipped []ingest.Result
 	for _, r := range results {
+		if r.Skipped != "" {
+			skipped = append(skipped, r)
+		} else {
+			indexed = append(indexed, r)
+		}
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d개 문서 적재", len(indexed))
+	for _, r := range indexed {
 		fmt.Fprintf(&b, "\n- %s → %s (%d chunks)", r.SourcePath, r.Index, r.Chunks)
+	}
+	if len(skipped) > 0 {
+		fmt.Fprintf(&b, "\n%d개 건너뜀 — 데몬과 같은 게이트: 바이너리·MEMORY_MAX_FILE_BYTES 초과는 색인하지 않는다", len(skipped))
+		for _, r := range skipped {
+			fmt.Fprintf(&b, "\n- %s (%s)", r.SourcePath, r.Skipped)
+		}
 	}
 	return b.String()
 }
@@ -404,15 +421,16 @@ func (h *Handlers) Related(ctx context.Context, in RelatedInput) (string, error)
 	if depth == 0 {
 		depth = 2
 	}
-	ns, err := h.Graph.Neighbors(ctx, h.Config.Workspace, in.Path, depth)
+	path := ingest.CanonicalRel(strings.TrimSpace(in.Path)) // 그래프의 문서 경로는 source_path 와 같은 NFC 다
+	ns, err := h.Graph.Neighbors(ctx, h.Config.Workspace, path, depth)
 	if err != nil {
 		return "", err
 	}
 	if len(ns) == 0 {
-		return in.Path + ": 그래프에서 이어진 문서가 없습니다 (그래프에 없는 문서이거나 링크·entity 가 없다)", nil
+		return path + ": 그래프에서 이어진 문서가 없습니다 (그래프에 없는 문서이거나 링크·entity 가 없다)", nil
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s 와 이어진 문서 %d건 (knowledge graph)\n", in.Path, len(ns))
+	fmt.Fprintf(&b, "%s 와 이어진 문서 %d건 (knowledge graph)\n", path, len(ns))
 	for _, n := range ns {
 		fmt.Fprintf(&b, "- [%d] %s (%s) — %s\n", n.Hops, n.Path, n.Status, describePath(n))
 	}
@@ -496,9 +514,10 @@ func NewServer(h *Handlers) *mcp.Server {
 	}, wrap(h.Log, h.Filters))
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "ingest_path",
-		Title:       "문서 수동 적재",
-		Description: "데몬이 아직 잡지 못한 문서나 디렉토리를 바로 색인한다. 경로는 meta-repository 기준 상대 경로.",
+		Name:  "ingest_path",
+		Title: "문서 수동 적재",
+		Description: "데몬이 아직 잡지 못한 문서나 디렉토리를 바로 색인한다. 경로는 meta-repository 기준 상대 경로. " +
+			"바이너리·크기 초과 파일은 데몬처럼 색인하지 않고 건너뛴 것으로 알린다.",
 	}, wrap(h.Log, h.Ingest))
 
 	mcp.AddTool(server, &mcp.Tool{

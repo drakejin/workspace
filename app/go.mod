@@ -9,6 +9,7 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	go.yaml.in/yaml/v3 v3.0.5
+	golang.org/x/text v0.36.0
 )
 
 require (
