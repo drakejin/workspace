@@ -79,8 +79,8 @@ func (p *liveProbe) ClusterHealth(ctx context.Context) (string, bool) {
 }
 
 func (p *liveProbe) IndexStats(ctx context.Context) (IndexStats, bool) {
-	var rows []struct{} // 인덱스 수만 센다
-	if err := p.os.Do(ctx, http.MethodGet, "/_cat/indices/"+naming.AllPattern, nil, url.Values{"format": {"json"}, "h": {"index"}}, &rows); err != nil {
+	indices, err := p.workspaceIndices(ctx)
+	if err != nil {
 		return IndexStats{}, false
 	}
 	ws := map[string]any{"term": map[string]any{"workspace": p.cfg.Workspace}}
@@ -95,7 +95,29 @@ func (p *liveProbe) IndexStats(ctx context.Context) (IndexStats, bool) {
 	}
 	_ = p.os.Do(ctx, http.MethodPost, "/"+naming.AllPattern+"/_search",
 		map[string]any{"size": 0, "query": ws, "aggs": map[string]any{"last": map[string]any{"max": map[string]any{"field": "ingested_at"}}}}, opensearch.Lenient(), &last)
-	return IndexStats{Indices: len(rows), Documents: docs, Chunks: chunks, LastIndexed: last.Aggregations.Last.ValueAsString}, true
+	return IndexStats{Indices: indices, Documents: docs, Chunks: chunks, LastIndexed: last.Aggregations.Last.ValueAsString}, true
+}
+
+// workspaceIndices 는 이 workspace 의 팀(문서를 둔 팀)이 가진 메모리 인덱스 수다 — 같은 클러스터의 다른 meta-repo·샘플
+// 인덱스는 세지 않는다.
+func (p *liveProbe) workspaceIndices(ctx context.Context) (int, error) {
+	var rows []struct {
+		Index string `json:"index"`
+	}
+	if err := p.os.Do(ctx, http.MethodGet, "/_cat/indices/"+naming.AllPattern, nil, url.Values{"format": {"json"}, "h": {"index"}}, &rows); err != nil {
+		return 0, fmt.Errorf("list indices: %w", err)
+	}
+	teams, err := opensearch.WorkspaceTeams(ctx, p.os, p.cfg.Workspace)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, r := range rows {
+		if idx, ok := naming.ParseIndex(r.Index); ok && teams[idx.Team] {
+			n++
+		}
+	}
+	return n, nil
 }
 
 func (p *liveProbe) Graph(ctx context.Context) (graph.Stats, bool, error) {

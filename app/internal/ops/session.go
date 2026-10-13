@@ -80,11 +80,12 @@ func runSessionContext(ctx context.Context, c *CLI, args []string) (string, erro
 }
 
 // repoOf 는 cwd 가 가리키는 관리 대상 repository 와 그 작업 디렉토리다 (main/{repo}/... 또는 main/{repo}/.worktrees/{issue}/...).
+// root 와 cwd 는 심볼릭 링크를 풀어 비교한다 — 한쪽만 링크 경로여도(macOS 의 /var → /private/var) 같은 곳이다.
 func repoOf(root, cwd string) (string, string) {
 	if cwd == "" {
 		return "", ""
 	}
-	rel, err := filepath.Rel(root, cwd)
+	rel, err := filepath.Rel(resolved(root), resolved(cwd))
 	if err != nil || strings.HasPrefix(rel, "..") {
 		return "", cwd
 	}

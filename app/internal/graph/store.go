@@ -37,7 +37,13 @@ type Neighbor struct {
 type EntityDocs struct {
 	Name string
 	Type string
-	Docs []string
+	Docs []DocRef
+}
+
+// DocRef 는 문서 경로와 그 상태(StatusHot·StatusSuperseded…)다 — 기본 검색에서 숨는 문서를 표시할 수 있게.
+type DocRef struct {
+	Path   string
+	Status string
 }
 
 // Stats 는 workspace 그래프 크기다.
@@ -52,6 +58,8 @@ type Store interface {
 	// Replace 는 workspace 의 그래프를 통째로 바꾼다 (한 트랜잭션).
 	Replace(ctx context.Context, g Graph) error
 	Neighbors(ctx context.Context, workspace, path string, depth int) ([]Neighbor, error)
+	// HasDoc 은 path 의 문서 노드가 workspace 그래프에 있는가다 — 이웃이 없는 문서와 그래프에 없는 문서를 가른다.
+	HasDoc(ctx context.Context, workspace, path string) (bool, error)
 	Entities(ctx context.Context, workspace, query string) ([]EntityDocs, error)
 	Stats(ctx context.Context, workspace string) (Stats, error)
 	Close(ctx context.Context) error
@@ -214,12 +222,26 @@ ORDER BY hops, path LIMIT %d`, depth, maxNeighbors)
 	return out, nil
 }
 
+func (s *store) HasDoc(ctx context.Context, workspace, path string) (bool, error) {
+	res, err := neo4j.ExecuteQuery(ctx, s.driver, `MATCH (d:Doc {key: $key}) RETURN count(d) > 0 AS found`,
+		map[string]any{"key": Key(workspace, LabelDoc, path)},
+		neo4j.EagerResultTransformer, neo4j.ExecuteQueryWithDatabase(s.database), neo4j.ExecuteQueryWithReadersRouting())
+	if err != nil {
+		return false, fmt.Errorf("neo4j doc %s: %w", path, err)
+	}
+	if len(res.Records) == 0 {
+		return false, nil
+	}
+	found, _ := res.Records[0].AsMap()["found"].(bool)
+	return found, nil
+}
+
 func (s *store) Entities(ctx context.Context, workspace, query string) ([]EntityDocs, error) {
 	q := `
 MATCH (e:Entity {workspace: $ws}) WHERE toLower(e.name) CONTAINS toLower($q) OR toLower(e.type + ':' + e.name) = toLower($q)
 MATCH (e)<-[:MENTIONS]-(d:Doc)
 WITH e, d ORDER BY d.path
-RETURN e.name AS name, e.type AS type, collect(d.path) AS docs
+RETURN e.name AS name, e.type AS type, collect({path: d.path, status: d.status}) AS docs
 ORDER BY name LIMIT 50`
 	res, err := neo4j.ExecuteQuery(ctx, s.driver, q, map[string]any{"ws": workspace, "q": query},
 		neo4j.EagerResultTransformer, neo4j.ExecuteQueryWithDatabase(s.database), neo4j.ExecuteQueryWithReadersRouting())
@@ -229,9 +251,22 @@ ORDER BY name LIMIT 50`
 	out := make([]EntityDocs, 0, len(res.Records))
 	for _, r := range res.Records {
 		m := r.AsMap()
-		out = append(out, EntityDocs{Name: str(m["name"]), Type: str(m["type"]), Docs: strs(m["docs"])})
+		out = append(out, EntityDocs{Name: str(m["name"]), Type: str(m["type"]), Docs: docRefs(m["docs"])})
 	}
 	return out, nil
+}
+
+// docRefs 는 collect({path, status}) 결과다. 경로가 없는 항목은 버린다.
+func docRefs(v any) []DocRef {
+	items, _ := v.([]any)
+	out := make([]DocRef, 0, len(items))
+	for _, it := range items {
+		m, _ := it.(map[string]any)
+		if p := str(m["path"]); p != "" {
+			out = append(out, DocRef{Path: p, Status: str(m["status"])})
+		}
+	}
+	return out
 }
 
 func (s *store) Stats(ctx context.Context, workspace string) (Stats, error) {

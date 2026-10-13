@@ -79,7 +79,7 @@ func runFilters(ctx context.Context, c *CLI, args []string) (string, error) {
 
 func runIngest(ctx context.Context, c *CLI, args []string) (string, error) {
 	f := newFlags("ingest")
-	team := f.String("team", "", "frontmatter 대신 쓸 팀")
+	team := f.String("team", "", "이번 적재에만 쓸 팀 (frontmatter 는 그대로 — 파일이 바뀌면 데몬이 frontmatter team 으로 다시 쓴다)")
 	rest, err := f.parse(args)
 	if err != nil {
 		return "", err
@@ -297,46 +297,45 @@ func runGraph(ctx context.Context, c *CLI, args []string) (string, error) {
 	if c.Graph == nil {
 		return "", graph.ErrDisabled
 	}
-	switch sub {
-	case "neighbors":
-		if len(args) != 1 {
-			return "", f.usageErr()
-		}
+	switch {
+	case sub == "neighbors" && len(args) == 1:
 		return c.Handlers.Related(ctx, mcpserver.RelatedInput{Path: args[0], Depth: *depth})
-	case "entity":
-		if len(args) != 1 {
-			return "", f.usageErr()
-		}
+	case sub == "entity" && len(args) == 1:
 		return c.Handlers.Entities(ctx, mcpserver.EntityInput{Entity: args[0]})
-	case "stats":
+	case sub == "stats":
 		st, err := c.Graph.Stats(ctx, c.Config.Workspace)
 		if err != nil {
 			return "", err
 		}
 		return renderGraphStats(c.Config.Workspace, st), nil
-	case "rebuild":
-		if err := c.Handlers.Ready(ctx); err != nil {
-			return "", err
-		}
-		indices, err := ingest.ManagedIndices(ctx, c.OS)
-		if err != nil {
-			return "", err
-		}
-		docs, err := ingest.FetchIndexedDocs(ctx, c.OS, indices, c.Config.Workspace)
-		if err != nil {
-			return "", err
-		}
-		if err := c.Graph.Ping(ctx); err != nil {
-			return "", err
-		}
-		g, err := graph.Rebuild(ctx, c.Graph, c.Config.MetaRepoRoot, c.Config.Workspace, docs)
-		if err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("[graph] rebuild: docs=%d entities=%d repos=%d edges=%d (LLM 0회 — 색인·파일·원장에서)", len(g.Docs), len(g.Entities), len(g.Repos), len(g.Edges)), nil
+	case sub == "rebuild":
+		return rebuildGraph(ctx, c)
 	default:
 		return "", f.usageErr()
 	}
+}
+
+// rebuildGraph 는 색인·파일·원장만으로 workspace 그래프를 다시 만든다 (LLM 없이).
+func rebuildGraph(ctx context.Context, c *CLI) (string, error) {
+	if err := c.Handlers.Ready(ctx); err != nil {
+		return "", err
+	}
+	indices, err := ingest.ManagedIndices(ctx, c.OS)
+	if err != nil {
+		return "", err
+	}
+	docs, err := ingest.FetchIndexedDocs(ctx, c.OS, indices, c.Config.Workspace)
+	if err != nil {
+		return "", err
+	}
+	if err := c.Graph.Ping(ctx); err != nil {
+		return "", err
+	}
+	g, err := graph.Rebuild(ctx, c.Graph, c.Config.MetaRepoRoot, c.Config.Workspace, docs)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("[graph] rebuild: docs=%d entities=%d repos=%d edges=%d (LLM 0회 — 색인·파일·원장에서)", len(g.Docs), len(g.Entities), len(g.Repos), len(g.Edges)), nil
 }
 
 func renderGraphStats(workspace string, st graph.Stats) string {

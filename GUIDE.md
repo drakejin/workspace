@@ -188,16 +188,17 @@ launchd 가 없는 머신은 nohup 백그라운드라(`[memory-daemon] backgroun
 | --- | --- | --- |
 | `search_memory` | `query?`, `project?`, `topic?`, `date?`(YYYY-MM-DD), `time_range?{from,to}`, `doc_type?`, `team?`, `org?`, `size?`, `include_superseded?` | hot BM25 검색, 또는 질의어 없이 필터로 가져오기(최신순, 문서 하나에 한 건). 밀린 문서·deprecate 된 문서는 기본으로 숨긴다 |
 | `search_filters` | `project?`, `topic?`, `date?`, `time_range?`, `doc_type?`, `team?`, `org?`, `include_superseded?` | 필터에 쓸 수 있는 값과 문서 수 — 프로젝트·주제·문서 종류·날짜 범위·날짜별 수 |
-| `related_docs` | `path`, `depth?`(1~3, 기본 2) | 그래프에서 이어진 문서와 그 경로(관계·이유). depth 2 면 같은 entity·같은 repo 를 다루는 문서도 |
-| `docs_by_entity` | `entity` (`order-api` 또는 `service:order-api`, 부분 일치) | 증류 entity 로 문서 찾기 |
-| `ingest_path` | `path`(meta-repo 기준), `team?` | 데몬보다 먼저 색인 (meta-repo 밖 경로는 거부). 경로는 디스크의 철자(대소문자·NFC)로 맞춘다. 데몬과 같은 게이트 — 바이너리·`MEMORY_MAX_FILE_BYTES` 초과는 색인하지 않고 `N개 건너뜀 … - <path> (<이유>)` 로 알린다. 새로 쓴 내용은 다음 데몬 사이클이 판정·증류·그래프로 넘긴다 (데몬이 이미 넘겨받은 같은 내용을 다시 적재하면 넘기지 않는다) |
+| `related_docs` | `path`, `depth?`(1~3, 기본 2) | 그래프에서 이어진 문서와 그 경로(관계·이유). depth 2 면 같은 entity·같은 repo 를 다루는 문서도. `path` 는 `ingest_path` 처럼 맞춘다(`./docs/…`·meta-repo 안의 절대 경로·디스크의 철자). 이어진 것이 없으면 `그래프에 없는 문서입니다`(경로 오타, 아직 그래프에 없는 새 문서) 와 `그래프에 있지만 이어진 문서가 없습니다` 를 가른다 |
+| `docs_by_entity` | `entity` (`order-api` 또는 `service:order-api`, 부분 일치) | 증류 entity 로 문서 찾기. 기본 검색에서 숨는 문서에는 `related_docs` 와 같은 상태 이름 `(superseded)`·`(deprecated)` 를 붙인다 |
+| `ingest_path` | `path`(meta-repo 기준), `team?` | 데몬보다 먼저 색인 (meta-repo 밖 경로는 거부). 경로는 디스크의 철자(대소문자·NFC)로 맞춘다. 데몬과 같은 게이트 — 바이너리·`MEMORY_MAX_FILE_BYTES` 초과는 색인하지 않고 `N개 건너뜀 … - <path> (<이유>)` 로 알린다. 새로 쓴 내용은 다음 데몬 사이클이 판정·증류·그래프로 넘긴다 (데몬이 이미 넘겨받은 같은 내용을 다시 적재하면 넘기지 않는다). `team` 은 이번 적재에만 쓰는 일회성이다 — frontmatter 를 바꾸지 않으므로 파일이 바뀌면 데몬이 frontmatter team(없으면 기본 팀)으로 다시 쓴다. 계속 둘 팀은 frontmatter `team:` 에 적는다 |
 | `list_cold` | `team?` | cold 인덱스 목록 (그 인덱스를 담은 스냅샷 전부·최근 시각, 복원 여부). 이 meta-repo 의 팀만 |
-| `restore_cold` | `index`, `confirmed?` | cold 인덱스 복원 — 그 인덱스를 담은 스냅샷 전부를 합친다. `confirmed=true` 없이는 복원하지 않고 "사용자에게 먼저 물으라" 고 돌려준다 |
+| `restore_cold` | `index`, `confirmed?` | cold 인덱스 복원 — 그 인덱스를 담은 스냅샷 전부를 합친다. 먼저 이 workspace 팀의 cold 에 그 인덱스가 있는지 보고, 없으면 `confirmed` 와 상관없이 `cold 에 … 가 없습니다 — list_cold …` 로 실패한다. 있으면 `confirmed=true` 없이는 복원하지 않고 "사용자에게 먼저 물으라" 고 돌려준다 |
 
 ### 3.3 SessionStart 훅
 
 `.claude/settings.json` 이 세션을 열 때마다 `scripts/session-context/run.sh` 를 부른다. 세션 디렉토리가 `main/{repo}` 나 그 worktree
 (`main/{repo}/.worktrees/{issue}`)면 repo 이름과 브랜치 이름의 단어로 메모리를 검색해 상위 5건의 경로를 맥락으로 붙인다.
+세션 디렉토리와 `META_REPO_ROOT` 는 심볼릭 링크를 풀어 비교한다 — 한쪽만 링크 경로여도(macOS 의 `/var` → `/private/var`) 같은 repo 로 본다.
 판정 질문이 쌓여 있으면 "사용자에게 `scripts/memory/run.sh questions` 를 알려 줄 것" 도 붙인다. 발표 Q&A 의 "search_memory 를 안 부르면?" 에 대한 답이다.
 빌드·검색이 실패하면 아무것도 출력하지 않는다 (세션을 막지 않는다).
 
@@ -289,7 +290,7 @@ order-api 가 결제 대행사로 보내는 모든 결제 요청에 `Idempotency
 
 머리의 `청크 N건 · 문서 M건` 은 맞은 청크 수와 그 청크들이 나온 문서 수다 — 질의어 검색은 청크(제목 단위로 자른 조각) 단위라 한 문서의 여러 절이
 따로 나와 결과 수(`size`)를 나눠 쓸 수 있다 (여기서는 ADR 과 샘플 README 가 한 청크씩. 필터로 가져오기의 `문서 N건` 은 문서 수). 함수명·필드명이 그대로 맞는다 — 식별자 분할 analyzer 가 `ClickDeduplicator.window` 를 원형과 `click`·`deduplicator`·`window` 로 함께 색인한다.
-`요약:` 줄은 증류가 붙인 것이다. 밀린 구판까지 보려면 `-superseded` (플래그는 질의어 앞에):
+`요약:` 줄은 증류가 붙인 것이다. 밀린 구판까지 보려면 `-superseded` (플래그는 질의어 앞에 — 뒤에 두면 질의어로 읽히지 않게 사용 오류로 알린다):
 
 ```bash
 scripts/memory/run.sh search -superseded PaymentRetryPolicy
@@ -346,12 +347,13 @@ workspace=memory-demo
 nodes: Doc=16 Entity=27 Repo=2
 edges: IN_REPO=5 LINKS_TO=7 MENTIONS=38 SUPERSEDES=3
 
-service:order-api — README.md, docs/feature/payment-retry/2026-08-04-retry-policy.md, docs/repository/order-api/adr/0001-idempotency-key.md, docs/specs/refund-window/plan.md
+service:order-api — README.md, docs/feature/payment-retry/2026-08-04-retry-policy.md (superseded), docs/repository/order-api/adr/0001-idempotency-key.md, docs/specs/refund-window/plan.md
 api:order-api — docs/feature/payment-retry/2026-10-06-retry-policy.md, main/catalog-api/docs/architecture.md
 repo:order-api — docs/repository/order-api/INDEX.md
 ```
 
 entity 이름은 증류(LLM)가 뽑아 같은 대상이 `service:`·`api:`·`repo:` 로 갈릴 수 있다 — 부분 일치로 함께 찾는다.
+기본 검색에서 숨는 문서(밀린 구판·deprecate 된 문서)에는 `related_docs` 와 같은 상태 이름 `(superseded)`·`(deprecated)` 가 붙는다.
 
 ```bash
 scripts/memory/run.sh graph neighbors -depth 1 docs/knowledge/order-status-v2.md
@@ -464,6 +466,7 @@ ISM·tier 대상에서 빠지고(`auto_manage=false`), 데몬도 건드리지 �
 
 같은 질문을 memory-mcp 가 있을 때(`with`: 파일 도구 + memory 도구)와 없을 때(`without`: Read·Glob·Grep 만) claude 에 시켜
 도구 호출 수·턴·시간·토큰·비용·정답 여부를 나란히 잰다. 질문 파일은 **meta-repo 밖**에 둔다 — 안에 있으면 without 쪽이 정답을 Grep 할 수 있어 거부한다.
+`-modes` 는 `with`·`without` 만 받고(오타면 사용 오류), with 조건이 부를 `-mcp-script` 가 없으면 시작하지 않는다 — 어느 쪽이든 그대로 돌면 with 가 memory 도구 없이 측정된다.
 
 ```bash
 scripts/memory/run.sh bench -questions ~/Workspace/drakejin/workspace/examples/sample-bench.yaml -model haiku

@@ -120,8 +120,50 @@ type Options struct {
 	RulesFile string
 }
 
-// Run 은 질문마다 조건마다 Runs 회 측정한다. 실패한 회차는 Err 에 남기고 계속한다.
+// knownModes 는 측정 조건 이름이다. 이 밖의 이름은 MCP 설정이 없어(--mcp-config "") memory 도구 없이 잰다.
+var knownModes = map[string]bool{ModeWith: true, ModeWithout: true}
+
+// ParseModes 는 쉼표로 나눈 조건 목록이다. 이름 앞뒤 공백은 뗀다 ('with ,without' 의 'with ' 가 모르는 조건이 되지 않게).
+func ParseModes(s string) []string {
+	parts := strings.Split(s, ",")
+	modes := make([]string, 0, len(parts))
+	for _, p := range parts {
+		modes = append(modes, strings.TrimSpace(p))
+	}
+	return modes
+}
+
+// Validate 는 측정을 시작하기 전에 설정을 본다 — 모르는 조건(오타)이나 없는 MCP 스크립트로 돌면 with 조건이 memory 도구
+// 없이 잰 결과가 보고서에 남는다. MCP 스크립트는 with 조건이 있을 때만 본다.
+func (o Options) Validate() error {
+	if len(o.Modes) == 0 {
+		return fmt.Errorf("bench: 측정 조건이 비어 있습니다 (%s, %s)", ModeWith, ModeWithout)
+	}
+	needsScript := false
+	for _, m := range o.Modes {
+		if !knownModes[m] {
+			return fmt.Errorf("bench: 모르는 측정 조건 %q — %s 또는 %s", m, ModeWith, ModeWithout)
+		}
+		needsScript = needsScript || m == ModeWith
+	}
+	if !needsScript {
+		return nil
+	}
+	st, err := os.Stat(o.MCPScript)
+	if err != nil {
+		return fmt.Errorf("bench: %s 조건이 부를 MCP 스크립트 %s: %w", ModeWith, o.MCPScript, err)
+	}
+	if st.IsDir() {
+		return fmt.Errorf("bench: %s 조건이 부를 MCP 스크립트 %s 가 디렉토리입니다", ModeWith, o.MCPScript)
+	}
+	return nil
+}
+
+// Run 은 질문마다 조건마다 Runs 회 측정한다. 실패한 회차는 Err 에 남기고 계속한다. 설정이 틀리면 claude 를 부르기 전에 실패한다.
 func Run(ctx context.Context, suite Suite, opt Options, run Runner) ([]Result, error) {
+	if err := opt.Validate(); err != nil {
+		return nil, err
+	}
 	mcpConfig, cleanup, err := writeMCPConfig(opt)
 	if err != nil {
 		return nil, err

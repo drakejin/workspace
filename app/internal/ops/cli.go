@@ -130,27 +130,58 @@ func (f flags) parse(args []string) ([]string, error) {
 	case errors.Is(err, flag.ErrHelp):
 		return nil, &helpRequest{text: f.help()}
 	case err != nil:
-		return nil, fmt.Errorf("%w: %s: %v\n%s", ErrUsage, f.name, err, f.help())
+		return nil, f.invalid(err)
 	}
-	return f.Args(), nil
+	rest := f.Args()
+	if misplaced := f.misplacedFlag(args, rest); misplaced != "" {
+		return nil, f.invalid(fmt.Errorf("플래그 %s 는 질의어·경로보다 앞에 두세요 — 뒤에 오면 플래그가 아니라 질의어·경로로 읽힙니다 (그 글자를 그대로 넘기려면 -- 뒤에)", misplaced))
+	}
+	return rest, nil
 }
 
-// sub 는 하위 명령(archive deprecate, graph neighbors)과 나머지 인자다. 없거나 플래그가 먼저 오면 사용법이다 ('-h' 면 도움말).
-func (f flags) sub(args []string) (string, []string, error) {
-	if len(args) == 0 {
-		return "", nil, f.usageErr()
+// misplacedFlag 는 플래그가 아닌 인자 뒤에 온 이 명령의 플래그다 (없으면 ""). flag 패키지는 첫 비플래그 인자에서 읽기를 멈춰,
+// 'search 질의어 -topic T' 의 -topic T 가 말없이 질의어가 된다. '--' 뒤의 인자는 사용자가 일부러 넘긴 글자라 보지 않는다
+// (flag 패키지가 먹은 맨 앞의 '--' 도, 질의어 사이의 '--' 도).
+func (f flags) misplacedFlag(args, rest []string) string {
+	if start := len(args) - len(rest); start > 0 && args[start-1] == "--" {
+		return ""
 	}
-	if strings.HasPrefix(args[0], "-") {
-		if _, err := f.parse(args[:1]); err != nil {
-			return "", nil, err
+	for _, a := range rest {
+		if a == "--" {
+			return ""
 		}
+		if !strings.HasPrefix(a, "-") {
+			continue
+		}
+		name, _, _ := strings.Cut(strings.TrimLeft(a, "-"), "=")
+		if name != "" && f.Lookup(name) != nil {
+			return a
+		}
+	}
+	return ""
+}
+
+// sub 는 하위 명령(archive deprecate, graph neighbors)과 나머지 인자다. 없거나 플래그가 먼저 오면 사용 오류다 ('-h' 면 도움말).
+// 앞의 플래그를 따로 읽지 않는다 — 값을 받는 플래그(-depth 3)를 혼자 읽으면 값이 있는데도 "값이 없다" 고 잘못 알린다.
+func (f flags) sub(args []string) (string, []string, error) {
+	switch {
+	case len(args) == 0:
 		return "", nil, f.usageErr()
+	case helpArgs[args[0]]:
+		return "", nil, &helpRequest{text: f.help()}
+	case strings.HasPrefix(args[0], "-"):
+		return "", nil, f.invalid(fmt.Errorf("하위 명령을 플래그(%s)보다 먼저 쓰세요", args[0]))
 	}
 	return args[0], args[1:], nil
 }
 
 func (f flags) usageErr() error {
 	return fmt.Errorf("%w: %s", ErrUsage, f.help())
+}
+
+// invalid 는 이 명령의 인자가 틀렸다는 사용 오류다 — 무엇이 틀렸는지와 사용법·플래그 표를 함께 보인다.
+func (f flags) invalid(err error) error {
+	return fmt.Errorf("%w: %s: %w\n%s", ErrUsage, f.name, err, f.help())
 }
 
 // help 는 명령의 사용법 줄과 플래그 표(이름·값 종류·설명·기본값)다.

@@ -103,7 +103,7 @@ scripts/memory-daemon/run.sh status  # 5) 확인 — 무엇이 꺼져 있으면 
 [status] distill: off, cache 0건, 대기 0건
 ```
 
-`memory indices` 는 클러스터 전체(다른 meta-repo·샘플 포함)의 메모리 인덱스 수다. 단일 노드라 `yellow` 가 정상이다. 포트는 같은 머신의 다른 메모리 스택(9200·9201, 7687·7688)과 겹치지 않게 잡았다:
+`memory indices` 는 이 workspace 의 팀(문서를 둔 팀)이 가진 메모리 인덱스 수다 — 같은 클러스터의 다른 meta-repo·샘플 인덱스는 세지 않는다. 단일 노드라 `yellow` 가 정상이다. 포트는 같은 머신의 다른 메모리 스택(9200·9201, 7687·7688)과 겹치지 않게 잡았다:
 OpenSearch `localhost:9202`, Neo4j bolt `7689` · 브라우저 `7476`, (선택) Dashboards `5603`.
 
 ### 1.3 상주·정기 실행 (macOS launchd)
@@ -148,11 +148,11 @@ claude mcp add drakejin-workspace-memory-mcp -s user -- bash ~/Workspace/drakeji
 | --- | --- |
 | `search_memory(query?, project?, topic?, date?, time_range?, doc_type?, team?, org?, size?, include_superseded?)` | hot 영역 BM25 검색, 또는 필터로 가져오기. 필터: **프로젝트**(`project`), **주제**(`topic`), **날짜**(`date`, 그날 하루 — 문서의 날: frontmatter `date`, 없으면 커밋 시각을 `MEMORY_TIME_ZONE` 에서 본 날), **범위**(`time_range` from~to), 문서 종류. `query` 를 비우고 필터만 주면 맞는 문서를 최신순으로(문서 하나에 한 건, 머리 `문서 N건`) 가져온다. 질의어 검색은 청크 단위라 한 문서의 여러 절이 따로 나올 수 있다(머리 `청크 N건 · 문서 M건 (BM25)` — 맞은 청크 수와 그 청크들의 문서 수). 결과는 `source_path › header_path (종류, project=, topic=, 날짜)`, 청크, (증류가 켜져 있으면) 요약 |
 | `search_filters(project?, topic?, date?, time_range?, doc_type?, …)` | 필터에 쓸 수 있는 값과 문서 수 — 프로젝트·주제·문서 종류·날짜 범위·날짜별 수 |
-| `related_docs(path, depth?)` | knowledge graph 에서 이어진 문서 — supersedes·derived_from·relates·링크·같은 entity·같은 repo |
-| `docs_by_entity(entity)` | 증류가 뽑은 entity(`service:order-api` 등)를 다루는 문서 |
-| `ingest_path(path, team?)` | 데몬이 아직 잡지 못한 파일·디렉토리를 바로 색인. 경로는 디스크의 철자(대소문자·NFC)로 맞추고, 데몬과 같은 게이트로 바이너리·`MEMORY_MAX_FILE_BYTES` 초과는 건너뛴다고 알린다. 적재한 문서는 다음 데몬 사이클이 판정·증류·그래프로 넘긴다 |
+| `related_docs(path, depth?)` | knowledge graph 에서 이어진 문서 — supersedes·derived_from·relates·링크·같은 entity·같은 repo. `path` 는 `ingest_path` 처럼 맞춘다(`./docs/…`·meta-repo 안의 절대 경로·디스크의 철자). 그래프에 없는 문서면 `그래프에 없는 문서입니다`, 있지만 이어진 것이 없으면 `그래프에 있지만 이어진 문서가 없습니다` 로 가른다 |
+| `docs_by_entity(entity)` | 증류가 뽑은 entity(`service:order-api` 등)를 다루는 문서. 기본 검색에서 숨는 문서에는 `related_docs` 처럼 `(superseded)`·`(deprecated)` 를 붙인다 |
+| `ingest_path(path, team?)` | 데몬이 아직 잡지 못한 파일·디렉토리를 바로 색인. 경로는 디스크의 철자(대소문자·NFC)로 맞추고, 데몬과 같은 게이트로 바이너리·`MEMORY_MAX_FILE_BYTES` 초과는 건너뛴다고 알린다. 적재한 문서는 다음 데몬 사이클이 판정·증류·그래프로 넘긴다. `team` 은 이번 적재에만 쓴다 — 파일이 바뀌면 데몬이 frontmatter team(없으면 기본 팀)으로 다시 쓰므로, 계속 둘 팀은 frontmatter 에 적는다 |
 | `list_cold(team?)` | 60일이 지나 cold 로 간 인덱스 목록 (인덱스마다 그 인덱스를 담은 스냅샷 전부). `team` 은 팀 이름만 받는다(org 는 받지 않는다). 이 meta-repo 의 팀만 — 다른 workspace 의 팀이면 거부한다 |
-| `restore_cold(index, confirmed?)` | cold 인덱스 복원 (그 인덱스를 담은 스냅샷 전부를 합친다). `confirmed=true` 가 없으면 "사용자에게 먼저 물으라" 고 돌려준다 |
+| `restore_cold(index, confirmed?)` | cold 인덱스 복원 (그 인덱스를 담은 스냅샷 전부를 합친다). 이 workspace 팀의 cold 에 없는 인덱스면 `confirmed` 와 상관없이 실패한다 (`list_cold` 로 확인). 있으면 `confirmed=true` 가 없을 때 "사용자에게 먼저 물으라" 고 돌려준다 |
 
 발표의 넷(`search_memory`·`ingest_path`·`list_cold`·`restore_cold`)은 발표 그대로이고, `search_filters` 는 필터 값을 고르려고, 그래프 둘(`related_docs`·`docs_by_entity`)은 Neo4j 를 붙이며 더했다. 그래프를 끄면(`MEMORY_GRAPH_URI=off`) 그래프 도구는 "꺼져 있다" 를,
 Neo4j 에 붙지 못하면 연결 오류를 돌려준다. 어느 쪽이든 나머지 다섯은 그대로 돈다.
@@ -382,7 +382,7 @@ cat .cache/daemon/status.json | jq .lastCycle         # 마지막 사이클
 | `scripts/run-issues/run.sh <issue> <repo>` / `scripts/done-issue/run.sh [--force] <issue> <repo>` | 이슈 worktree 생성(`main/{repo}/.worktrees/{issue}`) / 제거. 커밋하지 않은 변경·untracked 파일이 있으면 잃게 될 파일을 보여 주고 남긴다(exit 1) — `--force` 면 버리고 지운 뒤 버린 파일을 보여 준다(git 이 지우기를 거부하면 변경이 그대로 남았다고 알린다). lock 건 worktree 와 worktree 가 아닌 디렉토리는 `--force` 여도 지우지 않는다 |
 | `scripts/docs-cleaner/run.sh` | `docs/issues`, `docs/specs` 문서 전체 삭제 (파괴적 — 확인을 묻는다. `CONFIRM=yes` 면 묻지 않는다) |
 | `scripts/mcp/run.sh` | MCP 서버 (stdio) 수동 실행 (`.mcp.json` 이 부르는 진입점) |
-| `scripts/memory/run.sh search [-project P] [-topic T] [-date YYYY-MM-DD] [-from D] [-to D] [-type K] [-team T \| -org O] [-size N] [-superseded] [query]` | 검색 — 질의어 없이 필터만 주면 최신순으로 가져온다 (플래그는 질의어 앞에) |
+| `scripts/memory/run.sh search [-project P] [-topic T] [-date YYYY-MM-DD] [-from D] [-to D] [-type K] [-team T \| -org O] [-size N] [-superseded] [query]` | 검색 — 질의어 없이 필터만 주면 최신순으로 가져온다 (플래그는 질의어 앞에 — 질의어 뒤에 둔 `-topic` 같은 플래그는 사용 오류) |
 | `scripts/memory/run.sh filters [-project P] [-topic T] [-date D] [-from D] [-to D] [-type K] [-team T \| -org O] [-superseded]` | 검색 필터에 쓸 수 있는 값과 문서 수 (MCP `search_filters` 와 같다) |
 | `scripts/memory/run.sh questions` / `answer <pairKey> latest\|old\|keep` | 판정 질문 보기 / 답하기 |
 | `scripts/memory/run.sh compaction-report [-team T]` | 주간 compaction 1·2단계 리포트 (수명 확인·충돌 후보) |
@@ -390,7 +390,7 @@ cat .cache/daemon/status.json | jq .lastCycle         # 마지막 사이클
 | `scripts/memory/run.sh audit [-apply]` | 정합성 감사 (고칠 수 있는 것: 고아 색인·미색인·내용 불일치·고아 청크) |
 | `scripts/memory/run.sh archive <deprecate\|undeprecate\|purge\|edit> [-team T] -by B -reason R [-superseded-by P] [-file F] <path>` | cold 문서 조치 |
 | `scripts/memory/run.sh graph <neighbors [-depth N] <path> \| entity <name> \| stats \| rebuild>` | knowledge graph 조회 / 재구축 (LLM 0회) |
-| `scripts/memory/run.sh bench -questions F [-model M] [-modes with,without] [-runs N] [-max-turns N] [-mcp-script P]` | memory-mcp 유무 비교 측정 → `.cache/bench/*.md` (F 는 meta-repo 밖). `-max-turns` 는 질문당 최대 턴(기본 15), `-mcp-script` 는 with 조건이 부를 `scripts/mcp/run.sh` 절대 경로(기본: 이 레포의 것) |
+| `scripts/memory/run.sh bench -questions F [-model M] [-modes with,without] [-runs N] [-max-turns N] [-mcp-script P]` | memory-mcp 유무 비교 측정 → `.cache/bench/*.md` (F 는 meta-repo 밖). `-max-turns` 는 질문당 최대 턴(기본 15), `-mcp-script` 는 with 조건이 부를 `scripts/mcp/run.sh` 절대 경로(기본: 이 레포의 것). `-modes` 는 `with`·`without` 만 받고, with 조건이 있는데 `-mcp-script` 가 없으면 claude 를 부르기 전에 거부한다 |
 
 전체 목록은 `scripts/memory/run.sh help` — 위 표에 없는 명령(`list-cold`, `restore`, `reload`, `ingest`, `bootstrap`, `tier-tick` …)도
 이 진입점으로 부른다 (`.env` 를 읽고, 바뀐 게 있으면 빌드한다. `.cache/bin/memory-mcp` 를 직접 부르면 `.env` 가 빠진다).
