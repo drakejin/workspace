@@ -24,7 +24,7 @@ argument-hint: "[team]"
    scripts/memory/run.sh tier -team T -dry-run
    scripts/memory/run.sh tier -team T
    ```
-   지워진 원본은 cold store raw 와 스냅샷에 있다. `git rm` 했으면(tier 출력에 `(git rm)` 줄이 있으면 — 그 뒤에 `hot 에 남김` 요약 줄이 올 수 있다) 사용자에게 커밋을 제안하고, `hot 에 남김` 원본이 있으면 커밋한 뒤 tier 를 다시 돌려야 빠진다고 알린다.
+   지워진 원본은 cold store raw 와 스냅샷에 있다. `git rm` 했으면(tier 출력에 `(git rm)` 줄이 있으면 — 그 뒤에 `hot 원본 N개는 git 이 되살릴 수 없어(…) 남겼습니다` 요약 줄이 올 수 있고, 남긴 파일은 `- hot 에 남김: …` 줄로 나온다) 사용자에게 커밋을 제안하고, `hot 에 남김` 원본이 있으면 커밋한 뒤 tier 를 다시 돌려야 빠진다고 알린다.
 6. **감사** — `scripts/memory/run.sh audit` 로 깨진 링크(`broken-link`)·근거 없는 knowledge(`unsourced-fact`)가 없는지 본다.
    이미 cold 에 있는 문서가 틀렸다면 고치지 말고 사용자에게 `scripts/memory/run.sh archive deprecate -team T -by <누가> -reason <왜> <path>` 를 제안한다.
 
