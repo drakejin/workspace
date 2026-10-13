@@ -48,9 +48,8 @@ type CycleRecord struct {
 	Error   string        `json:"error,omitempty"`
 }
 
-// Status 는 데몬이 사이클마다 쓰는 상태다. daemon-status 가 읽는다.
+// Status 는 데몬이 사이클마다 쓰는 상태다. status 명령이 읽는다 — 돌고 있는 pid 는 pid 파일(RunningPID)이 맡는다.
 type Status struct {
-	PID             int          `json:"pid"`
 	StartedAt       string       `json:"startedAt"`
 	HeartbeatAt     string       `json:"heartbeatAt"`
 	IntervalSeconds int          `json:"intervalSeconds"`

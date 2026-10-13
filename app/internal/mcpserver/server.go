@@ -24,6 +24,13 @@ import (
 // Version 은 서버 버전이다.
 const Version = "0.2.0"
 
+// 안내문은 MCP 도구와 CLI 명령(scripts/memory/run.sh <command>)이 같은 Handlers 로 보므로, 도구 이름 옆에 CLI 명령을 함께 적는다.
+const (
+	listColdHint = "list_cold(CLI: list-cold)"
+	restoreHint  = "restore_cold(index, confirmed=true) (CLI: restore <index>)"
+	searchHint   = "search_memory, CLI: search"
+)
+
 // Deps 는 서버 의존이다.
 type Deps struct {
 	Config  config.Config
@@ -136,10 +143,10 @@ func (h *Handlers) Search(ctx context.Context, in SearchInput) (string, error) {
 	listing := strings.TrimSpace(in.Query) == ""
 	if len(hits) == 0 {
 		if listing {
-			return fmt.Sprintf("%s · 필터에 맞는 문서가 없습니다. search_filters 로 쓸 수 있는 프로젝트·주제·날짜를 확인하세요.", scope), nil
+			return fmt.Sprintf("%s · 필터에 맞는 문서가 없습니다. %s 로 쓸 수 있는 프로젝트·주제·날짜를 확인하세요.", scope, search.FiltersHint), nil
 		}
 		return fmt.Sprintf("%s hot 영역에서 %q 에 맞는 문서가 없습니다.\n"+
-			"단어(서비스명, 함수명, 에러 코드)를 바꿔 다시 검색하세요. %d일보다 오래된 맥락이면 list_cold 를 확인하세요.", scope, in.Query, h.Config.HotDays), nil
+			"단어(서비스명, 함수명, 에러 코드)를 바꿔 다시 검색하세요. %d일보다 오래된 맥락이면 %s 를 확인하세요.", scope, in.Query, h.Config.HotDays, listColdHint), nil
 	}
 	var b strings.Builder
 	switch {
@@ -317,7 +324,7 @@ func FormatIngest(results []ingest.Result) string {
 
 // ListColdInput 은 list_cold 입력이다.
 type ListColdInput struct {
-	Team string `json:"team,omitempty" jsonschema:"팀/실 이름. 생략하면 기본 팀"`
+	Team string `json:"team,omitempty" jsonschema:"팀 이름. 생략하면 기본 팀"`
 }
 
 // ListCold 는 list_cold 다.
@@ -341,7 +348,7 @@ func (h *Handlers) ListCold(ctx context.Context, in ListColdInput) (string, erro
 	for _, c := range list {
 		fmt.Fprintf(&b, "- %s  snapshot=%s  at=%s%s\n", c.Name, strings.Join(c.Snapshots, ","), c.SnapshotTime, coldMark(c))
 	}
-	b.WriteString("\n복원이 필요하면 사용자에게 먼저 \"cold 인덱스 X가 있는데 복원할까요\"라고 묻고, 동의를 받은 뒤 restore_cold(index, confirmed=true).")
+	b.WriteString("\n복원이 필요하면 사용자에게 먼저 \"cold 인덱스 X가 있는데 복원할까요\"라고 묻고, 동의를 받은 뒤 " + restoreHint + ".")
 	return b.String(), nil
 }
 
@@ -368,7 +375,7 @@ func (h *Handlers) coldList(ctx context.Context, team string) ([]cold.Index, err
 		return nil, err
 	}
 	if !ours {
-		return nil, fmt.Errorf("%w: team %q 는 workspace %q 의 팀이 아닙니다 — list_cold·restore_cold 는 이 meta-repo 가 적재한 팀의 cold 인덱스만 다룹니다",
+		return nil, fmt.Errorf("%w: team %q 는 workspace %q 의 팀이 아닙니다 — cold 목록·복원(list_cold·restore_cold, CLI: list-cold·restore)은 이 meta-repo 가 적재한 팀의 cold 인덱스만 다룹니다",
 			ingest.ErrTeamOwned, team, h.Config.Workspace)
 	}
 	return list, nil
@@ -399,8 +406,8 @@ func (h *Handlers) Restore(ctx context.Context, in RestoreInput) (string, error)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%s 을(를) snapshot %s 에서 hot 으로 복원했습니다. 이제 search_memory 에 포함됩니다 (ISM 자동 관리 제외).",
-		restored.Name, strings.Join(restored.Snapshots, ",")), nil
+	return fmt.Sprintf("%s 을(를) snapshot %s 에서 hot 으로 복원했습니다. 이제 검색(%s)에 포함됩니다 (ISM 자동 관리 제외).",
+		restored.Name, strings.Join(restored.Snapshots, ","), searchHint), nil
 }
 
 // RelatedInput 은 related_docs 입력이다.

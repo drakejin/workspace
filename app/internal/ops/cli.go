@@ -66,7 +66,7 @@ func init() {
 		"archive":           {usage: "<deprecate|undeprecate|purge|edit> [-team T] -by B -reason R [-superseded-by P] [-file F] <path>   cold 문서 조치", run: runArchive},
 		"graph":             {usage: "<neighbors [-depth N] <path> | entity <name> | stats | rebuild>   knowledge graph (Neo4j)", offline: true, run: runGraph},
 		"session-context":   {usage: "Claude Code SessionStart 훅 — stdin 의 훅 JSON 을 읽고 관련 메모리를 출력한다 (실패해도 조용히)", offline: true, run: runSessionContext},
-		"bench":             {usage: "-questions F [-model M] [-modes with,without] [-runs N]   memory-mcp 유무로 같은 질문을 claude 에 시켜 비교 (F 는 meta-repo 밖)", offline: true, run: runBench},
+		"bench":             {usage: "-questions F [-model M] [-modes with,without] [-runs N] [-max-turns N] [-mcp-script P]   memory-mcp 유무로 같은 질문을 claude 에 시켜 비교 (F 는 meta-repo 밖)", offline: true, run: runBench},
 	}
 }
 
@@ -78,7 +78,7 @@ func Usage() string {
 	}
 	sort.Strings(names)
 	var b strings.Builder
-	b.WriteString("사용법: memory-mcp <command> [flags]\n  serve   MCP 서버 (stdio) — 인자가 없을 때 기본\n")
+	b.WriteString("사용법: memory-mcp <command> [flags]   (플래그 설명: memory-mcp <command> -h)\n  serve   MCP 서버 (stdio) — 인자가 없을 때 기본\n")
 	for _, name := range names {
 		fmt.Fprintf(&b, "  %-18s %s\n", name, commands[name].usage)
 	}
@@ -91,13 +91,18 @@ func (c *CLI) Run(ctx context.Context, name string, args []string) error {
 	if !ok {
 		return fmt.Errorf("%w: 모르는 명령 %q", ErrUsage, name)
 	}
-	if !cmd.offline && name != "bootstrap" {
+	// 도움말은 OpenSearch 없이도 보인다
+	if !cmd.offline && name != "bootstrap" && !asksHelp(args) {
 		if err := c.Handlers.Ready(ctx); err != nil {
 			return err
 		}
 	}
 	// 실패해도 명령이 돌려준 출력은 보인다 — tier 처럼 앞에서 이미 지운 것이 있는 명령이 그 내역을 잃지 않게
 	out, err := cmd.run(ctx, c, args)
+	var help *helpRequest
+	if errors.As(err, &help) {
+		out, err = help.text, nil
+	}
 	if out != "" {
 		if _, werr := fmt.Fprintln(c.Out, out); err == nil {
 			err = werr
@@ -107,6 +112,7 @@ func (c *CLI) Run(ctx context.Context, name string, args []string) error {
 }
 
 // flags 는 명령 하나의 플래그 집합이다. 쓰지 않는 플래그를 받으면 사용 오류가 된다.
+// name 은 commands 표의 이름이다 — 사용 오류와 '-h' 가 그 줄과 플래그 표를 함께 보인다.
 type flags struct {
 	*flag.FlagSet
 	name string
@@ -114,17 +120,75 @@ type flags struct {
 
 func newFlags(name string) flags {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs.SetOutput(io.Discard) // 플래그 표는 help 가 만든다 — flag 패키지가 stderr 에 따로 쓰지 않게
 	return flags{FlagSet: fs, name: name}
 }
 
 func (f flags) parse(args []string) ([]string, error) {
-	if err := f.Parse(args); err != nil {
-		return nil, fmt.Errorf("%w: %s: %v", ErrUsage, f.name, err)
+	err := f.Parse(args)
+	switch {
+	case errors.Is(err, flag.ErrHelp):
+		return nil, &helpRequest{text: f.help()}
+	case err != nil:
+		return nil, fmt.Errorf("%w: %s: %v\n%s", ErrUsage, f.name, err, f.help())
 	}
 	return f.Args(), nil
 }
 
-func usageErr(name string) error {
-	return fmt.Errorf("%w: %s %s", ErrUsage, name, commands[name].usage)
+// sub 는 하위 명령(archive deprecate, graph neighbors)과 나머지 인자다. 없거나 플래그가 먼저 오면 사용법이다 ('-h' 면 도움말).
+func (f flags) sub(args []string) (string, []string, error) {
+	if len(args) == 0 {
+		return "", nil, f.usageErr()
+	}
+	if strings.HasPrefix(args[0], "-") {
+		if _, err := f.parse(args[:1]); err != nil {
+			return "", nil, err
+		}
+		return "", nil, f.usageErr()
+	}
+	return args[0], args[1:], nil
 }
+
+func (f flags) usageErr() error {
+	return fmt.Errorf("%w: %s", ErrUsage, f.help())
+}
+
+// help 는 명령의 사용법 줄과 플래그 표(이름·값 종류·설명·기본값)다.
+func (f flags) help() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s %s", f.name, commands[f.name].usage)
+	f.VisitAll(func(fl *flag.Flag) {
+		b.WriteString("\n    " + flagHelp(fl))
+	})
+	return b.String()
+}
+
+// flagNameWidth 는 플래그 표의 이름 칸 너비다 (가장 긴 "-superseded-by string" 에 맞춘다).
+const flagNameWidth = 22
+
+// zeroDefaults 는 기본값으로 보이지 않을 값이다 (flag.PrintDefaults 와 같다).
+var zeroDefaults = map[string]bool{"": true, "0": true, "false": true}
+
+func flagHelp(fl *flag.Flag) string {
+	kind, desc := flag.UnquoteUsage(fl)
+	name := "-" + fl.Name
+	if kind != "" {
+		name += " " + kind
+	}
+	line := fmt.Sprintf("%-*s %s", flagNameWidth, name, desc)
+	if !zeroDefaults[fl.DefValue] {
+		line += " (기본 " + fl.DefValue + ")"
+	}
+	return line
+}
+
+// helpRequest 는 '<command> -h' 다. Run 이 text 를 Out 에 쓰고 성공으로 끝낸다.
+type helpRequest struct{ text string }
+
+func (h *helpRequest) Error() string { return h.text }
+
+// helpArgs 는 flag 패키지가 도움말로 읽는 인자다.
+var helpArgs = map[string]bool{"-h": true, "-help": true, "--h": true, "--help": true}
+
+// asksHelp 는 명령 바로 뒤에 도움말을 청했는가다.
+func asksHelp(args []string) bool { return len(args) > 0 && helpArgs[args[0]] }

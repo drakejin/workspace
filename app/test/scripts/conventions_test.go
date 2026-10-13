@@ -78,6 +78,19 @@ func TestCommentsNameLiveCommands(t *testing.T) {
 	}
 }
 
+// scriptAlias 는 scripts/{기능}/run.sh 를 그대로 부르는 Makefile 레시피 줄이다.
+var scriptAlias = regexp.MustCompile(`^\t@?bash \.\./scripts/[^/\s]+/run\.sh`)
+
+// FILE-14: app/Makefile 은 Go 개발 타깃(build·test*)만 둔다. scripts/*/run.sh 를 다시 감싼 별칭(예전 mcp)은 아무도 부르지 않는
+// 두 번째 진입점이다 (.mcp.json 은 scripts/mcp/run.sh 를 직접 부른다).
+func TestAppMakefileHasNoScriptAliases(t *testing.T) {
+	for n, line := range readLines(t, filepath.Join(repoRoot(t), "app", "Makefile")) {
+		if scriptAlias.MatchString(line) {
+			t.Errorf("app/Makefile:%d: 스크립트 별칭 %q — 진입점(scripts/*/run.sh)을 직접 부른다", n+1, strings.TrimSpace(line))
+		}
+	}
+}
+
 // commentFiles 는 주석을 검사할 파일이다: scripts/ 전부, scenarios/*.sh, examples/*.yaml.
 func commentFiles(t *testing.T, root string) []string {
 	t.Helper()

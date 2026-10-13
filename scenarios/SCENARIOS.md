@@ -202,7 +202,7 @@ printf -- '---\ndate: %s\n---\n# 배송비 정책\n\n## 결정\n\nShippingFeePol
 | --- | --- | --- |
 | W1 | `grep -E '^[a-z][a-z0-9-]*:' Makefile \| cut -d: -f1` | 정확히 `init sync memory-init memory-daemon-start memory-daemon-stop` |
 | W2 | `make -n init sync memory-init memory-daemon-start memory-daemon-stop` | 각각 `bash scripts/{init,sync,memory-init}/run.sh`, `bash scripts/memory-daemon/run.sh start`, `… stop` |
-| W3 | `grep -E '^[a-z][a-z0-9-]*:' app/Makefile \| cut -d: -f1` | `build test test-e2e test-e2e-slow test-e2e-s3 mcp` |
+| W3 | `grep -E '^[a-z][a-z0-9-]*:' app/Makefile \| cut -d: -f1` | `build test test-e2e test-e2e-slow test-e2e-s3` (MCP 서버는 `scripts/mcp/run.sh` 하나로 부른다) |
 | W4 | `make init` | `[hook] pre-commit: installed`, books-guitar clone (`[clone] books-guitar: …` 또는 이미 있으면 `[skip]`), `[init] summary: 1 repos / … / 0 failed`, 이어서 sync 출력. (GitHub 인증 실패면 FAIL 로 적고 W5~W7 은 SKIP) |
 | W5 | `make sync` | `[index] INDEX.md: all repos listed` 와 pull 결과 |
 | W6 | `scripts/run-issues/run.sh SCN-TEST books-guitar` 후 `git -C main/books-guitar worktree list` | `worktree 'SCN-TEST' created`, 목록에 `main/books-guitar/.worktrees/SCN-TEST` |
@@ -210,7 +210,7 @@ printf -- '---\ndate: %s\n---\n# 배송비 정책\n\n## 결정\n\nShippingFeePol
 | W8 | `mkdir -p docs/specs/scn-x && echo x > docs/specs/scn-x/a.md && scripts/docs-cleaner/run.sh < /dev/null; echo "exit=$?"; ls docs/specs` | `[docs-cleaner] 취소`, exit=1, `scn-x` 가 남아 있다 |
 | W9 | `CONFIRM=yes scripts/docs-cleaner/run.sh; ls docs/specs` | `[clean] docs/specs/scn-x`, `docs/specs` 에 INDEX.md 만 |
 | W10 | `scripts/schedule/run.sh install --dry-run \| grep -E 'Label\|tier-tick'` | `com.drakejin.workspace.tier` 와 `tier-tick` — 설치는 하지 않는다 |
-| W11 | `scripts/memory/run.sh help` | 명령 목록에 `search … [-project P] [-topic T] [-date YYYY-MM-DD] [-from D] [-to D]`, `filters`, `tier`, `archive`, `graph` 등 |
+| W11 | `scripts/memory/run.sh help` 와 `scripts/memory/run.sh bench -h; echo "exit=$?"` | 명령 목록에 `search … [-project P] [-topic T] [-date YYYY-MM-DD] [-from D] [-to D]`, `filters`, `tier`, `archive`, `graph`, `bench … [-max-turns N] [-mcp-script P]` 등. `bench -h` 는 플래그 표(`-max-turns int … 질문당 최대 턴 (기본 15)`, `-mcp-script string …`)를 보이고 `exit=0` |
 | W12 | `rm -rf "$W"` | 사본 삭제 (실제 워크스페이스의 `main/` 은 건드리지 않았다) |
 
 ## G7. LLM 판정·증류·entity — 이름 `llm` (claude CLI 필요, 비용 발생)

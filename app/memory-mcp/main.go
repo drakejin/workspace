@@ -1,7 +1,7 @@
 // memory-mcp 는 MCP 서버(stdio)이자 운영 CLI 다.
 //
 //	memory-mcp            MCP 서버 (stdio) — .mcp.json 이 scripts/mcp/run.sh 로 부른다
-//	memory-mcp <command>  운영 명령 (search, tier, audit, graph, archive, bench ...). 'memory-mcp help'
+//	memory-mcp <command>  운영 명령 (search, tier, audit, graph, archive, bench ...). 'memory-mcp help', 플래그는 'memory-mcp <command> -h'
 package main
 
 import (

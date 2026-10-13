@@ -60,7 +60,7 @@ func TestSearch(t *testing.T) {
 		t.Fatal(err)
 	}
 	hits := res.Hits
-	want := []Hit{{Score: 3.2, Index: "mem-ads-2026.10", SourcePath: "docs/a.md", HeaderPath: "A", DocType: model.DocNote, Summary: "s", SupersededBy: "docs/b.md"}}
+	want := []Hit{{Score: 3.2, SourcePath: "docs/a.md", HeaderPath: "A", DocType: model.DocNote, Summary: "s", SupersededBy: "docs/b.md"}}
 	if !reflect.DeepEqual(hits, want) || os.path != "/mem-ads-hot/_search" {
 		t.Errorf("hits = %+v path=%s", hits, os.path)
 	}

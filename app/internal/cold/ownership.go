@@ -124,9 +124,6 @@ func NewOwnership(archive Archive, store Store) *Ownership {
 	return &Ownership{archive: archive, store: store, manifests: map[string]*manifest{}}
 }
 
-// Archive 는 판단의 바탕이 된 스냅샷 달 목록이다.
-func (o *Ownership) Archive() Archive { return o.archive }
-
 // Owns 는 team 의 index 로 갔던 sourcePath 의 내용(contentSHA)을 cold 가 갖고 있는가다.
 func (o *Ownership) Owns(ctx context.Context, team, index, sourcePath, contentSHA string) (bool, error) {
 	snaps := o.archive[index]

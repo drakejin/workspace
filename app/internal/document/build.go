@@ -37,7 +37,6 @@ type Input struct {
 type Built struct {
 	Meta       Metadata
 	EventTime  time.Time
-	EventDay   string // YYYY-MM-DD — 날짜 필터가 맞추는 값
 	ContentSHA string // 원문 전체 — 데몬의 변경 감지 기준
 	BodySHA    string // frontmatter 제외 본문 — 판정 쌍·증류 캐시 키. 메타만 바뀌면 그대로다
 	Title      string
@@ -75,7 +74,6 @@ func Build(in Input) (Built, error) {
 	built := Built{
 		Meta:       meta,
 		EventTime:  eventTime,
-		EventDay:   eventDay,
 		ContentSHA: SHA256(in.Content),
 		BodySHA:    SHA256(body),
 		Title:      title,

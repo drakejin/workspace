@@ -17,10 +17,10 @@ import (
 	"github.com/drakejin/workspace/app/internal/graph"
 	"github.com/drakejin/workspace/app/internal/ingest"
 	"github.com/drakejin/workspace/app/internal/mcpserver"
+	"github.com/drakejin/workspace/app/internal/model"
 	"github.com/drakejin/workspace/app/internal/naming"
 	"github.com/drakejin/workspace/app/internal/opensearch"
 	"github.com/drakejin/workspace/app/internal/ops"
-	"github.com/drakejin/workspace/app/internal/search"
 )
 
 // newGraph 는 실제 Neo4j(make memory-init)에 붙는다. 그래프를 끈 설정(MEMORY_GRAPH_URI=off)이면 건너뛰고,
@@ -42,6 +42,22 @@ func newGraph(t *testing.T, cfg config.Graph) graph.Store {
 	}
 	t.Cleanup(func() { _ = g.Close(context.Background()) })
 	return g
+}
+
+// docIndices 는 팀의 hot alias 에서 문서(대표 청크)가 들어 있는 인덱스들이다 — 검색 결과는 인덱스를 보이지 않으므로 직접 묻는다.
+func docIndices(t *testing.T, client opensearch.Client, cfg config.Config, sourcePath string) []string {
+	t.Helper()
+	query := opensearch.FirstChunks(cfg.Workspace, map[string]any{"term": map[string]any{"source_path": sourcePath}})
+	var indices []string
+	err := opensearch.Scan(context.Background(), client, naming.HotAlias(cfg.DefaultTeam), query, []string{"source_path"}, opensearch.ChunkSort,
+		func(h opensearch.Hit[model.Chunk]) error {
+			indices = append(indices, h.Index)
+			return nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return indices
 }
 
 // TestKnowledgeGraphAndSupersededRelocation 은 데몬 사이클이 knowledge graph 를 만들고(링크·supersedes·entity),
@@ -74,20 +90,11 @@ func TestKnowledgeGraphAndSupersededRelocation(t *testing.T) {
 	d.Settle() // 증류가 entity 를 붙이면 그래프가 한 번 더 만들어진다
 
 	t.Run("밀린 knowledge 는 knowledge 인덱스를 떠나 자기 달 인덱스로 간다", func(t *testing.T) {
-		hitsRes, err := search.Search(ctx, client, search.Request{Workspace: cfg.Workspace, Team: cfg.DefaultTeam, Query: "OrderStatusEnum", IncludeSuperseded: true})
-		hits := hitsRes.Hits
-		if err != nil {
-			t.Fatal(err)
-		}
-		where := map[string]string{}
-		for _, h := range hits {
-			where[h.SourcePath] = h.Index
-		}
-		if got := where["docs/knowledge/order-status-v2.md"]; got != naming.KnowledgeIndex(cfg.DefaultTeam) {
+		if got := docIndices(t, client, cfg, "docs/knowledge/order-status-v2.md"); len(got) != 1 || got[0] != naming.KnowledgeIndex(cfg.DefaultTeam) {
 			t.Errorf("v2 index = %q", got)
 		}
-		if got := where["docs/knowledge/order-status.md"]; !naming.IsMonthly(got) {
-			t.Errorf("구판 index = %q (월 인덱스여야 한다)", got)
+		if got := docIndices(t, client, cfg, "docs/knowledge/order-status.md"); len(got) != 1 || !naming.IsMonthly(got[0]) {
+			t.Errorf("구판 index = %q (월 인덱스 하나여야 한다)", got)
 		}
 	})
 

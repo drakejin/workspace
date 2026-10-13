@@ -31,8 +31,7 @@ type BulkResponse struct {
 
 // BulkItemResult 는 _bulk 항목 하나의 결과다.
 type BulkItemResult struct {
-	Status int `json:"status"`
-	Error  *struct {
+	Error *struct {
 		Type   string `json:"type"`
 		Reason string `json:"reason"`
 	} `json:"error,omitempty"`

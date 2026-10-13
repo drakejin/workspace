@@ -22,8 +22,7 @@ const (
 
 // hookInput 은 Claude Code SessionStart 훅이 stdin 으로 주는 JSON 중 쓰는 부분이다.
 type hookInput struct {
-	Cwd    string `json:"cwd"`
-	Source string `json:"source"` // startup | resume | clear | compact
+	Cwd string `json:"cwd"`
 }
 
 var wordSplit = regexp.MustCompile(`[^\p{L}\p{N}]+`)
@@ -31,7 +30,11 @@ var wordSplit = regexp.MustCompile(`[^\p{L}\p{N}]+`)
 // runSessionContext 는 SessionStart 훅이다. 세션이 열린 디렉토리가 main/{repo}(또는 그 worktree)면 repo·브랜치 이름으로
 // 메모리를 검색해 맥락으로 넣는다 — 에이전트가 search_memory 를 빼먹어도 지난 history 가 앞에 붙는다.
 // 훅은 세션을 막으면 안 되므로 어떤 실패도 조용히 넘긴다 (출력 없음 = 맥락 없음).
-func runSessionContext(ctx context.Context, c *CLI, _ []string) (string, error) {
+func runSessionContext(ctx context.Context, c *CLI, args []string) (string, error) {
+	// 훅은 인자 없이 부른다. 사람이 친 '-h' 는 stdin 을 기다리지 않고 도움말을 본다
+	if _, err := newFlags("session-context").parse(args); err != nil {
+		return "", err
+	}
 	ctx, cancel := context.WithTimeout(ctx, sessionTimeout)
 	defer cancel()
 	var in hookInput

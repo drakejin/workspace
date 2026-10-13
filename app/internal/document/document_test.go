@@ -233,7 +233,7 @@ func TestEventDay(t *testing.T) {
 	}
 	// frontmatter 에 시각까지 적었으면 그 시각을 시간대로 본다
 	b, _ = Build(Input{Workspace: "ws", SourcePath: "docs/c.md", Content: "---\ndate: 2026-10-06T23:30:00Z\n---\n# C", DefaultTeam: "t", Now: time.Now(), Location: seoul})
-	if b.Chunks[0].EventDay != "2026-10-07" || b.EventDay != "2026-10-07" {
+	if b.Chunks[0].EventDay != "2026-10-07" {
 		t.Errorf("frontmatter 시각 = %q", b.Chunks[0].EventDay)
 	}
 }

@@ -4,8 +4,7 @@
 #   make test-e2e       실제 스택(루트의 make memory-init)에 붙는 e2e + 커버리지 (../.cache/coverage.out)
 #   make test-e2e-slow  ISM 이 실제 시간으로 인덱스를 cold 로 옮기는 e2e (6~15분)
 #   make test-e2e-s3    cold 층을 S3(LocalStack)에 두는 e2e — 전용 스택(test/s3)을 올렸다 내린다
-#   make mcp            MCP 서버(stdio) 수동 실행 (.mcp.json 은 ../scripts/mcp/run.sh 를 직접 부른다)
-.PHONY: build test test-e2e test-e2e-slow test-e2e-s3 mcp
+.PHONY: build test test-e2e test-e2e-slow test-e2e-s3
 
 build:
 	@bash -c 'source ../scripts/memory-common.sh && memory_build "$$(cd .. && pwd)"'
@@ -22,6 +21,3 @@ test-e2e-slow:
 
 test-e2e-s3:
 	@bash test/run.sh s3
-
-mcp:
-	@bash ../scripts/mcp/run.sh

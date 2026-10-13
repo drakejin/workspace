@@ -319,7 +319,7 @@ func (d *Daemon) maybeAudit(ctx context.Context) {
 func (d *Daemon) Heartbeat() error {
 	d.mu.Lock()
 	s := state.Status{
-		PID: os.Getpid(), StartedAt: d.startedAt.UTC().Format(time.RFC3339Nano), HeartbeatAt: d.now().UTC().Format(time.RFC3339Nano),
+		StartedAt: d.startedAt.UTC().Format(time.RFC3339Nano), HeartbeatAt: d.now().UTC().Format(time.RFC3339Nano),
 		IntervalSeconds: int(d.cfg.Reconcile.Interval / time.Second), Cycles: d.cycles, LastCycle: d.lastCycle, DistillPending: d.distill.Pending(),
 	}
 	d.mu.Unlock()
