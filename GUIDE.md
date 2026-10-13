@@ -107,14 +107,17 @@ NFC 로 친 경로를 줘도 디스크의 철자 하나로 적재하고, 주제(
 make memory-daemon-start
 ```
 
+이 절과 §2.3 의 출력은 이 레포를 시나리오 사본(`scenarios/setup.sh guide-status` 가 만든 임시 meta-repo — workspace·팀 `scn-guide-status`)에 옮겨
+최초 색인(`scripts/memory-daemon/run.sh once`) 뒤 start → start → status → stop 을 한 번에 돌려 찍은 것이다. 이 레포에서 부르면 `scn-guide-status` 자리에 `workspace`, 경로 자리에 이 레포의 경로가 나온다.
+
 ```
-[memory-daemon] launchd: com.drakejin.memory.workspace.daemon (workspace=workspace, root=/Users/jin/Workspace/drakejin/workspace — 로그인 때 다시 켜고, 죽으면 다시 띄운다)
-[memory-daemon] started (pid 39975) — 로그 /Users/jin/Workspace/drakejin/workspace/.cache/daemon/daemon.log, 상태 'scripts/memory-daemon/run.sh status'
+[memory-daemon] launchd: com.drakejin.memory.scn-guide-status.daemon (workspace=scn-guide-status, root=/var/folders/q8/vd3kytp54ns729xr6nb5ztkc0000gn/T/drakejin-memory-scenario-guide-status — 로그인 때 다시 켜고, 죽으면 다시 띄운다)
+[memory-daemon] started (pid 84558) — 로그 /var/folders/q8/vd3kytp54ns729xr6nb5ztkc0000gn/T/drakejin-memory-scenario-guide-status/.cache/daemon/daemon.log, 상태 'scripts/memory-daemon/run.sh status'
 ```
 
 macOS 는 launchd(`com.drakejin.memory.<workspace>.daemon` — meta-repo 마다 따로, RunAtLoad + KeepAlive)에 올린다 — 로그인 때 다시 켜고, 죽으면 다시 띄운다 (kill -9 뒤 약 19초 만에 다시 떴다).
 launchd 가 없는 머신은 nohup 백그라운드라(`[memory-daemon] background: nohup (이 머신을 다시 켜면 다시 start 하세요)`) 머신을 다시 켜면 다시 start 한다.
-이미 돌고 있으면 그대로 둔다 (`[memory-daemon] already running (pid 39975) — 로그 …`).
+이미 돌고 있으면 그대로 둔다 (`[memory-daemon] already running (pid 84558) — 로그 …`).
 
 멈출 때는 `make memory-daemon-stop` — launchd 에서 내리고(plist 삭제) 떠 있는 데몬에 SIGTERM 을 보내 끝날 때까지 최대 60초 기다린다.
 
@@ -127,9 +130,9 @@ launchd 가 없는 머신은 nohup 백그라운드라(`[memory-daemon] backgroun
 
 ```
 [daemon] LLM 백엔드: 로컬 claude CLI (2.1.283 (Claude Code))
-[reconcile] scanned=11 indexed=0 stat_updated=0 removed=0 skipped=0 failed=0 cold_owned=0 flags=0 trigger=boot took=11ms
+[reconcile] scanned=11 indexed=0 stat_updated=0 removed=0 skipped=0 failed=0 cold_owned=0 flags=0 trigger=boot took=14ms
 [graph] docs=14 entities=0 edges=29
-[daemon] watching /Users/jin/Workspace/drakejin/workspace (루트 문서, docs/, main/*/docs/), interval=1m0s, debounce=3s, judge=on, distill=off, graph=on
+[daemon] watching /var/folders/q8/vd3kytp54ns729xr6nb5ztkc0000gn/T/drakejin-memory-scenario-guide-status (루트 문서, docs/, main/*/docs/), interval=1m0s, debounce=3s, judge=on, distill=off, graph=on
 ```
 
 문서를 저장하면 3초 뒤 색인된다. 변화가 없으면 사이클 비용은 stat-walk 수 ms. 꺼져 있던 동안의 변경은 다음 boot 가 흡수한다.
@@ -156,23 +159,23 @@ launchd 가 없는 머신은 nohup 백그라운드라(`[memory-daemon] backgroun
 데몬이 떠 있을 때 (macOS 면 첫 줄에 launchd 적재 여부):
 
 ```
-[memory-daemon] launchd: loaded (com.drakejin.memory.workspace.daemon)
+[memory-daemon] launchd: loaded (com.drakejin.memory.scn-guide-status.daemon)
 [status] container opensearch: running
 [status] container neo4j: running
 [status] opensearch: yellow (http://localhost:9202)
-[status] index: workspace=workspace 11 docs, 97 chunks (memory indices 6)
-[status] last indexed: 2026-10-13T00:32:11.795Z
+[status] index: workspace=scn-guide-status 11 docs, 98 chunks (memory indices 1)
+[status] last indexed: 2026-10-13T08:30:10.710Z
 [status] graph: 14 docs, 0 entities, 29 edges (bolt://localhost:7689)
-[status] daemon: running pid=39975 since 2026-10-13T00:32:29.33219Z, cycles=1
-[status] heartbeat: 1s ago (interval 60s)
-[status] last cycle: 2026-10-13T00:32:29.422157Z trigger=boot scanned=11 indexed=0 stat_updated=0 removed=0 skipped=0 failed=0 cold_owned=0 took=11ms
+[status] daemon: running pid=84558 since 2026-10-13T08:30:18.01851Z, cycles=1
+[status] heartbeat: 10s ago (interval 60s)
+[status] last cycle: 2026-10-13T08:30:18.056057Z trigger=boot scanned=11 indexed=0 stat_updated=0 removed=0 skipped=0 failed=0 cold_owned=0 took=14ms
 [status] last graph: docs=14 entities=0 edges=29
 [status] judge: on, 답을 기다리는 질문 0건
 [status] distill: off, cache 0건, 대기 0건
 ```
 
 `index:` 줄의 docs·chunks 는 이 workspace 가 색인에 둔 문서·청크 수(밀린 문서도 센다)이고, `memory indices` 는 이 workspace 의 팀(문서를 둔 팀)이 가진 메모리 인덱스 수다 —
-같은 클러스터의 다른 meta-repo·샘플·테스트 인덱스는 세지 않는다. 데몬이 꺼져 있으면 `daemon: stopped` 아래로 마지막으로 돈 데몬의 사이클이 그대로 보인다.
+같은 클러스터의 다른 meta-repo·샘플·테스트 인덱스는 세지 않는다 (위 사본은 문서가 모두 knowledge 라 `mem-scn-guide-status-knowledge` 하나다). 데몬이 꺼져 있으면 `daemon: stopped` 아래로 마지막으로 돈 데몬의 사이클이 그대로 보인다.
 
 꺼진 게 있으면 마지막 `할 일` 줄이 무엇을 실행할지 알려 준다. 단일 노드라 `yellow` 가 정상이다.
 

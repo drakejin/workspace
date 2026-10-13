@@ -307,7 +307,7 @@ MATCH (e:Entity {workspace: 'workspace'})<-[:MENTIONS]-(d:Doc) RETURN e.type, e.
 **`cold-store/` 와 `snapshots/` 는 지우면 안 된다.** cold 층의 정본(스냅샷, archive 로 고친 본문)이 여기에만 있다. tier 가 hot 에서 뺀 원본이
 git 히스토리에도 남는 것은 git 이 meta-repo 아래 파일을 다룰 때(meta-repo 가 git 레포의 꼭대기이거나, 바깥 레포가 그 아래 파일을 추적할 때)뿐이다 —
 그때 tier 는 커밋된 그대로인 원본만 `git rm` 한다. git 이 다루지 않는 meta-repo(git 레포가 아니거나, 바깥 레포가 그 아래를 하나도 추적하지 않는다)에서는
-cold store 에 같은 내용이 있는 원본을 그대로 지우므로 그 원본은 여기에만 남는다 (GUIDE §4.6). 오래 보관하려면 S3 로 둔다
+cold store 에 같은 내용이 있으면 원본을 지우므로 그 원본은 여기에만 남는다 (GUIDE §4.6). 오래 보관하려면 S3 로 둔다
 (`COLD_STORE_S3_BUCKET`, `COLD_SNAPSHOT_TYPE=s3` — GUIDE §7).
 
 ```bash
