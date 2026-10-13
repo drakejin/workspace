@@ -191,7 +191,7 @@ func BestNeighbor(ctx context.Context, c opensearch.Client, d DiffEntry, workspa
 		map[string]any{"exists": map[string]any{"field": "superseded_by"}},
 		map[string]any{"term": map[string]any{"deprecated": true}},
 	}
-	// 같은 프로젝트 안, 같은 종류의 기록끼리만 (vms: "같은 project 안") — 짧은 문서끼리는 조사·흔한 낱말만으로도
+	// 같은 프로젝트 안, 같은 종류의 기록끼리만 (drakejin 회사: "같은 project 안") — 짧은 문서끼리는 조사·흔한 낱말만으로도
 	// 비슷해 보여 엉뚱한 쌍이 latest-wins 로 숨는다 (예: ADR 이 같은 프로젝트의 PRD 에 밀림).
 	// 프로젝트가 없는 문서(여러 프로젝트에 걸친 주제)는 프로젝트 없는 문서끼리 견준다
 	if d.DocType != "" {

@@ -4,4 +4,4 @@
 
 | 문서 | 한 줄 요약 |
 | --- | --- |
-| [talk-alignment.md](talk-alignment.md) | 발표 "meta-repository와 memory-mcp" · vms 메모리 층 대비 구현 정렬표, 데모 4단계 측정, 의도적 차이 |
+| [talk-alignment.md](talk-alignment.md) | 발표 "meta-repository와 memory-mcp" · drakejin 회사 메모리 층 대비 구현 정렬표, 데모 4단계 측정, 의도적 차이 |

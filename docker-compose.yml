@@ -1,5 +1,5 @@
 # 메모리 층 스택 — OpenSearch(색인·검색, standalone 단일 노드) + Neo4j(knowledge graph).
-# 다른 메모리 스택(ax-workspace 9200/7687, vms workspace 9201/7688)과 같은 머신에서 병존하므로
+# 다른 메모리 스택(ax-workspace 9200/7687, drakejin 회사 workspace 9201/7688)과 같은 머신에서 병존하므로
 # compose 프로젝트명·컨테이너명·호스트 포트를 따로 둔다.
 #
 #   OpenSearch   http://localhost:9202          컨테이너 dj-workspace-opensearch

@@ -9,7 +9,7 @@ drakejin 개인 repository 들을 한 곳에서 다루는 **meta-repository** �
 | 이 README | 설치 → Claude 연결 → 활용 → 저장된 데이터 확인 (OpenSearch·Neo4j) → 명령어·구조 |
 | [GUIDE.md](./GUIDE.md) | 메모리 층 안내서 — 원리, 샘플로 따라 하기, 판정·증류·compaction·cold·그래프 운영, 설정·트러블슈팅 |
 | [CLAUDE.md](./CLAUDE.md) | 에이전트 작업 규칙 (search_memory 선행, 문서 위치, frontmatter, 에피소드 다섯 줄) |
-| [docs/feature/memory-layer/](./docs/feature/memory-layer/INDEX.md) | 설계 배경 — 발표·vms 와의 대조 |
+| [docs/feature/memory-layer/](./docs/feature/memory-layer/INDEX.md) | 설계 배경 — 발표·drakejin 회사와의 대조 |
 
 ```
  사람·에이전트가 쓰는 문서                                   에이전트가 묻는 길

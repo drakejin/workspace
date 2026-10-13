@@ -2,12 +2,12 @@
 doc_type: spec
 date: 2026-10-13
 ---
-# 구현 정렬표 — 발표 · vms 메모리 층 대비
+# 구현 정렬표 — 발표 · drakejin 회사 메모리 층 대비
 
 기준 자료 둘:
 
 - **발표** "meta-repository와 memory-mcp" (OpenSearch Korea User Group, 2026-10-11) 스크립트와 슬라이드 31장
-- **vms** `VMS-Holdings/workspace` 의 메모리 층 — `make memory-up` · `make daemon` · `make daemon-status`, `docs/guides/memory-layer-guide.md`
+- **drakejin 회사** `workspace` 의 메모리 층 — `make memory-up` · `make daemon` · `make daemon-status`, `docs/guides/memory-layer-guide.md`
 
 구현은 Go 한 모듈(`app/`: `memory-mcp`, `daemon`, `internal/**`). ✅ 일치 · 🟡 부분/의도적 차이 · ⬜ 미구현.
 확인 방법은 각 행의 "검증" — e2e 이름은 `app/test/e2e/` 의 테스트다.
@@ -21,10 +21,10 @@ date: 2026-10-13
 | 발표 §12 기능·인덱스·도구 | ✅ | 도구는 발표의 넷 + 그래프 둘. analyzer 보정, knowledge 인덱스 분리 |
 | 발표 §13 데모 1~4·주간 compaction | ✅ | 데모 4 는 `scripts/memory/run.sh bench` 로 측정 (아래) |
 | 발표 Q&A | 🟡 | 공식 MCP 서버 대신 직접 구현. 세션 시작 훅은 구현 |
-| vms memory-up · daemon-status | ✅ | Neo4j 까지 올리고 그래프 상태도 보인다 |
-| vms daemon (A·D·E·그래프·주간 감사, 단일 writer) | ✅ | B(cold sync)는 설계가 달라 "cold 소유" 로 대체 |
-| vms archive CLI · audit · launchd 스케줄 | ✅ | cold 가 스냅샷이라 archive 는 스냅샷을 다시 쓴다 |
-| vms 질문 PR · 지식 제안 PR | 🟡 | 개인 레포라 PR 대신 원장(`scripts/memory/run.sh questions`)과 `/compaction` |
+| drakejin 회사 memory-up · daemon-status | ✅ | Neo4j 까지 올리고 그래프 상태도 보인다 |
+| drakejin 회사 daemon (A·D·E·그래프·주간 감사, 단일 writer) | ✅ | B(cold sync)는 설계가 달라 "cold 소유" 로 대체 |
+| drakejin 회사 archive CLI · audit · launchd 스케줄 | ✅ | cold 가 스냅샷이라 archive 는 스냅샷을 다시 쓴다 |
+| drakejin 회사 질문 PR · 지식 제안 PR | 🟡 | 개인 레포라 PR 대신 원장(`scripts/memory/run.sh questions`)과 `/compaction` |
 
 ## 1. 발표 대비
 
@@ -98,15 +98,15 @@ date: 2026-10-13
 | --- | --- | --- | --- |
 | 공식 MCP 서버 | 검색 도구는 공식 것, 적재만 직접 | 도구 일곱 개 직접 구현 (workspace 격리·cold 확인 절차·필터·그래프가 필요해서) | 🟡 |
 | 한국어 | 기본 analyzer, 늘면 nori | standard + 식별자 분할 | ✅ |
-| 충돌 | episodic 은 처리 안 함, knowledge 로 넘길 때 사람이 | vms 판정 게이트를 들였다 (의도적 차이 3) | 🟡 |
+| 충돌 | episodic 은 처리 안 함, knowledge 로 넘길 때 사람이 | drakejin 회사 판정 게이트를 들였다 (의도적 차이 3) | 🟡 |
 | search_memory 를 안 부르면 | 세션 시작 훅 실험 중 | SessionStart 훅이 repo·브랜치로 검색해 맥락을 붙인다 | ✅ `TestSessionContextHookInjectsRepoHistory` |
 | 그다음은 | knowledge graph | Neo4j — 문서·entity·repo 와 supersedes·derived_from·relates·링크·mentions | ✅ `TestKnowledgeGraphAndSupersededRelocation` |
 
-## 2. vms 메모리 층 대비
+## 2. drakejin 회사 메모리 층 대비
 
 ### memory-up · daemon-status
 
-| vms | 구현 | 상태 |
+| drakejin 회사 | 구현 | 상태 |
 | --- | --- | --- |
 | docker 확인 → mise 도구 → 의존성 → `compose up` → 헬스 5분 대기 → 최초 색인 → 다음 할 일 안내 | 같음 — `make memory-init` (의존성 = `go build`, 스택 = OpenSearch + Neo4j) | ✅ |
 | 멱등, 다른 스택과 병존 | 같음. 9202·7689, `dj-workspace-*`, compose 프로젝트 `drakejin-workspace-memory` | ✅ |
@@ -114,7 +114,7 @@ date: 2026-10-13
 
 ### daemon
 
-| vms 개념 | 구현 | 상태 · 검증 |
+| drakejin 회사 개념 | 구현 | 상태 · 검증 |
 | --- | --- | --- |
 | 파생물의 유일한 writer, 데몬은 하나 | pid 락. 두 번째 데몬 거부, 1회 색인은 건너뜀 | ✅ `TestDaemonLifecycle/writer_는_하나` |
 | 트리거 boot · 60s 타이머 · watcher(debounce 3s, 내용은 버리는 힌트) | 같음. watcher 는 색인 범위만 연다 | ✅ `TestDaemonRunWatchAndShutdown` |
@@ -137,12 +137,12 @@ date: 2026-10-13
 ## 의도적 차이
 
 1. **식별자 분할 analyzer.** 기본 standard analyzer 는 `ClickDeduplicator.window` 를 토큰 하나로 묶어 `ClickDeduplicator window` 질의가 0건이었다. `word_delimiter_graph`(원형 보존)로 발표의 "식별자는 강한 어휘 신호"가 실제로 성립하게 했다.
-2. **knowledge 는 노화하지 않는다.** 발표는 모든 문서를 월별 인덱스에 넣지만, vms 는 knowledge 를 노화시키지 않는다. knowledge·안내 문서·관리 대상 repo 문서는 `mem-{team}-knowledge` 에 두고 ISM keep 정책을 붙였다. 밀리면 자기 달 인덱스로 옮겨 그때부터 노화한다.
-3. **episodic 충돌도 판정한다.** 발표는 episodic 충돌을 무시하지만, vms 데몬의 판정 게이트를 들여 최신 문서가 구판을 기본 검색에서 숨기게 했다 (`include_superseded` 로는 보인다).
-4. **ISM + `scripts/memory/run.sh tier` 병행, 그리고 cold 소유.** ISM 은 인덱스 생성일 기준이라 늦게 적재된 오래된 문서는 `tier` 가 맡는다. tier 는 스냅샷 뒤 hot 원본을 지운다(vms 의 "git 삭제"). ISM 이 먼저 옮긴 달의 원본은 다음 tier 가 치운다(`pruned`). 이미 cold 에 같은 내용이 있는 원본은 데몬이 되살리지 않는다.
+2. **knowledge 는 노화하지 않는다.** 발표는 모든 문서를 월별 인덱스에 넣지만, drakejin 회사는 knowledge 를 노화시키지 않는다. knowledge·안내 문서·관리 대상 repo 문서는 `mem-{team}-knowledge` 에 두고 ISM keep 정책을 붙였다. 밀리면 자기 달 인덱스로 옮겨 그때부터 노화한다.
+3. **episodic 충돌도 판정한다.** 발표는 episodic 충돌을 무시하지만, drakejin 회사 데몬의 판정 게이트를 들여 최신 문서가 구판을 기본 검색에서 숨기게 했다 (`include_superseded` 로는 보인다).
+4. **ISM + `scripts/memory/run.sh tier` 병행, 그리고 cold 소유.** ISM 은 인덱스 생성일 기준이라 늦게 적재된 오래된 문서는 `tier` 가 맡는다. tier 는 스냅샷 뒤 hot 원본을 지운다(drakejin 회사의 "git 삭제"). ISM 이 먼저 옮긴 달의 원본은 다음 tier 가 치운다(`pruned`). 이미 cold 에 같은 내용이 있는 원본은 데몬이 되살리지 않는다.
 5. **workspace 격리 + 팀 소유.** 여러 meta-repo 가 OpenSearch·Neo4j 하나를 쓸 수 있게 모든 질의를 workspace 로 거르고, 인덱스 단위로 움직이는 tier·ISM·restore 가 남의 문서를 지우지 않게 팀 하나는 workspace 하나에만 속하게 했다.
-6. **cold 가 스냅샷이라 archive 는 스냅샷을 다시 쓴다.** vms 의 cold 는 문서 단위 S3 오브젝트지만 여기의 cold 는 인덱스 스냅샷(발표 설계)이다. edit·purge 는 그 인덱스만 담은 스냅샷을 alias 없이 잠깐 복원해 고친 뒤 새 스냅샷으로 바꾼다.
-7. **git 에 넣지 않는 상태는 전부 `.cache/` (gitignore).** vms 는 판정·증류 원장을 커밋하지만, 이 레포는 개인 레포라 원장까지 `.cache/` 에 둔다.
+6. **cold 가 스냅샷이라 archive 는 스냅샷을 다시 쓴다.** drakejin 회사의 cold 는 문서 단위 S3 오브젝트지만 여기의 cold 는 인덱스 스냅샷(발표 설계)이다. edit·purge 는 그 인덱스만 담은 스냅샷을 alias 없이 잠깐 복원해 고친 뒤 새 스냅샷으로 바꾼다.
+7. **git 에 넣지 않는 상태는 전부 `.cache/` (gitignore).** drakejin 회사는 판정·증류 원장을 커밋하지만, 이 레포는 개인 레포라 원장까지 `.cache/` 에 둔다.
    대가: `.cache/judge`·`distill` 을 지우면 사람의 판정 답과 증류 결과가 사라진다 (인덱스·그래프는 다시 만들어진다). 기본 cold 층(`.cache/cold-store`, `.cache/snapshots`)은
    정본이라 지우면 안 된다 — 오래 보관하려면 S3 로 둔다.
 8. **tier 는 스냅샷 목록(manifest)을 남긴다.** 쓰기를 막은 인덱스를 스냅샷하고 그 (경로, 내용 sha) 목록을 cold store 에 남겨, "이 내용은 cold 에 있다" 를 시계 비교 없이 정확히 판단한다.
@@ -153,8 +153,8 @@ date: 2026-10-13
 | 날짜 | 단계 | 근접도 |
 | --- | --- | --- |
 | 2026-10-12 | TS: 골격·코어·MCP·워처·cold e2e | 발표 약 90% |
-| 2026-10-13 | 원격 `drakejin/workspace` 골격(main/, init·sync·run-issues) 위로 이동, vms memory-up·daemon·daemon-status 반영 | 발표 약 90%, vms 데몬 개념 반영 |
-| 2026-10-13 | Go 포팅, TypeScript 제거. 설계 보정: knowledge 인덱스, cold 소유, workspace 격리·팀 소유, 부분 스캔 보호, 종료 신호 전파 | 발표 약 90%, vms 약 90% (그래프·audit 제외) |
-| 2026-10-13 | Go 를 `app/` 한 모듈로, 생성물은 `.cache/`, 설정은 seed 하나. Neo4j knowledge graph, audit, archive, org alias, SessionStart 훅, bench, launchd. 실제 ISM·S3(LocalStack)·실제 claude 판정·증류 검증 | 발표 약 97%, vms 약 95% (질문·지식 PR 은 원장으로 대체) |
+| 2026-10-13 | 원격 `drakejin/workspace` 골격(main/, init·sync·run-issues) 위로 이동, drakejin 회사 memory-up·daemon·daemon-status 반영 | 발표 약 90%, drakejin 회사 데몬 개념 반영 |
+| 2026-10-13 | Go 포팅, TypeScript 제거. 설계 보정: knowledge 인덱스, cold 소유, workspace 격리·팀 소유, 부분 스캔 보호, 종료 신호 전파 | 발표 약 90%, drakejin 회사 약 90% (그래프·audit 제외) |
+| 2026-10-13 | Go 를 `app/` 한 모듈로, 생성물은 `.cache/`, 설정은 seed 하나. Neo4j knowledge graph, audit, archive, org alias, SessionStart 훅, bench, launchd. 실제 ISM·S3(LocalStack)·실제 claude 판정·증류 검증 | 발표 약 97%, drakejin 회사 약 95% (질문·지식 PR 은 원장으로 대체) |
 | 2026-10-13 | 루트 Makefile 을 다섯 개(init·sync·memory-init·memory-daemon-start/stop)로 줄이고 Go 개발 타겟은 app/Makefile, 나머지는 scripts 로 | 근접도 변화 없음 |
 | 2026-10-13 | MCP 서버 `drakejin-workspace-memory-mcp`, 검색 필터(날짜·범위·주제·프로젝트) + 필터만으로 가져오기 + `search_filters`, 판정 이웃은 같은 프로젝트 안, 시나리오 테스트(scenarios/) | 발표 §12 도구 확장 |

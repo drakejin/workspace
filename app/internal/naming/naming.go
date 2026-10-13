@@ -56,7 +56,7 @@ func MonthlyIndex(team string, t time.Time) string {
 func KnowledgeIndex(team string) string { return Prefix + team + "-knowledge" }
 
 // IndexFor 는 청크가 들어갈 인덱스다. knowledge 는 knowledge 인덱스에 두되, 개정판에 밀려나면(superseded)
-// 자기 날짜의 월별 인덱스로 옮겨 episodic 처럼 노화시킨다 (vms: "개정판이 밀어낸 것만 이동").
+// 자기 날짜의 월별 인덱스로 옮겨 episodic 처럼 노화시킨다 (drakejin 회사: "개정판이 밀어낸 것만 이동").
 func IndexFor(c model.Chunk) string {
 	if c.Kind == model.KindKnowledge && c.SupersededBy == "" {
 		return KnowledgeIndex(c.Team)

@@ -4,4 +4,4 @@
 
 | topic | 한 줄 요약 |
 | --- | --- |
-| [memory-layer](memory-layer/INDEX.md) | 메모리 층 설계 배경 — 발표·vms 대비 정렬과 의도적 차이 |
+| [memory-layer](memory-layer/INDEX.md) | 메모리 층 설계 배경 — 발표·drakejin 회사 대비 정렬과 의도적 차이 |
