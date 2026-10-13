@@ -20,7 +20,6 @@ import (
 	"github.com/drakejin/workspace/app/internal/graph"
 	"github.com/drakejin/workspace/app/internal/ingest"
 	"github.com/drakejin/workspace/app/internal/llm"
-	"github.com/drakejin/workspace/app/internal/markdown"
 	"github.com/drakejin/workspace/app/internal/opensearch"
 	"github.com/drakejin/workspace/app/internal/state"
 )
@@ -119,12 +118,14 @@ func New(ctx context.Context, d Deps) (*Daemon, error) {
 
 	rec := &Reconciler{OS: d.OS, Config: cfg, Cold: d.Cold, Judge: judgeState, Archive: archiveState, Log: d.Log}
 	ix := ingest.New(ingest.Deps{OS: d.OS, Cold: d.Cold, Config: cfg, Now: d.Now, Distilled: cache.Get, SupersededBy: rec.SupersededBy})
-	rec.Indexer = ix
+	rec.Indexer = warnIndexer{Indexer: ix, log: d.Log}
+	distill := NewDistillQueue(ctx, d.OS, cfg, cache, d.Ask, d.Log)
+	distill.now = d.Now // 실패한 증류의 다시 시도 백오프도 같은 시계로
 	dm := &Daemon{
 		ctx: ctx, cfg: cfg, os: d.OS, graph: d.Graph, ownsGraph: ownsGraph, log: d.Log, now: d.Now, retry: d.RetryDelays,
 		cache: cache, store: d.Cold, ix: ix, rec: rec,
 		judge:     &Judge{OS: d.OS, Config: cfg, State: judgeState, Ask: d.Ask, Log: d.Log, Now: d.Now},
-		distill:   NewDistillQueue(ctx, d.OS, cfg, cache, d.Ask, d.Log),
+		distill:   distill,
 		auditTk:   state.NewTick(cfg.MetaRepoRoot, "audit"),
 		startedAt: d.Now(),
 	}
@@ -132,7 +133,7 @@ func New(ctx context.Context, d Deps) (*Daemon, error) {
 	return dm, nil
 }
 
-// Boot 는 락 → bootstrap(재시도) → boot 사이클 → 증류 백필 이다.
+// Boot 는 락 → 판정 대기분 되살리기 → bootstrap(재시도) → boot 사이클 → 증류 백필 이다.
 func (d *Daemon) Boot(ctx context.Context, once bool) error {
 	if err := state.AcquireLock(d.cfg.MetaRepoRoot); err != nil {
 		return err
@@ -140,6 +141,10 @@ func (d *Daemon) Boot(ctx context.Context, once bool) error {
 	d.locked = true
 	if err := d.cache.Load(); err != nil {
 		return err
+	}
+	// 지난 실행이 판정하지 못하고 남긴 문서 — boot 사이클의 판정이 이어 판정한다
+	if err := d.judge.Restore(); err != nil {
+		d.log("[judge] 대기 판정 목록을 읽지 못했습니다 — 건너뜀: %v", err)
 	}
 	if err := d.bootstrap(ctx, once); err != nil {
 		return err
@@ -225,12 +230,10 @@ func (d *Daemon) cycle(trigger string) {
 	// A. hot 동기화 — 변경분(diff)이 나온다. 끝에서 superseded_by·deprecated 를 원장대로 수렴시킨다
 	sum, diff, err := d.rec.Once(ctx)
 	if err != nil {
+		// 실패해도 판정·증류·그래프·감사는 이어 간다 — 이미 색인에 쓴 변경분은 다음 사이클에 바뀌지 않은 파일로 보여 놓치고,
+		// 수렴(Converge) 실패 하나가 변경 없는 사이클의 판정 재시도·주간 감사까지 막으면 안 된다
 		d.log("[reconcile] failed: %v", err)
 		rec.Error = err.Error()
-		if len(diff) == 0 {
-			return
-		}
-		// 이미 색인에 쓴 변경분은 판정·증류·그래프로 이어 간다 — 다음 사이클에는 바뀌지 않은 파일로 보여 놓친다
 	} else {
 		d.log("[reconcile] scanned=%d indexed=%d stat_updated=%d removed=%d skipped=%d failed=%d cold_owned=%d flags=%d trigger=%s took=%dms",
 			sum.Scanned, sum.Indexed, sum.StatUpdated, sum.Removed, sum.Skipped, sum.Failed, sum.ColdOwned, sum.FlagsConverged, trigger, sum.TookMs)
@@ -238,7 +241,23 @@ func (d *Daemon) cycle(trigger string) {
 	}
 
 	// D. 판정 게이트 — 실패해도 색인 사이클은 산다. 실패한 문서는 다음 사이클이 다시 판정한다
-	flags := sum.FlagsConverged
+	flags := sum.FlagsConverged + d.judgeStep(ctx, rec, diff)
+
+	// E. 증류 큐 — 넣기만 하고 돌아온다. 소비는 백그라운드
+	d.distill.EnqueueDiff(diff)
+	if ctx.Err() != nil {
+		return // 종료 중 — 그래프·감사는 다음 실행이 한다
+	}
+
+	// F. 그래프 — 문서·관계·entity 가 바뀌었을 때만 다시 만든다
+	rec.Graph = d.syncGraph(ctx, len(diff) > 0 || flags > 0)
+
+	// 주간 감사 — 보고만 한다
+	d.maybeAudit(ctx)
+}
+
+// judgeStep 은 변경분(과 지난 실패분)을 판정하고, 판정이 숨긴 문서를 같은 사이클 안에서 인덱스에 반영한다. 바꾼 표시 수를 돌려준다.
+func (d *Daemon) judgeStep(ctx context.Context, rec *state.CycleRecord, diff []DiffEntry) int {
 	judged, err := d.judge.Run(ctx, diff)
 	if err != nil {
 		d.log("[judge] 일부 실패 — 다음 사이클에 다시: %v", err)
@@ -248,23 +267,15 @@ func (d *Daemon) cycle(trigger string) {
 		d.log("[judge] candidates=%d latestWins=%d llm=%d questions=%d idempotentSkip=%d",
 			judged.Candidates, judged.LatestWins, judged.LLMJudged, judged.Questions, judged.SkippedIdempotent)
 	}
-	if judged.LatestWins+judged.LLMJudged > 0 {
-		// 방금 내린 판정을 같은 사이클 안에서 인덱스에 반영한다
-		n, err := d.rec.Converge(ctx)
-		if err != nil {
-			d.log("[judge] 반영 실패 — 다음 사이클이 수렴: %v", err)
-		}
-		flags += n
+	if judged.LatestWins+judged.LLMJudged == 0 {
+		return 0
 	}
-
-	// E. 증류 큐 — 넣기만 하고 돌아온다. 소비는 백그라운드
-	d.distill.EnqueueDiff(diff)
-
-	// F. 그래프 — 문서·관계·entity 가 바뀌었을 때만 다시 만든다
-	rec.Graph = d.syncGraph(ctx, len(diff) > 0 || flags > 0)
-
-	// 주간 감사 — 보고만 한다
-	d.maybeAudit(ctx)
+	// 방금 내린 판정을 같은 사이클 안에서 인덱스에 반영한다
+	n, err := d.rec.Converge(ctx)
+	if err != nil {
+		d.log("[judge] 반영 실패 — 다음 사이클이 수렴: %v", err)
+	}
+	return n
 }
 
 func (d *Daemon) syncGraph(ctx context.Context, changed bool) string {
@@ -340,11 +351,11 @@ func (d *Daemon) missingDistill(ctx context.Context) ([]DistillJob, error) {
 		if doc.Summary != "" || doc.BodySHA == "" {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(d.cfg.MetaRepoRoot, filepath.FromSlash(doc.SourcePath)))
-		if err != nil {
+		// 색인이 기억하는 본문(body_sha)의 증류만 — 그 사이 고친 본문은 사이클이 다시 색인하고 증류한다
+		body, ok := bodyAt(d.cfg.MetaRepoRoot, doc.SourcePath, doc.BodySHA)
+		if !ok {
 			continue
 		}
-		_, body := markdown.SplitFrontmatter(string(b))
 		jobs = append(jobs, DistillJob{Team: doc.Team, SourcePath: doc.SourcePath, BodySHA: doc.BodySHA, Title: document.Title(body, doc.SourcePath), Body: body})
 	}
 	return jobs, nil

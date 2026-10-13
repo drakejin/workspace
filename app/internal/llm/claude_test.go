@@ -21,8 +21,13 @@ func fakeClaude(t *testing.T, script string) string {
 	return bin
 }
 
+// fakeTimeout 은 가짜 claude 의 시간 상한이다. 가짜는 곧바로 끝나므로 상한은 결과를 가르지 않는다 — 부하가 걸린 머신에서
+// 새로 만든 실행 파일의 첫 기동(macOS 의 보안 검사 포함)이 몇 초씩 걸려도 시간 초과로 오판하지 않게 넉넉히 둔다.
+// 시간 초과·취소 경로는 이미 끝난 ctx 로 따로 본다 (TestAskGivesUpWhenCancelled). 정말 멈추면 go test -timeout 이 끊는다.
+const fakeTimeout = 24 * time.Hour
+
 func asker(bin string, logs *[]string) Asker {
-	return New(config.LLM{ClaudeBin: bin, Model: "opus", Timeout: 5 * time.Second}, func(f string, a ...any) {
+	return New(config.LLM{ClaudeBin: bin, Model: "opus", Timeout: fakeTimeout}, func(f string, a ...any) {
 		*logs = append(*logs, f)
 	})
 }
@@ -79,6 +84,16 @@ func TestAskFailuresAreFallbacks(t *testing.T) {
 	var logs []string
 	if _, ok := asker("/nonexistent/claude", &logs).Ask(context.Background(), input); ok {
 		t.Error("미설치는 실패")
+	}
+}
+
+// R2-deadcode-4: 호출이 끊기면(시간 초과·종료) 폴백이다 — 벽시계와 경주하지 않게 이미 끝난 ctx 로 본다.
+func TestAskGivesUpWhenCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var logs []string
+	if _, ok := asker(fakeClaude(t, `echo '{"subtype":"success","structured_output":{"ok":true}}'`), &logs).Ask(ctx, input); ok || len(logs) == 0 {
+		t.Errorf("끊긴 호출은 폴백: ok=%v logs=%v", ok, logs)
 	}
 }
 

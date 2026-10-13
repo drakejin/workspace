@@ -3,7 +3,7 @@
 //	.cache/judge/{team}.jsonl     판정 원장 (git 에 커밋 — 인덱스를 지워도 LLM 없이 복원)
 //	.cache/distill/{team}.jsonl   증류 캐시 (git 에 커밋)
 //	.cache/archive/{team}.jsonl   cold 문서 감사 기록 — deprecate·purge·edit (git 에 커밋)
-//	.cache/daemon/*               데몬 pid·상태·틱 (커밋하지 않음)
+//	.cache/daemon/*               데몬 pid·상태·틱·판정 대기 목록 (커밋하지 않음)
 package state
 
 import (

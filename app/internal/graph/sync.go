@@ -18,12 +18,22 @@ func FromHot(root, workspace string, docs map[string]ingest.IndexedDoc) Graph {
 			Path: d.SourcePath, Team: d.Team, Repo: d.Repo, Title: d.Title, DocType: string(d.DocType), Kind: string(d.Kind),
 			Summary: d.Summary, Entities: d.Entities, SupersededBy: d.SupersededBy, Deprecated: d.Deprecated,
 		}
-		if b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(d.SourcePath))); err == nil {
+		if b, err := os.ReadFile(onDiskPath(root, d.SourcePath)); err == nil {
 			in.Links = document.Links(string(b), d.SourcePath)
 		}
 		inputs = append(inputs, in)
 	}
 	return Build(workspace, inputs, outOfScope(root, inputs))
+}
+
+// onDiskPath 는 문서(source_path, NFC)의 디스크 경로다 — 디스크의 철자로 푼다. 정규화를 구분하는 파일 시스템(Linux)에서는
+// NFC 경로로 NFD 이름(Finder 가 만든 한글 이름)의 파일을 열 수 없다.
+func onDiskPath(root, rel string) string {
+	abs, _, err := ingest.ResolveOnDisk(root, rel)
+	if err != nil {
+		return filepath.Join(root, filepath.FromSlash(rel))
+	}
+	return abs
 }
 
 // outOfScope 는 hot 이 아닌 링크 대상 가운데 색인 범위 밖이면서 디스크에 그 철자로 있는 것이다 (scenarios/·.claude/·examples/

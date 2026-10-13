@@ -107,7 +107,7 @@ func ResolveMetadata(fm markdown.Frontmatter, rel, defaultTeam string) (Metadata
 		team = defaultTeam
 	}
 	if err := naming.ValidateTeam(team); err != nil {
-		return Metadata{}, err
+		return Metadata{}, &markdown.FrontmatterError{Err: err} // frontmatter 값 문제 — audit 가 bad-frontmatter 로 보고한다
 	}
 	docType := facts.DocType
 	if t, ok := model.ParseDocType(strings.ToLower(firstString(fm, "doc_type", "type"))); ok {
