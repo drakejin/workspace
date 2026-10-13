@@ -70,26 +70,60 @@ func (s *JudgeState) Latest(team string) (map[string]JudgeRecord, error) {
 	return out, nil
 }
 
-// SupersededMap 은 지금 유효한 결론: 구판 경로 → 신판 경로. 구판 본문이 바뀌었거나 신판이 없어졌으면 무효(재평가).
-func (s *JudgeState) SupersededMap(team string, bodySHA func(path string) (string, bool)) (map[string]string, error) {
+// SupersededMap 은 지금 유효한 결론: 구판 경로 → 신판 경로. bodies 는 팀의 지금 문서(경로 → 본문 sha)다.
+// 결론은 경로가 아니라 내용(본문 sha 쌍)을 따른다 — 같은 쌍은 다시 판정하지 않으므로(멱등) 경로만 보면 이름을
+// 바꾸기만 해도(git mv) 밀린 문서가 영영 되살아난다. 구판 본문이 어디에도 없거나(고쳤다 — 새 쌍으로 재평가)
+// 신판이 없어졌으면 무효.
+func (s *JudgeState) SupersededMap(team string, bodies map[string]string) (map[string]string, error) {
 	latest, err := s.Latest(team)
 	if err != nil {
 		return nil, err
 	}
+	bySHA := pathsBySHA(bodies)
 	out := map[string]string{}
 	for _, r := range latest {
 		if r.Decision != DecisionSuperseded {
 			continue
 		}
-		if sha, ok := bodySHA(r.Old.Path); !ok || sha != r.Old.BodySHA {
+		newPath, ok := resolveNew(r.New, bodies, bySHA)
+		if !ok {
 			continue
 		}
-		if _, ok := bodySHA(r.New.Path); !ok {
-			continue
+		// 구판 본문을 가진 문서는 모두 밀린다 — 사본도 같은 쌍이라 다시 판정하지 않는다
+		for _, oldPath := range bySHA[r.Old.BodySHA] {
+			if oldPath != newPath {
+				out[oldPath] = newPath
+			}
 		}
-		out[r.Old.Path] = r.New.Path
 	}
 	return out, nil
+}
+
+// pathsBySHA 는 본문 sha → 그 본문을 가진 경로(정렬)다. sha 가 빈 문서는 내용으로 찾을 수 없어 뺀다.
+func pathsBySHA(bodies map[string]string) map[string][]string {
+	out := map[string][]string{}
+	for p, sha := range bodies {
+		if sha != "" {
+			out[sha] = append(out[sha], p)
+		}
+	}
+	for _, paths := range out {
+		sort.Strings(paths)
+	}
+	return out
+}
+
+// resolveNew 는 신판의 지금 경로다. 기록한 경로에 그 본문 → 그 본문의 다른 경로(이름을 바꿨다, 경로 순 첫째)
+// → 기록한 경로(제자리에서 고쳤다 — 결론 유지) 순으로 찾는다. 셋 다 아니면 신판이 없어졌다.
+func resolveNew(side Side, bodies map[string]string, bySHA map[string][]string) (string, bool) {
+	sha, exists := bodies[side.Path]
+	if exists && sha == side.BodySHA {
+		return side.Path, true
+	}
+	if paths := bySHA[side.BodySHA]; len(paths) > 0 {
+		return paths[0], true
+	}
+	return side.Path, exists
 }
 
 // PendingQuestions 는 답을 기다리는 질문이다.

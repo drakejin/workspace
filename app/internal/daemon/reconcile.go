@@ -409,16 +409,8 @@ func (r *Reconciler) applySuperseded(ctx context.Context, indices []string, d in
 // A→B→C 처럼 이어지면 마지막 판(C)을 가리키게 압축한다.
 func DesiredSupersededBy(docs map[string]ingest.IndexedDoc, judge *state.JudgeState) (map[string]string, error) {
 	direct := map[string]string{}
-	teams := map[string]bool{}
-	for _, d := range docs {
-		teams[d.Team] = true
-	}
-	bodySHA := func(p string) (string, bool) {
-		d, ok := docs[p]
-		return d.BodySHA, ok
-	}
-	for team := range teams {
-		m, err := judge.SupersededMap(team, bodySHA)
+	for team, bodies := range bodiesByTeam(docs) {
+		m, err := judge.SupersededMap(team, bodies)
 		if err != nil {
 			return nil, err
 		}
@@ -434,6 +426,18 @@ func DesiredSupersededBy(docs map[string]ingest.IndexedDoc, judge *state.JudgeSt
 		}
 	}
 	return compressChains(direct), nil
+}
+
+// bodiesByTeam 은 팀 → (경로 → 본문 sha) 다. 판정 원장이 팀별이라 결론을 옮길 문서도 같은 팀 안에서만 찾는다.
+func bodiesByTeam(docs map[string]ingest.IndexedDoc) map[string]map[string]string {
+	out := map[string]map[string]string{}
+	for _, d := range docs {
+		if out[d.Team] == nil {
+			out[d.Team] = map[string]string{}
+		}
+		out[d.Team][d.SourcePath] = d.BodySHA
+	}
+	return out
 }
 
 // compressChains 는 A→B, B→C 를 A→C, B→C 로 만든다. 순환은 순환에 들어선 지점에서 끊는다.

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -36,6 +37,70 @@ func TestLedgerSkipsCorruptLines(t *testing.T) {
 	}
 }
 
+// 마지막 줄이 줄바꿈 없이 끝나 있으면(짧은 쓰기·전원 손실, git 병합·편집기가 마지막 \n 을 뺀 경우) 새 기록을 그 줄에
+// 이어 붙이지 않는다 — 이어 붙이면 새 기록(판정·사람의 답)까지 깨진 줄로 버려진다.
+func TestLedgerAppendAfterTruncatedLine(t *testing.T) {
+	dir := t.TempDir()
+	l := NewLedger[JudgeRecord](dir)
+	var bad []int
+	l.OnCorrupt = func(_ string, line int) { bad = append(bad, line) }
+	if err := l.Append("t", JudgeRecord{PairKey: "a", Decision: DecisionKeep}); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "t.jsonl"), os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`{"pairKey":"b","decis`); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := l.Append("t", JudgeRecord{PairKey: "c", Decision: DecisionSuperseded}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := l.ReadAll("t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keys := pairKeysOf(got); !reflect.DeepEqual(keys, []string{"a", "c"}) || !reflect.DeepEqual(bad, []int{2}) {
+		t.Errorf("records=%v corrupt=%v — 잘린 줄만 버리고 새 기록은 살아야 한다", keys, bad)
+	}
+}
+
+// 줄바꿈으로 끝나는 원장(빈 파일 포함)에는 빈 줄을 끼우지 않는다.
+func TestLedgerAppendKeepsOneRecordPerLine(t *testing.T) {
+	dir := t.TempDir()
+	l := NewLedger[JudgeRecord](dir)
+	if err := os.WriteFile(filepath.Join(dir, "t.jsonl"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"a", "b"} {
+		if err := l.Append("t", JudgeRecord{PairKey: key}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "t.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(raw), "\n")
+	if len(lines) != 3 || lines[2] != "" || !strings.Contains(lines[0], `"a"`) || !strings.Contains(lines[1], `"b"`) {
+		t.Errorf("raw = %q", raw)
+	}
+}
+
+func pairKeysOf(records []JudgeRecord) []string {
+	out := make([]string, 0, len(records))
+	for _, r := range records {
+		out = append(out, r.PairKey)
+	}
+	return out
+}
+
 func TestLedgersLiveUnderCache(t *testing.T) {
 	root := t.TempDir()
 	_ = NewJudgeState(root).Ledger.Append("t", JudgeRecord{PairKey: "k"})
@@ -63,17 +128,22 @@ func TestJudgeState(t *testing.T) {
 	if q, _ := s.PendingQuestions("t"); len(q) != 0 {
 		t.Error("답이 붙으면 질문이 사라진다")
 	}
-	lookup := func(m map[string]string) func(string) (string, bool) {
-		return func(p string) (string, bool) { v, ok := m[p]; return v, ok }
-	}
-	if m, _ := s.SupersededMap("t", lookup(map[string]string{"a.md": "sha-a", "b.md": "sha-b"})); m["a.md"] != "b.md" {
+	if m, _ := s.SupersededMap("t", map[string]string{"a.md": "sha-a", "b.md": "sha-b"}); m["a.md"] != "b.md" {
 		t.Errorf("map = %v", m)
 	}
-	if m, _ := s.SupersededMap("t", lookup(map[string]string{"a.md": "edited", "b.md": "sha-b"})); len(m) != 0 {
+	if m, _ := s.SupersededMap("t", map[string]string{"a.md": "edited", "b.md": "sha-b"}); len(m) != 0 {
 		t.Error("구판 본문이 바뀌면 결론 무효")
 	}
-	if m, _ := s.SupersededMap("t", lookup(map[string]string{"a.md": "sha-a"})); len(m) != 0 {
+	if m, _ := s.SupersededMap("t", map[string]string{"a.md": "sha-a"}); len(m) != 0 {
 		t.Error("신판이 없으면 결론 무효")
+	}
+	if m, _ := s.SupersededMap("t", map[string]string{"a2.md": "sha-a", "b2.md": "sha-b"}); !reflect.DeepEqual(m, map[string]string{"a2.md": "b2.md"}) {
+		t.Errorf("이름을 바꿔도 결론은 본문을 따라간다: %v", m)
+	}
+	blank := NewJudgeState(t.TempDir())
+	_ = blank.Ledger.Append("t", JudgeRecord{PairKey: "k", Decision: DecisionSuperseded, Old: Side{Path: "x.md"}, New: Side{Path: "y.md"}})
+	if m, _ := blank.SupersededMap("t", map[string]string{"y.md": "", "z.md": ""}); len(m) != 0 {
+		t.Errorf("본문 sha 를 모르는 문서끼리는 내용으로 잇지 않는다: %v", m)
 	}
 }
 

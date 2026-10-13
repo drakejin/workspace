@@ -36,6 +36,55 @@ func TestDesiredSupersededByAndChains(t *testing.T) {
 	}
 }
 
+// 판정은 본문 sha 쌍에 묶인다 — 파일 이름을 바꿔도(git mv) 결론이 내용을 따라 새 경로로 간다.
+// 같은 쌍은 다시 판정하지 않으므로(멱등) 경로만 보면 밀렸던 문서가 영영 되살아난다.
+func TestDesiredSupersededByFollowsContent(t *testing.T) {
+	s := state.NewJudgeState(t.TempDir())
+	rec := state.JudgeRecord{PairKey: state.PairKey("sha-l", "sha-w"), Decision: state.DecisionSuperseded,
+		Old: state.Side{Path: "l.md", BodySHA: "sha-l"}, New: state.Side{Path: "w.md", BodySHA: "sha-w"}}
+	if err := s.Ledger.Append("t", rec); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name string
+		docs map[string]string // 경로 → 본문 sha (팀 t)
+		want map[string]string
+	}{
+		{"그대로", map[string]string{"l.md": "sha-l", "w.md": "sha-w"}, map[string]string{"l.md": "w.md"}},
+		{"이긴 쪽 이름 바꿈", map[string]string{"l.md": "sha-l", "w2.md": "sha-w"}, map[string]string{"l.md": "w2.md"}},
+		{"진 쪽 이름 바꿈", map[string]string{"l2.md": "sha-l", "w.md": "sha-w"}, map[string]string{"l2.md": "w.md"}},
+		{"둘 다 이름 바꿈", map[string]string{"l2.md": "sha-l", "w2.md": "sha-w"}, map[string]string{"l2.md": "w2.md"}},
+		{"이긴 쪽 삭제 — 진 쪽이 다시 보인다", map[string]string{"l.md": "sha-l"}, map[string]string{}},
+		{"진 쪽 본문 수정 — 새 쌍이라 재판정 몫", map[string]string{"l.md": "sha-l2", "w.md": "sha-w"}, map[string]string{}},
+		{"이긴 쪽 본문 수정(제자리) — 결론 유지", map[string]string{"l.md": "sha-l", "w.md": "sha-w2"}, map[string]string{"l.md": "w.md"}},
+		{"이긴 쪽 이름 바꾸고 옛 경로에 다른 문서 — 내용이 먼저", map[string]string{"l.md": "sha-l", "w.md": "other", "w2.md": "sha-w"}, map[string]string{"l.md": "w2.md"}},
+		{"이긴 쪽 사본이 여럿 — 경로 순 첫째", map[string]string{"l.md": "sha-l", "w3.md": "sha-w", "w2.md": "sha-w"}, map[string]string{"l.md": "w2.md"}},
+		{"진 쪽 사본도 밀린다 — 같은 쌍은 다시 판정하지 않는다", map[string]string{"l.md": "sha-l", "l2.md": "sha-l", "w.md": "sha-w"}, map[string]string{"l.md": "w.md", "l2.md": "w.md"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			docs := map[string]ingest.IndexedDoc{}
+			for p, sha := range tc.docs {
+				docs[p] = ingest.IndexedDoc{SourcePath: p, Team: "t", BodySHA: sha}
+			}
+			got, err := DesiredSupersededBy(docs, s)
+			if err != nil || !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("desired = %v %v, want %v", got, err, tc.want)
+			}
+		})
+	}
+
+	t.Run("다른 팀의 같은 본문은 따라가지 않는다", func(t *testing.T) {
+		docs := map[string]ingest.IndexedDoc{
+			"l.md":  {SourcePath: "l.md", Team: "t", BodySHA: "sha-l"},
+			"w2.md": {SourcePath: "w2.md", Team: "u", BodySHA: "sha-w"},
+		}
+		if got, err := DesiredSupersededBy(docs, s); err != nil || len(got) != 0 {
+			t.Errorf("desired = %v %v", got, err)
+		}
+	})
+}
+
 func TestSerialCoalesces(t *testing.T) {
 	var (
 		mu      sync.Mutex

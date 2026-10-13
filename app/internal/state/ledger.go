@@ -72,7 +72,7 @@ func (l *Ledger[T]) ReadAll(team string) ([]T, error) {
 	return out, nil
 }
 
-// Append 는 한 줄을 더한다.
+// Append 는 한 줄을 더한다. 정본이라 디스크까지 내려 쓰고(fsync) 닫기 실패도 돌려준다.
 func (l *Ledger[T]) Append(team string, v T) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -83,15 +83,53 @@ func (l *Ledger[T]) Append(team string, v T) error {
 	if err != nil {
 		return fmt.Errorf("ledger %s: %w", l.file(team), err)
 	}
-	f, err := os.OpenFile(l.file(team), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("ledger %s: %w", l.file(team), err)
-	}
-	defer f.Close()
-	if _, err := f.Write(append(line, '\n')); err != nil {
+	if err := appendLine(l.file(team), line); err != nil {
 		return fmt.Errorf("ledger %s: %w", l.file(team), err)
 	}
 	return nil
+}
+
+// appendLine 은 path 끝에 line 한 줄을 쓴다. 마지막 줄이 줄바꿈 없이 끝나 있으면(짧은 쓰기·전원 손실, git 병합이나
+// 편집기가 마지막 \n 을 뺐다) 줄을 먼저 바꾼다 — 잘린 줄에 이어 붙이면 새 기록까지 깨진 줄로 버려진다.
+func appendLine(path string, line []byte) (err error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o644)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
+	midLine, err := endsMidLine(f)
+	if err != nil {
+		return err
+	}
+	buf := make([]byte, 0, len(line)+2) // 앞뒤 줄바꿈 자리
+	if midLine {
+		buf = append(buf, '\n')
+	}
+	buf = append(append(buf, line...), '\n')
+	if _, err := f.Write(buf); err != nil {
+		return err
+	}
+	return f.Sync()
+}
+
+// endsMidLine 은 파일이 비어 있지 않고 줄바꿈으로 끝나지 않는지다.
+func endsMidLine(f *os.File) (bool, error) {
+	info, err := f.Stat()
+	if err != nil {
+		return false, err
+	}
+	if info.Size() == 0 {
+		return false, nil
+	}
+	last := make([]byte, 1)
+	if _, err := f.ReadAt(last, info.Size()-1); err != nil {
+		return false, err
+	}
+	return last[0] != '\n', nil
 }
 
 // Teams 는 원장이 있는 팀 목록이다.
