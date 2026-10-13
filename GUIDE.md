@@ -138,10 +138,13 @@ launchd 가 없는 머신은 nohup 백그라운드라(`[memory-daemon] backgroun
 | 로그 | 뜻 |
 | --- | --- |
 | `[reconcile] scanned= indexed= stat_updated= removed= skipped= failed= cold_owned= flags=` | 스캔한 파일 / 다시 색인 / mtime 만 바뀜 / 색인에서 뺌 / 게이트에 걸림 / 준비·쓰기 실패 / cold 소유라 되살리지 않음 / superseded_by·deprecated 수렴 |
-| `[reconcile] skip <path> (<이유>)` · `remove <path> (<이유>)` · `fail <path> (<오류>)` | 게이트(`size N > MAX`·`binary content`)에 걸려 색인하지 않는 파일 / 색인에서 뺀 문서(디스크에 없다, 게이트에 걸렸다, 색인 범위 밖 경로) / 준비·쓰기에 실패한 파일(frontmatter 오류, 다른 workspace 의 팀, 일시적인 오류) — 실패는 색인에 있던 판을 그대로 두고 다음 사이클이 다시 시도하며, 나머지 파일은 계속 돈다 |
+| `[reconcile] skip <path> (<이유>)` · `remove <path> (<이유>)` · `fail <path> (<오류>)` | 게이트(`size N > MAX`·`binary content`)에 걸려 색인하지 않는 파일 / 색인에서 뺀 문서(디스크에 없다, 게이트에 걸렸다, 색인 범위 밖 경로) / 준비·쓰기에 실패한 파일(frontmatter 값 오류 — 예: 잘못된 team 이름, 감사 `bad-frontmatter` 로도 알린다 —, 다른 workspace 의 팀, 일시적인 오류) — 실패는 색인에 있던 판을 그대로 두고 다음 사이클이 다시 시도하며, 나머지 파일은 계속 돈다 |
+| `[reconcile] warn <path>: frontmatter YAML 이 깨졌습니다 …` | frontmatter YAML 을 읽지 못해 메타데이터(team·date·supersedes …) 없이 원문 전체를 본문으로 색인했다 — 쓴 글은 버리지 않는다. YAML 을 고치면 다음 사이클이 다시 색인한다 (감사 `bad-frontmatter`) |
 | `[reconcile] handoff <path> (…)` | `ingest_path`·`ingest`·`audit -apply` 가 먼저 색인한 문서를 판정·증류·그래프로 넘긴다 (다시 쓰지 않으므로 `indexed=` 에는 세지 않는다) |
 | `[judge] superseded A ↔ B (latest-wins …)` · `(llm: 모순, 고확신 …)` · `question …` | 판정 결과 |
+| `[judge] 일부 실패 — 다음 사이클에 다시: …` | 판정하지 못한 문서(검색·원장 쓰기 오류) — `.cache/daemon/judge-pending.json` 에 남아 다음 사이클이, 데몬을 다시 띄웠으면 boot 가 이어 판정한다 (그 사이 본문이 바뀐 문서는 새 변경분으로 판정) |
 | `[distill] path: summary N자, entities M` | 증류 |
+| `[distill] path: <오류> — N 뒤 사이클에 다시 시도` | 증류 실패(LLM 응답 없음·스키마 불일치·빈 요약·색인 반영 실패) — 1분부터 두 배씩(최대 1시간) 기다린 뒤의 사이클이 다시 넣는다. 데몬을 다시 띄우면 boot 백필(요약이 빈 문서)이 이어받는다 |
 | `[graph] docs= entities= edges=` | 그래프 재구축 (바뀐 게 있을 때만) |
 | `[audit] 주간 감사: …` | 7일마다 정합성 감사 요약 |
 | `[reconcile] matched N files > sanityMaxFiles` / `스캔이 일부만 됐습니다` | 루트를 잘못 잡은 것으로 보고 색인 거부 / 읽지 못한 디렉토리가 있어 이번 사이클은 삭제 보류 (status 에 `REFUSED` · `PARTIAL-SCAN`) |
@@ -417,6 +420,7 @@ scripts/memory-daemon/run.sh once                 # 데몬이 켜져 있으면 �
 판정이 비교하는 범위(같은 팀·종류·프로젝트·doc_type) 밖으로 옮긴 같은 본문은 숨기지 않는다 — 예: `doc_type` 이 knowledge 가 되거나 다른 프로젝트로 옮긴 사본. 경로만 docs/knowledge/ 로 옮기고 frontmatter 에 `doc_type: spec` 이 남아 있으면 frontmatter 가 이기므로 여전히 범위 안이다. 두 문서의 본문이 똑같으면(날짜만 다른 사본) 내용으로는 어느 쪽이 이겼는지
 가릴 수 없어, 이긴 문서의 이름을 바꾸면 결론이 풀려 둘 다 보인다. 한 문서를 두 결론이 가리키면 원장에 나중에 붙은 결론을 따른다.
 14일 넘게 답이 없는 질문은 주간 감사가 `stale-question` 으로 보고한다.
+LLM 에는 두 본문을 질의마다 바뀌는 난수 태그로 감싸 넘기고, 태그 안의 글은 비교할 데이터일 뿐 지시가 아니라고 못 박는다 — 본문이 구분자나 판정 지시문을 흉내 내도 판정을 끌어내지 못한다.
 
 ### 4.6 compaction 과 cold
 
@@ -525,6 +529,8 @@ relates:                                          # (선택) 관련 문서 — �
 본문의 마크다운 링크(`[..](../x.md)`)도 그래프의 `LINKS_TO` 가 된다. 링크 대상이 디스크에도 hot 에도 cold 에도 없거나, 디스크에 있는 파일과 철자가 대소문자만 다르면(GitHub 에서 깨진다)
 주간 감사가 `broken-link` 로 알린다 (`scenarios/` 처럼 색인 범위 밖이어도 디스크에 그 철자로 있으면 산 링크다).
 knowledge 는 근거가 있어야 한다 — `derived_from` 이나 `## 출처` 절이 없으면 감사가 `unsourced-fact` 로 알린다.
+frontmatter YAML 이 깨지면 메타데이터 없이 원문 전체를 본문으로 색인하고(데몬 로그 `[reconcile] warn`), team 이름이 규칙에 어긋나면 그 판을 색인하지 않는다 — 둘 다 감사가 `bad-frontmatter` 로 알린다.
+`supersedes` 가 자기 자신을 가리키거나 두 문서가 서로를 가리키면(순환) 그 선언은 무시된다 — 감사가 `supersedes-self`·`supersedes-cycle` 로 알린다.
 
 ### 5.2 예제 — Claude 에게 ADR 을 쓰게 하기
 
@@ -604,6 +610,8 @@ knowledge 인덱스는 `mem-knowledge-keep`(우선순위 200)이라 ISM 이 건�
 | `stale-question` | 14일 넘게 답을 기다리는 판정 질문 | 보고만 |
 | `corrupted-ledger` | 원장에 읽을 수 없는 줄 | 보고만 (그 줄은 건너뛴다) |
 | `partial-scan` | 읽지 못한 디렉토리가 있다 (권한) | 보고만 — 그 감사에서는 지우는 조치(`orphan-index`·`orphan-chunks`)를 건너뛴다 |
+| `bad-frontmatter` | frontmatter YAML 이 깨졌다(메타데이터 없이 원문 전체가 본문으로 색인된다) 또는 값이 잘못됐다(team 이름 — 그 판은 색인하지 않아 고치기 전 판이 남는다) | 보고만 — frontmatter 를 고치면 다음 데몬 사이클이 다시 색인한다 |
+| `supersedes-cycle` · `supersedes-self` | frontmatter `supersedes` 가 순환한다(A↔B) · 자기 자신을 가리킨다 — 수렴이 그 선언을 버려 어느 쪽도 밀리지 않는다 | 보고만 |
 
 ### 6.4 cold 문서 조치 — `archive`
 

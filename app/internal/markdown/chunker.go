@@ -3,6 +3,7 @@ package markdown
 import (
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // Chunk 는 헤더 계층 단위로 자른 조각이다.
@@ -14,12 +15,13 @@ type Chunk struct {
 // HeaderSeparator 는 header_path 구분자다.
 const HeaderSeparator = " > "
 
-// DefaultMaxChars 를 넘는 섹션은 문단 경계에서 더 나눈다.
+// DefaultMaxChars 를 넘는 섹션은 문단 경계에서 더 나눈다. 문단 하나가 넘으면 줄 → 문장 → 글자 경계로 더 나눈다.
 const DefaultMaxChars = 4000
 
 var (
 	headerLine = regexp.MustCompile(`^(#{1,6})\s+(.+?)\s*#*\s*$`)
-	fenceOpen  = regexp.MustCompile("^\\s{0,3}(`{3,}|~{3,})")
+	// sentenceEnd 는 문장 끝(마침표·물음표·느낌표 뒤 공백)이다. 긴 줄 하나를 나눌 때 쓴다
+	sentenceEnd = regexp.MustCompile(`[.!?。！？]\s+`)
 )
 
 type heading struct {
@@ -33,7 +35,8 @@ type section struct {
 }
 
 // ChunkMarkdown 은 마크다운을 헤더 계층 단위로 자른다. 코드 블록 안의 `#` 줄은 헤더가 아니고,
-// 긴 섹션을 나눌 때도 코드 블록 안에서는 자르지 않는다. rootTitle 은 헤더 앞 머리말의 이름이다.
+// 긴 섹션을 나눌 때도 코드 블록 안의 빈 줄에서는 자르지 않는다 (코드 블록 하나가 상한을 넘을 때만 줄 경계에서).
+// rootTitle 은 헤더 앞 머리말의 이름이다.
 func ChunkMarkdown(body, rootTitle string, maxChars int) []Chunk {
 	if maxChars <= 0 {
 		maxChars = DefaultMaxChars
@@ -50,7 +53,9 @@ func ChunkMarkdown(body, rootTitle string, maxChars int) []Chunk {
 		}
 		headerPath := strings.Join(path, HeaderSeparator)
 		for _, part := range splitLong(text, maxChars) {
-			out = append(out, Chunk{HeaderPath: headerPath, Text: part})
+			if strings.TrimSpace(part) != "" {
+				out = append(out, Chunk{HeaderPath: headerPath, Text: part})
+			}
 		}
 	}
 	return out
@@ -61,7 +66,6 @@ func splitSections(body string) []section {
 		sections []section
 		stack    []heading
 		current  []string
-		fence    string
 	)
 	flush := func() {
 		path := make([]string, 0, len(stack))
@@ -71,20 +75,9 @@ func splitSections(body string) []section {
 		sections = append(sections, section{path: path, lines: current})
 		current = nil
 	}
-	for _, line := range strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n") {
-		if m := fenceOpen.FindStringSubmatch(line); m != nil {
-			marker := m[1]
-			switch {
-			case fence == "":
-				fence = marker
-			case marker[0] == fence[0] && len(marker) >= len(fence):
-				fence = ""
-			}
-			current = append(current, line)
-			continue
-		}
-		if fence == "" {
-			if m := headerLine.FindStringSubmatch(line); m != nil {
+	for _, l := range markLines(body) {
+		if !l.code {
+			if m := headerLine.FindStringSubmatch(l.text); m != nil {
 				flush()
 				level := len(m[1])
 				kept := make([]heading, 0, len(stack)+1)
@@ -94,31 +87,61 @@ func splitSections(body string) []section {
 					}
 				}
 				stack = append(kept, heading{level: level, title: m[2]})
-				current = append(current, line)
-				continue
 			}
 		}
-		current = append(current, line)
+		current = append(current, l.text)
 	}
 	flush()
 	return sections
 }
 
-// splitLong 은 긴 섹션을 문단(빈 줄) 경계에서 나눈다. 코드 블록 안의 빈 줄은 경계가 아니다.
+// splitLevel 은 긴 글을 나누는 단계 하나다: 나누는 법과, 나눈 조각을 다시 이을 때의 구분자.
+type splitLevel struct {
+	split func(string) []string
+	sep   string
+}
+
+// splitLevels 는 긴 섹션을 나누는 순서다: 문단(빈 줄, 코드 블록 안의 빈 줄은 경계가 아니다) → 줄 → 문장.
+// 문장 하나도 상한을 넘으면 글자 경계에서 자른다 (runeChunks).
+var splitLevels = []splitLevel{
+	{paragraphBlocks, "\n\n"},
+	{splitLines, "\n"},
+	{sentences, " "},
+}
+
+// splitLong 은 긴 섹션을 상한(maxChars) 안의 조각으로 나눈다. 문단을 상한까지 이어 붙이고, 문단 하나가 상한을 넘으면
+// 그 문단만 줄 경계에서(그래도 크면 문장, 글자 경계에서) 나눈다 — 상한을 넘는 코드 블록도 줄 경계에서 나뉜다.
 func splitLong(text string, maxChars int) []string {
-	if len([]rune(text)) <= maxChars {
+	return splitAt(text, maxChars, 0)
+}
+
+func splitAt(text string, maxChars, level int) []string {
+	if runeLen(text) <= maxChars {
 		return []string{text}
 	}
+	if level == len(splitLevels) {
+		return runeChunks(text, maxChars)
+	}
+	lv := splitLevels[level]
 	var parts []string
 	buffer := ""
-	for _, block := range paragraphBlocks(text) {
-		candidate := block
-		if buffer != "" {
-			candidate = buffer + "\n\n" + block
+	for _, piece := range lv.split(text) {
+		if runeLen(piece) > maxChars {
+			// 조각 하나가 상한을 넘는다 — 모아 둔 것을 내보내고 그 조각만 다음 단계로 나눈다
+			if buffer != "" {
+				parts = append(parts, buffer)
+			}
+			buffer = ""
+			parts = append(parts, splitAt(piece, maxChars, level+1)...)
+			continue
 		}
-		if len([]rune(candidate)) > maxChars && buffer != "" {
+		candidate := piece
+		if buffer != "" {
+			candidate = buffer + lv.sep + piece
+		}
+		if runeLen(candidate) > maxChars && buffer != "" {
 			parts = append(parts, buffer)
-			buffer = block
+			buffer = piece
 			continue
 		}
 		buffer = candidate
@@ -133,23 +156,47 @@ func paragraphBlocks(text string) []string {
 	var (
 		blocks  []string
 		current []string
-		inFence bool
 	)
-	for _, line := range strings.Split(text, "\n") {
-		if fenceOpen.MatchString(line) {
-			inFence = !inFence
-		}
-		if !inFence && strings.TrimSpace(line) == "" {
+	for _, l := range markLines(text) {
+		if !l.code && strings.TrimSpace(l.text) == "" {
 			if len(current) > 0 {
 				blocks = append(blocks, strings.Join(current, "\n"))
 			}
 			current = nil
 			continue
 		}
-		current = append(current, line)
+		current = append(current, l.text)
 	}
 	if len(current) > 0 {
 		blocks = append(blocks, strings.Join(current, "\n"))
 	}
 	return blocks
 }
+
+func splitLines(text string) []string { return strings.Split(text, "\n") }
+
+// sentences 는 줄 하나를 문장으로 나눈다 (문장 사이 공백은 하나로 다시 잇는다).
+func sentences(text string) []string {
+	var out []string
+	start := 0
+	for _, loc := range sentenceEnd.FindAllStringIndex(text, -1) {
+		out = append(out, strings.TrimSpace(text[start:loc[1]]))
+		start = loc[1]
+	}
+	if rest := strings.TrimSpace(text[start:]); rest != "" {
+		out = append(out, rest)
+	}
+	return out
+}
+
+// runeChunks 는 글자 경계에서 maxChars 글자씩 자른다 — 문장 경계도 없는 긴 글(공백 없는 토큰·base64 등)의 마지막 수단이다.
+func runeChunks(text string, maxChars int) []string {
+	r := []rune(text)
+	parts := make([]string, 0, len(r)/maxChars+1)
+	for start := 0; start < len(r); start += maxChars {
+		parts = append(parts, string(r[start:min(start+maxChars, len(r))]))
+	}
+	return parts
+}
+
+func runeLen(s string) int { return utf8.RuneCountInString(s) }

@@ -36,6 +36,9 @@ const (
 	StaleQuestion   Kind = "stale-question"   // 답을 오래 기다리는 판정 질문
 	CorruptedLedger Kind = "corrupted-ledger" // 원장에 읽을 수 없는 줄이 있다
 	PartialScan     Kind = "partial-scan"     // 읽지 못한 디렉토리가 있다 — 지우는 조치(orphan-index·orphan-chunks)를 건너뛴다
+	BadFrontmatter  Kind = "bad-frontmatter"  // frontmatter YAML 이 깨졌다(메타데이터 없이 색인) 또는 값이 잘못됐다(그 판은 색인하지 않는다)
+	SupersedesCycle Kind = "supersedes-cycle" // frontmatter supersedes 가 순환한다 — 수렴이 그 선언들을 버린다
+	SupersedesSelf  Kind = "supersedes-self"  // frontmatter supersedes 가 자기 자신을 가리킨다 — 수렴이 버린다
 )
 
 var fixable = map[Kind]bool{OrphanIndex: true, Unindexed: true, StaleContent: true, OrphanChunks: true}
@@ -74,7 +77,7 @@ func Run(ctx context.Context, d Deps, apply bool) (Report, error) {
 	if err := r.load(ctx); err != nil {
 		return Report{}, err
 	}
-	steps := []func(context.Context) error{r.hotVsIndex, r.orphanChunks, r.links, r.questions}
+	steps := []func(context.Context) error{r.hotVsIndex, r.supersedesDeclarations, r.orphanChunks, r.links, r.questions}
 	for _, step := range steps {
 		if err := step(ctx); err != nil {
 			return Report{Findings: r.findings, Applied: apply}, err
@@ -103,6 +106,8 @@ type runner struct {
 	indices []string
 	docs    map[string]ingest.IndexedDoc
 	owner   *cold.Ownership
+	// declared 는 hot 파일의 frontmatter supersedes 선언이다 (경로 → 밀어내는 구판). checkFile 이 모은다
+	declared map[string]string
 }
 
 func (r *runner) add(k Kind, path, detail string, fixed bool) {
@@ -189,9 +194,11 @@ func (r *runner) orphanDetail(rel, index string) string {
 func (r *runner) checkFile(ctx context.Context, f ingest.ScannedFile) error {
 	p, err := r.Indexer.Prepare(ctx, f.Abs, "")
 	if err != nil {
-		return nil // 게이트(바이너리·크기)에 걸린 파일, frontmatter 오류 등은 데몬 로그가 이미 남긴다
+		r.badFrontmatterValue(f.Rel, err) // 게이트(바이너리·크기)에 걸린 파일 등 나머지는 데몬 로그가 이미 남긴다
+		return nil
 	}
 	b := p.Built
+	r.noteFrontmatter(f.Rel, b)
 	if b.Meta.Kind == model.KindKnowledge && b.Meta.DocType == model.DocKnowledge && !hasSources(b) {
 		r.add(UnsourcedFact, f.Rel, "knowledge 에 derived_from(why 포함)도 '## 출처' 절도 없다", false)
 	}
