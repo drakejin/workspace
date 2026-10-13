@@ -1,6 +1,7 @@
 package scripts
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -102,7 +103,7 @@ func legacyTierPlist(checkout string) string {
 func assertLegacyKept(t *testing.T, sb *sandbox, launchctlLog string, r result) {
 	t.Helper()
 	if !exists(sb.agentPlist(legacyTierLabel)) {
-		t.Errorf("다른 meta-repo 의 예전 잡을 지웠다:\n%s", r.output())
+		t.Errorf("남겨야 할 예전 잡(다른 meta-repo 의 것, 어느 것인지 모르는 것, checkout 에 닿지 못한 것)을 지웠다:\n%s", r.output())
 	}
 	for _, c := range calls(t, launchctlLog) {
 		if strings.Contains(c, legacyTierLabel) {
@@ -263,6 +264,48 @@ func TestScheduleStatusNamesLegacyJobWhoseCheckoutIsGone(t *testing.T) {
 	line := lineContaining(r.stdout, legacyTierLabel)
 	if !strings.Contains(line, gone) || !strings.Contains(line, "없") || strings.Contains(line, "그 meta-repo 로 install") {
 		t.Errorf("status 가 checkout 이 없는 예전 잡을 알려야 한다 (install 안내 없이): %q", line)
+	}
+}
+
+// R5-final-docs-1: checkout 이 없는지 확인할 수 없으면(그 위 디렉토리에 닿지 못한다 — 빠진 볼륨, 읽을 권한이 없는 디렉토리)
+// 지워진 것인지 모르므로 예전 잡을 내리지도 지우지도 않는다. 대신 지워진 것이면 직접 내리는 명령을 알린다 (없는 경로로 install 하라고 하지 않는다).
+func TestScheduleKeepsLegacyJobWhoseCheckoutIsUnreachable(t *testing.T) {
+	cases := map[string]func(t *testing.T, dir string) string{
+		"unmounted-volume": func(t *testing.T, dir string) string {
+			return filepath.Join(dir, "Volumes", "ext", "wt")
+		},
+		"unreadable-parent": func(t *testing.T, dir string) string {
+			locked := filepath.Join(dir, "locked")
+			if err := os.MkdirAll(filepath.Join(locked, "wt"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(locked, 0); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+			return filepath.Join(locked, "wt")
+		},
+	}
+	for name, checkoutAt := range cases {
+		for _, action := range []string{"install", "uninstall", "status"} {
+			t.Run(name+"/"+action, func(t *testing.T) {
+				sb, root, launchctlLog := tierSandbox(t, "copy")
+				checkout := checkoutAt(t, sb.dir)
+				legacy := sb.agentPlist(legacyTierLabel)
+				writeFile(t, legacy, legacyTierPlist(checkout))
+
+				r := sb.mustBash(nil, scheduleScript(root), action)
+
+				assertLegacyKept(t, sb, launchctlLog, r)
+				line := lineContaining(r.stdout, legacyTierLabel)
+				if !strings.Contains(line, checkout) || !strings.Contains(line, "launchctl unload '"+legacy+"'") {
+					t.Errorf("닿지 못한 checkout(%s)과 직접 내리는 명령을 알려야 한다: %q", checkout, line)
+				}
+				if strings.Contains(r.stdout, "META_REPO_ROOT="+checkout) || strings.Contains(line, "그 meta-repo 로 install") {
+					t.Errorf("닿지 못한 경로로 install 하라고 한다:\n%s", r.output())
+				}
+			})
+		}
 	}
 }
 

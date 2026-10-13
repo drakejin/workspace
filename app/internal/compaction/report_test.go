@@ -62,3 +62,26 @@ func TestRender(t *testing.T) {
 		t.Error("빈 리포트")
 	}
 }
+
+// R5-final-docs-4: 리포트의 5단계(티어 이동)는 tier 가 늘 git rm 하고 커밋해야 한다고 하지 않는다 — git 이 다루는 meta-repo 에서
+// 커밋된 그대로인 원본만 git rm 하고, 커밋하지 않은 원본은 hot 에 남기고, git 이 다루지 않는 meta-repo 는 파일을 지운다.
+func TestRenderTierStepDoesNotPromiseGitRm(t *testing.T) {
+	md := Render(Report{Team: "a"})
+	step := ""
+	for _, line := range strings.Split(md, "\n") {
+		if strings.HasPrefix(line, "5. 티어 이동") {
+			step = line
+		}
+	}
+	if step == "" {
+		t.Fatalf("5단계가 없다:\n%s", md)
+	}
+	if strings.Contains(step, "hot 원본 제거(git rm). 이후 커밋한다") {
+		t.Errorf("5단계가 조건 없이 git rm·커밋을 말한다: %q", step)
+	}
+	for _, want := range []string{"커밋된 그대로인 원본만 git rm", "파일을 지운다", "`(git rm)` 줄이 있으면", "`hot 에 남김`"} {
+		if !strings.Contains(step, want) {
+			t.Errorf("5단계에 %q 없음: %q", want, step)
+		}
+	}
+}

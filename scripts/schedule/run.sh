@@ -11,7 +11,8 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 source "${SCRIPT_DIR}/../memory-common.sh"
 
 # 예전 판의 고정 잡 이름 — 머신에 하나뿐이었고, 명령줄 환경 없이 그 잡을 깐 checkout 의 .env 가 가리키는 meta-repo 만 돌았다.
-# 그 meta-repo 에 install·uninstall 하면 내리고 지운다 (새 이름으로 옮긴다). 그 잡이 부르는 checkout 이 없어졌으면 어디서든 내린다
+# 그 meta-repo 에 install·uninstall 하면 내리고 지운다 (새 이름으로 옮긴다). 그 잡이 부르는 checkout 이 지워졌으면 어디서든 내린다
+# (닿지 못할 뿐이면 — 빠진 볼륨, 읽을 권한이 없다 — 그대로 두고 직접 내리는 명령을 알린다)
 LEGACY_LABEL="com.drakejin.workspace.tier"
 AGENTS_DIR="${HOME}/Library/LaunchAgents"
 
@@ -71,14 +72,26 @@ legacy_checkout() {
     plutil -extract WorkingDirectory raw -o - "$legacy_plist" 2>/dev/null || true
 }
 
+# 예전 고정 잡이 부르는 checkout 이 지워졌다고 확인되는가 — 그 위 디렉토리를 읽을 수 있는데 checkout 이 없다. 위 디렉토리에 닿지
+# 못하면(볼륨이 빠졌거나 읽을 권한이 없다) checkout 이 지워졌는지 알 수 없다
+legacy_checkout_gone() {
+    [[ ! -d "$1" ]] && ls -A -- "$(dirname "$1")" >/dev/null 2>&1
+}
+
+# 닿지 못한 checkout 을 부르는 예전 잡을 직접 내리는 명령
+legacy_unload_hint() {
+    local legacy_plist="${AGENTS_DIR}/${LEGACY_LABEL}.plist"
+    echo "지워진 것이면 직접 내리세요: launchctl unload '${legacy_plist}' && rm '${legacy_plist}'"
+}
+
 # 예전 고정 잡이 돌던 meta-repo — 그 잡은 명령줄 환경 없이(PATH 만) 그 checkout 의 .env 를 읽었다 (META_REPO_ROOT 가 없으면 checkout 자신)
 legacy_meta_root() {
     (unset META_REPO_ROOT MEMORY_WORKSPACE; memory_load_env "$1"; echo "$META_REPO_ROOT")
 }
 
-# 예전 고정 잡을 옮긴다 — 지금 대상 meta-repo 의 것이면 내리고 지운다. 그 잡이 부르는 checkout 이 없어졌으면 어디서도 돌 수 없는
-# 잡이라(그 checkout 의 .env 도 없어 어느 meta-repo 의 것인지도 모른다) 내리고 지운다. 다른 meta-repo 의 것이거나 어느 것인지
-# 모르면 그대로 두고 알린다
+# 예전 고정 잡을 옮긴다 — 지금 대상 meta-repo 의 것이면 내리고 지운다. 그 잡이 부르는 checkout 이 지워졌으면 어디서도 돌 수 없는
+# 잡이라(그 checkout 의 .env 도 없어 어느 meta-repo 의 것인지도 모른다) 내리고 지운다. checkout 에 닿지 못하거나, 다른 meta-repo 의
+# 것이거나, 어느 것인지 모르면 그대로 두고 알린다
 migrate_legacy_job() {
     local legacy_plist="${AGENTS_DIR}/${LEGACY_LABEL}.plist" checkout legacy_root
     [[ -f "$legacy_plist" ]] || return 0
@@ -87,9 +100,13 @@ migrate_legacy_job() {
         echo "[schedule] tier: 예전 잡 ${LEGACY_LABEL} 이 어느 checkout 을 부르는지 ${legacy_plist} 에서 읽지 못해 그대로 둡니다 — 확인한 뒤 직접 'launchctl unload' 하고 지우세요"
         return 0
     fi
-    if [[ ! -d "$checkout" ]]; then
+    if legacy_checkout_gone "$checkout"; then
         unload_job "$LEGACY_LABEL" || true
         echo "[schedule] tier: 예전 잡 ${LEGACY_LABEL} 이 부르는 checkout(${checkout})이 없어 돌 수 없는 잡이라 내렸습니다 — tier 를 다시 걸려면 쓰는 meta-repo 로 install"
+        return 0
+    fi
+    if [[ ! -d "$checkout" ]]; then
+        echo "[schedule] tier: 예전 잡 ${LEGACY_LABEL} 이 부르는 checkout(${checkout})에 닿지 못해(볼륨이 빠졌거나 읽을 권한이 없다) 그대로 둡니다 — $(legacy_unload_hint)"
         return 0
     fi
     legacy_root="$(legacy_meta_root "$checkout")"
@@ -156,8 +173,12 @@ status_job() {
     fi
     [[ -f "${AGENTS_DIR}/${LEGACY_LABEL}.plist" ]] || return 0
     checkout="$(legacy_checkout "${AGENTS_DIR}/${LEGACY_LABEL}.plist")"
-    if [[ -n "$checkout" && ! -d "$checkout" ]]; then
+    if [[ -n "$checkout" ]] && legacy_checkout_gone "$checkout"; then
         echo "[schedule] tier: 예전 잡 ${LEGACY_LABEL} 도 있습니다 — 부르는 checkout(${checkout})이 없어 돌 수 없는 잡이라 다음 install·uninstall 이 내린다"
+        return 0
+    fi
+    if [[ -n "$checkout" && ! -d "$checkout" ]]; then
+        echo "[schedule] tier: 예전 잡 ${LEGACY_LABEL} 도 있습니다 — 부르는 checkout(${checkout})에 닿지 못합니다(볼륨이 빠졌거나 읽을 권한이 없다). $(legacy_unload_hint)"
         return 0
     fi
     [[ -n "$checkout" ]] && owner="(meta-repo $(legacy_meta_root "$checkout"), checkout ${checkout})"

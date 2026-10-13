@@ -208,6 +208,8 @@ func Render(r Report) string {
 	b.WriteString("## 다음 단계 (에이전트)\n")
 	b.WriteString("3. 분리: 후보마다 정의가 실제로 다른지 원문으로 확인하고, 유효하지 않은 정의는 deprecated 문서로 떼어 낸다.\n")
 	b.WriteString("4. 다시 쓰기: 살아남은 사실을 오늘 날짜 frontmatter 로 `docs/knowledge/` 에 다시 쓴다. 추론 없이, 출처 경로를 남긴다.\n")
-	b.WriteString("5. 티어 이동: `scripts/memory/run.sh tier -team <팀>` (먼저 -dry-run) — 쓰기 막기 → 스냅샷 → 인덱스 삭제 → hot 원본 제거(git rm). 이후 커밋한다.\n")
+	b.WriteString("5. 티어 이동: `scripts/memory/run.sh tier -team <팀>` (먼저 -dry-run) — 쓰기 막기 → 스냅샷 → 인덱스 삭제 → hot 원본 제거" +
+		"(cold store 에 같은 내용이 있는 원본만 — git 이 다루는 meta-repo 면 커밋된 그대로인 원본만 git rm, git 이 다루지 않으면 파일을 지운다). " +
+		"tier 출력에 `(git rm)` 줄이 있으면 커밋한다. `hot 에 남김` 원본은 커밋한 뒤 tier 를 다시 돌려야 빠진다.\n")
 	return b.String()
 }

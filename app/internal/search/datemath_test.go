@@ -121,6 +121,10 @@ var dstCases = []struct {
 	// +00:00 쪽을 고르는 것은 적힌 벽시계뿐이다 — date math 가 겹침에 닿으면 계산하던 시각의 오프셋을 잇는다 (R5-final-query-1)
 	{"Europe/London", "2026-10-24T01:30||+1d", false, utc(2026, 10, 25, 0, 30, 0)}, // BST 에서 와서 겹침 → BST
 	{"Europe/London", "2026-10-26T01:30||-1d", false, utc(2026, 10, 25, 1, 30, 0)}, // GMT 에서 와서 겹침 → GMT
+	// 틈은 date math 가 닿아도 오프셋을 잇지 않고 적힌 벽시계처럼 틈 길이만큼 늦게 읽는다 (R5-final-query-1)
+	{"Europe/London", "2026-03-30T01:30||-1d", false, utc(2026, 3, 29, 1, 30, 0)}, // BST 에서 와서 틈 → 02:30 BST (BST 를 이으면 00:30Z)
+	{"Europe/Berlin", "2026-03-30T02:30||-1d", false, utc(2026, 3, 29, 1, 30, 0)}, // CEST 에서 와서 틈 → 03:30 CEST
+	{"America/Santiago", "2026-09-06T05:00||/d", false, utc(2026, 9, 6, 4, 0, 0)}, // 자정이 틈 → 01:00 -03 (-03 을 이으면 03:00Z)
 	// 시각만 적은 경계를 올려 읽으면 빠진 칸을 끝(…:59:59.999)으로 채운 벽시계를 읽는다 — 30분·45분에 바뀌는 시간대도
 	{"Australia/Lord_Howe", "2026-10-04T02", true, utc(2026, 10, 3, 15, 59, 59).Add(999 * time.Millisecond)}, // 02:59:59.999 +11:00
 	{"Pacific/Chatham", "2026-04-05T03", true, utc(2026, 4, 4, 15, 14, 59).Add(999 * time.Millisecond)},      // 03:59:59.999 +12:45
