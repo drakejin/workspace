@@ -125,7 +125,7 @@ date: 2026-10-13
 | knowledge 는 `supersedes:` 선언만 | 같음. 밀린 knowledge 는 자기 달 인덱스로 옮겨 노화 시작 | ✅ |
 | 판정 원장, (본문 sha, 본문 sha) 쌍으로 멱등 | `.cache/judge/{team}.jsonl` | ✅ |
 | 질문 PR (`memory/question-*`) | `scripts/memory/run.sh questions` / `scripts/memory/run.sh answer` + 세션 훅 알림 | 🟡 |
-| E. 증류 큐: 본문 sha 캐시, 비동기, 기본 꺼짐 | 같음 (`.cache/distill/`), 부팅 백필. 실제 claude 로 15건 확인 | ✅ |
+| E. 증류 큐: 본문 sha 캐시, 비동기, 기본 꺼짐 | 같음 (`.cache/distill/`), 부팅 백필. 실제 claude 로 증류 15건 확인 (문서 수가 아니라 증류 실행 수) | ✅ |
 | LLM = 로컬 claude CLI, 격리, API 키 제거, 실패는 폴백 | 같음 | ✅ |
 | 재구축 계약: 파생물 = f(hot, cold, 캐시), LLM 0회 | 인덱스 삭제 → 같은 결과, 그래프 rebuild → 같은 통계 | ✅ `TestDaemonLifecycle/재구축_계약`, `graph_CLI` |
 | 그래프 (`graph-rebuild`, `graph-query`) | Neo4j. 사이클마다 바뀌었을 때만 workspace 그래프 통째 교체 | ✅ |

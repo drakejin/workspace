@@ -319,7 +319,7 @@ MATCH p = (:Doc {workspace: 'workspace'})-[:SUPERSEDES*]->(:Doc) RETURN p;
 // 근거(derived_from)와 그 이유
 MATCH (a:Doc {workspace: 'workspace'})-[r:DERIVED_FROM]->(b:Doc) RETURN a.path, r.why, b.path;
 
-// 깨진 링크 후보 — 링크 대상이 hot 에 없다 (cold 로 간 문서도 나온다. 디스크에 있는 색인 범위 밖 가이드는 out-of-scope 라 빠진다
+// 깨진 링크 후보 — 링크 대상이 hot 에 없다 (cold 로 간 문서, 크기·바이너리 게이트로 색인하지 않은 파일도 나온다. 디스크에 있는 색인 범위 밖 가이드는 out-of-scope 라 빠진다
 // — 확정은 scripts/memory/run.sh audit 의 broken-link: 디스크에도 hot 에도 cold 에도 없거나 철자(대소문자)만 다른 대상)
 MATCH (s:Doc {workspace: 'workspace'})-[r]->(d:Doc {status: 'unindexed'}) RETURN s.path, type(r), d.path;
 
@@ -394,7 +394,7 @@ cat .cache/daemon/status.json | jq .lastCycle         # 마지막 사이클
 
 전체 목록은 `scripts/memory/run.sh help` — 위 표에 없는 명령(`list-cold`, `restore`, `reload`, `ingest`, `bootstrap`, `tier-tick` …)도
 이 진입점으로 부른다 (`.env` 를 읽고, 바뀐 게 있으면 빌드한다. `.cache/bin/memory-mcp` 를 직접 부르면 `.env` 가 빠진다).
-명령마다 받는 플래그와 설명·기본값은 `scripts/memory/run.sh <command> -h` 로 본다 (OpenSearch 가 꺼져 있어도 나온다). 사용법이 틀리면 같은 표를 보이고 exit 2 로 끝난다.
+명령마다 받는 플래그와 설명·기본값은 `scripts/memory/run.sh <command> -h` 로 본다 (OpenSearch 가 꺼져 있어도 나온다). 사용법이 틀리면 같은 표를 보이고 exit 2 로 끝난다 (OpenSearch 가 필요한 명령은 먼저 스택에 붙으므로, 스택이 꺼져 있으면 그 연결 오류가 먼저 나온다).
 
 ### 5.3 app/Makefile — Go 개발 (`make -C app <타겟>`)
 

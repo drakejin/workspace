@@ -15,6 +15,7 @@ argument-hint: "[team]"
 4. **다시 쓰기** — "수명 확인" 목록의 문서 중 아직 유효한 사실·정의는 오늘 날짜로 `docs/knowledge/{주제}.md` 에 다시 쓴다.
    - frontmatter: `doc_type: knowledge`, `date: <오늘>`, 해당되면 `repo`. 기존 knowledge 를 개정하면 새 문서에 `supersedes: <구판 경로>`
    - 근거를 남긴다: frontmatter `derived_from: [{path: <원문>, why: <무엇을 가져왔나>}]` 와 본문 끝 `## 출처` 의 원문 `source_path`.
+   - 3단계에서 떼어 낸 무효 정의가 있으면 그 정의를 대신하는 새 문서에 `supersedes: docs/knowledge/deprecated/{주제}.md` 를 둔다 — 무효 정의가 현행 knowledge 처럼 기본 검색에 나오지 않게 숨기고(`include_superseded` 로는 보인다), 그래프에는 `SUPERSEDES` 로 남는다
      원문은 곧 cold 로 가지만 감사는 cold 에 있는 근거를 깨진 링크로 보지 않는다 (그래프에서는 `unindexed` 노드로 남는다)
    - 충돌하면 최신이 이긴다. 최신이 거짓 같아 보이면 고르지 말고 `## 검수 필요` 에 두 정의를 나란히 적고 사용자에게 알린다
    - `docs/knowledge/INDEX.md` 에 한 줄씩 추가한다. 데몬이 떠 있으면 저장만 하면 색인된다 (아니면 `scripts/memory-daemon/run.sh once`)
