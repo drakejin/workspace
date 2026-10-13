@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/drakejin/workspace/app/internal/model"
 	"github.com/drakejin/workspace/app/internal/search"
 	"github.com/drakejin/workspace/app/internal/state"
 )
@@ -49,17 +48,18 @@ func runSessionContext(ctx context.Context, c *CLI, _ []string) (string, error) 
 
 	var lines []string
 	if len(terms) > 0 && c.Handlers.Ready(ctx) == nil {
-		hits, err := search.Search(ctx, c.OS, search.Request{
-			Workspace: c.Config.Workspace, Team: c.Config.DefaultTeam, Repo: repo, Query: strings.Join(terms, " "), Size: sessionHits,
+		res, err := search.Search(ctx, c.OS, search.Request{
+			Workspace: c.Config.Workspace, Team: c.Config.DefaultTeam, Project: repo, Query: strings.Join(terms, " "), Size: sessionHits,
 		})
-		if err == nil && len(hits) == 0 && repo != "" {
+		if err == nil && len(res.Hits) == 0 && repo != "" {
 			// repo 필터로 아무것도 없으면 repo 이름이 들어간 문서 전체에서 다시 찾는다
-			hits, err = search.Search(ctx, c.OS, search.Request{Workspace: c.Config.Workspace, Team: c.Config.DefaultTeam, Query: strings.Join(terms, " "), Size: sessionHits})
+			res, err = search.Search(ctx, c.OS, search.Request{Workspace: c.Config.Workspace, Team: c.Config.DefaultTeam, Query: strings.Join(terms, " "), Size: sessionHits})
 		}
+		hits := res.Hits
 		if err == nil && len(hits) > 0 {
 			lines = append(lines, fmt.Sprintf("## memory — 이 세션과 관련된 문서 (자동 검색: %q)", strings.Join(terms, " ")))
 			for _, h := range hits {
-				lines = append(lines, fmt.Sprintf("- %s › %s (%s, %s)", h.SourcePath, h.HeaderPath, h.DocType, model.Day(h.EventTime)))
+				lines = append(lines, fmt.Sprintf("- %s › %s (%s, %s)", h.SourcePath, h.HeaderPath, h.DocType, h.Day()))
 			}
 			lines = append(lines, "근거가 필요하면 위 경로를 Read 하고, 더 필요하면 search_memory 로 찾는다.")
 		}
@@ -70,7 +70,7 @@ func runSessionContext(ctx context.Context, c *CLI, _ []string) (string, error) 
 			n += len(q)
 		}
 		if n > 0 {
-			lines = append(lines, fmt.Sprintf("(메모리 판정 질문 %d건이 답을 기다린다 — 사용자에게 'make questions' 를 알려 줄 것)", n))
+			lines = append(lines, fmt.Sprintf("(메모리 판정 질문 %d건이 답을 기다린다 — 사용자에게 'scripts/memory/run.sh questions' 를 알려 줄 것)", n))
 		}
 	}
 	return strings.Join(lines, "\n"), nil

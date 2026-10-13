@@ -33,16 +33,48 @@ func runSearch(ctx context.Context, c *CLI, args []string) (string, error) {
 	f := newFlags("search")
 	team := f.String("team", c.Config.DefaultTeam, "팀")
 	org := f.String("org", "", "org(실)")
-	repo := f.String("repo", "", "repository")
+	project := f.String("project", "", "프로젝트(관리 대상 repository)")
+	topic := f.String("topic", "", "주제")
+	date := f.String("date", "", "날짜 YYYY-MM-DD")
+	from := f.String("from", "", "범위 시작 (YYYY-MM-DD 또는 now-30d)")
+	to := f.String("to", "", "범위 끝 (YYYY-MM-DD 또는 now)")
+	docType := f.String("type", "", "문서 종류")
+	size := f.Int("size", 0, "결과 수")
 	superseded := f.Bool("superseded", false, "밀린·deprecate 된 문서도 본다")
 	rest, err := f.parse(args)
 	if err != nil {
 		return "", err
 	}
-	if len(rest) == 0 {
+	in := mcpserver.SearchInput{
+		Team: *team, Org: *org, Query: strings.Join(rest, " "), Project: *project, Topic: *topic, Date: *date,
+		TimeRange: model.TimeRange{From: *from, To: *to}, DocType: *docType, Size: *size, IncludeSuperseded: *superseded,
+	}
+	if strings.TrimSpace(in.Query) == "" && in.Filters() == "" {
 		return "", usageErr("search")
 	}
-	return c.Handlers.Search(ctx, mcpserver.SearchInput{Team: *team, Org: *org, Query: strings.Join(rest, " "), Repo: *repo, IncludeSuperseded: *superseded})
+	return c.Handlers.Search(ctx, in)
+}
+
+func runFilters(ctx context.Context, c *CLI, args []string) (string, error) {
+	f := newFlags("filters")
+	team := f.String("team", c.Config.DefaultTeam, "팀")
+	org := f.String("org", "", "org(실)")
+	project := f.String("project", "", "프로젝트")
+	topic := f.String("topic", "", "주제")
+	date := f.String("date", "", "날짜 YYYY-MM-DD")
+	from := f.String("from", "", "범위 시작")
+	to := f.String("to", "", "범위 끝")
+	docType := f.String("type", "", "문서 종류")
+	superseded := f.Bool("superseded", false, "밀린·deprecate 된 문서도 센다")
+	rest, err := f.parse(args)
+	if err != nil {
+		return "", err
+	}
+	if len(rest) != 0 {
+		return "", usageErr("filters")
+	}
+	return c.Handlers.Filters(ctx, mcpserver.FiltersInput{Team: *team, Org: *org, Project: *project, Topic: *topic, Date: *date,
+		TimeRange: model.TimeRange{From: *from, To: *to}, DocType: *docType, IncludeSuperseded: *superseded})
 }
 
 func runIngest(ctx context.Context, c *CLI, args []string) (string, error) {

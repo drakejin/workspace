@@ -26,7 +26,13 @@ const (
 var fileTools = []string{"Read", "Glob", "Grep"}
 
 // memoryTools 는 with 조건에만 더하는 도구다.
-var memoryTools = []string{"mcp__memory__search_memory", "mcp__memory__related_docs", "mcp__memory__docs_by_entity"}
+var memoryTools = []string{
+	"mcp__" + serverName + "__search_memory", "mcp__" + serverName + "__search_filters",
+	"mcp__" + serverName + "__related_docs", "mcp__" + serverName + "__docs_by_entity",
+}
+
+// serverName 은 with 조건에 붙이는 MCP 서버 이름이다 — .mcp.json 과 같은 이름이라 CLAUDE.md 의 도구 이름이 그대로 맞는다.
+const serverName = "drakejin-workspace-memory-mcp"
 
 // Question 은 측정 질문 하나다. Expect 의 문자열이 답에 모두 들어 있으면 정답으로 본다.
 type Question struct {
@@ -90,7 +96,7 @@ func (r Result) TotalTools() int {
 func (r Result) MemoryTools() int {
 	n := 0
 	for name, v := range r.ToolCalls {
-		if strings.HasPrefix(name, "mcp__memory__") {
+		if strings.HasPrefix(name, "mcp__"+serverName+"__") {
 			n += v
 		}
 	}
@@ -180,7 +186,7 @@ func writeMCPConfig(opt Options) (map[string]string, func(), error) {
 		}
 	}
 	configs := map[string]any{
-		ModeWith:    map[string]any{"mcpServers": map[string]any{"memory": map[string]any{"command": "bash", "args": []string{opt.MCPScript}, "env": env}}},
+		ModeWith:    map[string]any{"mcpServers": map[string]any{serverName: map[string]any{"command": "bash", "args": []string{opt.MCPScript}, "env": env}}},
 		ModeWithout: map[string]any{"mcpServers": map[string]any{}},
 	}
 	paths := map[string]string{}

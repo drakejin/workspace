@@ -63,7 +63,7 @@ func (m *mcpHarness) call(t *testing.T, name string, args map[string]any) (strin
 	return res.Content[0].(*mcp.TextContent).Text, res.IsError
 }
 
-func TestMCPToolsAreTheTalksFourPlusGraph(t *testing.T) {
+func TestMCPToolsAreTheTalksFourPlusFiltersAndGraph(t *testing.T) {
 	m := newMCP(t, newConfig(t, nil))
 	res, err := m.session.ListTools(context.Background(), nil)
 	if err != nil {
@@ -73,8 +73,8 @@ func TestMCPToolsAreTheTalksFourPlusGraph(t *testing.T) {
 	for _, tool := range res.Tools {
 		names = append(names, tool.Name)
 	}
-	// 발표의 도구 네 개 + knowledge graph 도구 두 개
-	if !reflect.DeepEqual(names, []string{"docs_by_entity", "ingest_path", "list_cold", "related_docs", "restore_cold", "search_memory"}) {
+	// 발표의 도구 네 개 + 검색 필터 값 + knowledge graph 도구 두 개
+	if !reflect.DeepEqual(names, []string{"docs_by_entity", "ingest_path", "list_cold", "related_docs", "restore_cold", "search_filters", "search_memory"}) {
 		t.Errorf("tools = %v", names)
 	}
 }
@@ -101,7 +101,7 @@ func TestSearchFindsIdentifiersWithoutBackground(t *testing.T) {
 	if !strings.Contains(text, "docs/repository/attribution/adr/0007-click-dedup.md › ADR-0007 클릭 중복 제거 > 결정") {
 		t.Errorf("search = %s", text)
 	}
-	text, _ = m.call(t, "search_memory", map[string]any{"query": "활성 광고 정의", "repo": "serving"})
+	text, _ = m.call(t, "search_memory", map[string]any{"query": "활성 광고 정의", "project": "serving"})
 	if !strings.Contains(text, "main/serving/docs/prd-active-ad.md") {
 		t.Errorf("repo 필터 = %s", text)
 	}

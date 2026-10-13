@@ -28,6 +28,7 @@ type Input struct {
 	MtimeMs      int64
 	Size         int64
 	TeamOverride string
+	Location     *time.Location // 문서의 날(event_day)을 정하는 시간대. nil 이면 UTC
 	// Distilled 는 증류 캐시 조회다. hit 면 LLM 없이 summary/entities 가 붙는다.
 	Distilled func(team, bodySHA string) (model.Distilled, bool)
 }
@@ -36,6 +37,7 @@ type Input struct {
 type Built struct {
 	Meta       Metadata
 	EventTime  time.Time
+	EventDay   string // YYYY-MM-DD — 날짜 필터가 맞추는 값
 	ContentSHA string // 원문 전체 — 데몬의 변경 감지 기준
 	BodySHA    string // frontmatter 제외 본문 — 판정 쌍·증류 캐시 키. 메타만 바뀌면 그대로다
 	Title      string
@@ -63,12 +65,17 @@ func Build(in Input) (Built, error) {
 	if eventTime.IsZero() {
 		eventTime = in.FallbackTime.UTC()
 	}
+	eventDay := meta.DeclaredDay
+	if eventDay == "" {
+		eventDay = eventTime.In(locationOrUTC(in.Location)).Format(dayLayout)
+	}
 	rootTitle := strings.TrimSuffix(path.Base(in.SourcePath), path.Ext(in.SourcePath))
 	title := Title(body, in.SourcePath)
 	meta.Links = append(meta.Links, MarkdownLinks(body, in.SourcePath)...)
 	built := Built{
 		Meta:       meta,
 		EventTime:  eventTime,
+		EventDay:   eventDay,
 		ContentSHA: SHA256(in.Content),
 		BodySHA:    SHA256(body),
 		Title:      title,
@@ -85,9 +92,11 @@ func Build(in Input) (Built, error) {
 			Workspace:  in.Workspace,
 			Team:       meta.Team,
 			Repo:       meta.Repo,
+			Topic:      meta.Topic,
 			DocType:    meta.DocType,
 			Kind:       meta.Kind,
 			EventTime:  eventTime.Format(time.RFC3339Nano),
+			EventDay:   eventDay,
 			SourcePath: in.SourcePath,
 			GitSHA:     in.GitSHA,
 			HeaderPath: c.HeaderPath,
@@ -100,6 +109,8 @@ func Build(in Input) (Built, error) {
 			Size:       in.Size,
 			Title:      title,
 			Supersedes: meta.Supersedes,
+			// 필드 구성의 판 — 데몬이 낮은 판의 문서를 다시 써 새 필드를 채운다
+			IndexVersion: model.IndexVersion,
 		}
 		if hasDistilled {
 			chunk.Summary = distilled.Summary
@@ -108,6 +119,13 @@ func Build(in Input) (Built, error) {
 		built.Chunks = append(built.Chunks, chunk)
 	}
 	return built, nil
+}
+
+func locationOrUTC(loc *time.Location) *time.Location {
+	if loc == nil {
+		return time.UTC
+	}
+	return loc
 }
 
 // Title 은 본문의 첫 `# ` 제목이다. 없으면 확장자를 뺀 파일 이름.

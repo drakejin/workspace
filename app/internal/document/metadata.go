@@ -21,6 +21,9 @@ var (
 	repoDocs = regexp.MustCompile(`^docs/repository/([^/]+)/`)
 	// ManagedRepoDocs 는 main/{repo}/docs/... — 관리 대상 repository 자신의 문서다
 	ManagedRepoDocs = regexp.MustCompile(`^main/([^/]+)/docs/`)
+	// docs/{feature,specs,issues}/{주제}/... — 주제 디렉토리 (CLAUDE.md 의 저장 위치)
+	topicDirs = regexp.MustCompile(`^docs/(?:feature|specs|issues)/([^/]+)/`)
+	nonTopic  = regexp.MustCompile(`[^\p{L}\p{N}]+`)
 )
 
 type typeHint struct {
@@ -42,6 +45,7 @@ var typeHints = []typeHint{
 // PathFacts 는 경로에서 추론한 값이다.
 type PathFacts struct {
 	Repo    string
+	Topic   string
 	DocType model.DocType
 }
 
@@ -53,6 +57,9 @@ func FactsFromPath(rel string) PathFacts {
 		facts.Repo = m[1]
 	} else if m := ManagedRepoDocs.FindStringSubmatch(rel); m != nil {
 		facts.Repo = m[1]
+	}
+	if m := topicDirs.FindStringSubmatch(rel); m != nil {
+		facts.Topic = NormalizeTopic(m[1])
 	}
 	if RootGuideFiles[rel] {
 		facts.DocType = model.DocGuide
@@ -80,10 +87,12 @@ func KindOf(docType model.DocType, rel string) model.Kind {
 // Metadata 는 frontmatter 와 경로에서 정한 문서 메타다. frontmatter 가 경로 추론보다 우선한다.
 type Metadata struct {
 	Team         string
-	Repo         string
+	Repo         string // 프로젝트
+	Topic        string
 	DocType      model.DocType
 	Kind         model.Kind
 	DeclaredTime time.Time // frontmatter 날짜. 없으면 zero (호출자가 git/mtime 으로 채운다)
+	DeclaredDay  string    // frontmatter 날짜가 시각 없는 날짜(YYYY-MM-DD)면 그 날 — 시간대와 상관없이 적힌 그대로의 날이다
 	Supersedes   string    // 개정판이 밀어내는 구판 경로 (선언은 항상 새 문서 쪽에 쓴다)
 	Links        []model.Link
 }
@@ -102,19 +111,34 @@ func ResolveMetadata(fm markdown.Frontmatter, rel, defaultTeam string) (Metadata
 	if t, ok := model.ParseDocType(strings.ToLower(firstString(fm, "doc_type", "type"))); ok {
 		docType = t
 	}
-	repo := firstString(fm, "repo")
+	repo := firstString(fm, "repo", "project")
 	if repo == "" {
 		repo = facts.Repo
+	}
+	topic := NormalizeTopic(firstString(fm, "topic"))
+	if topic == "" {
+		topic = facts.Topic
 	}
 	return Metadata{
 		Team:         team,
 		Repo:         repo,
+		Topic:        topic,
 		DocType:      docType,
 		Kind:         KindOf(docType, rel),
 		DeclaredTime: firstTime(fm, "event_time", "date"),
+		DeclaredDay:  firstDay(fm, "event_time", "date"),
 		Supersedes:   firstString(fm, "supersedes"),
 		Links:        frontmatterLinks(fm),
 	}, nil
+}
+
+// dayLayout 은 날짜만 있는 값의 꼴이다.
+const dayLayout = "2006-01-02"
+
+// NormalizeTopic 은 주제를 비교할 수 있는 꼴로 맞춘다: 소문자, 글자·숫자가 아닌 것은 하이픈 하나로.
+// "Payment Retry" 와 "payment-retry" 를 같은 주제로 본다.
+func NormalizeTopic(s string) string {
+	return strings.Trim(nonTopic.ReplaceAllString(strings.ToLower(strings.TrimSpace(s)), "-"), "-")
 }
 
 func firstString(fm markdown.Frontmatter, keys ...string) string {
@@ -132,7 +156,7 @@ func firstTime(fm markdown.Frontmatter, keys ...string) time.Time {
 		case time.Time:
 			return v.UTC()
 		case string:
-			for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02T15:04:05", "2006-01-02"} {
+			for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02T15:04:05", dayLayout} {
 				if t, err := time.Parse(layout, strings.TrimSpace(v)); err == nil {
 					return t.UTC()
 				}
@@ -140,6 +164,28 @@ func firstTime(fm markdown.Frontmatter, keys ...string) time.Time {
 		}
 	}
 	return time.Time{}
+}
+
+// firstDay 는 firstTime 이 읽을 값이 시각 없는 날짜일 때 그 날짜다. 시각이 있으면 "" (호출자가 시간대로 날을 정한다).
+func firstDay(fm markdown.Frontmatter, keys ...string) string {
+	for _, k := range keys {
+		switch v := fm[k].(type) {
+		case time.Time:
+			// YAML 이 날짜만 있는 값을 UTC 자정으로 읽었다
+			if v.Location() == time.UTC && v.Equal(v.Truncate(24*time.Hour)) {
+				return v.Format(dayLayout)
+			}
+			return ""
+		case string:
+			if s := strings.TrimSpace(v); s != "" {
+				if _, err := time.Parse(dayLayout, s); err == nil {
+					return s
+				}
+				return ""
+			}
+		}
+	}
+	return ""
 }
 
 // frontmatterLinks 는 derived_from·relates 목록이다. 각 항목은 {path, why} — why 가 없는 링크는 버린다

@@ -1,5 +1,5 @@
-// Package mcpserver 는 MCP 도구 여섯 개다: 발표의 search_memory · ingest_path · list_cold · restore_cold 와
-// knowledge graph 의 related_docs · docs_by_entity.
+// Package mcpserver 는 MCP 서버 drakejin-workspace-memory-mcp 의 도구 일곱 개다: 발표의 search_memory · ingest_path ·
+// list_cold · restore_cold, 검색 필터 값 search_filters, knowledge graph 의 related_docs · docs_by_entity.
 package mcpserver
 
 import (
@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -58,16 +59,40 @@ func (h *Handlers) Ready(ctx context.Context) error {
 	return nil
 }
 
-// SearchInput 은 search_memory 입력이다.
+// SearchInput 은 search_memory 입력이다. 질의어(query)와 필터(날짜·범위·주제·프로젝트·문서 종류)는 함께 써도 되고,
+// 질의어 없이 필터만 주면 맞는 문서를 최신순으로 가져온다.
 type SearchInput struct {
+	Query             string          `json:"query,omitempty" jsonschema:"자연어 문장 또는 식별자(서비스·함수 이름, 에러 코드). 비우면 필터에 맞는 문서를 최신순으로 가져온다"`
+	Project           string          `json:"project,omitempty" jsonschema:"프로젝트(관리 대상 repository) 이름으로 좁히기. 예: order-api. 쓸 수 있는 값은 search_filters"`
+	Topic             string          `json:"topic,omitempty" jsonschema:"주제로 좁히기 — docs/feature|specs|issues/{주제}/ 디렉토리 또는 frontmatter topic. 예: payment-retry. 쓸 수 있는 값은 search_filters"`
+	Date              string          `json:"date,omitempty" jsonschema:"날짜(YYYY-MM-DD) — 그날의 문서만. 문서의 날은 frontmatter date 그대로, 없으면 커밋 시각을 MEMORY_TIME_ZONE(기본: 이 머신의 시간대)에서 본 날"`
+	TimeRange         model.TimeRange `json:"time_range,omitempty" jsonschema:"기간 범위 — from~to. 날짜(YYYY-MM-DD)는 문서의 날로 비교하고 그날 전체를 포함한다. date math(now-30d)·시각은 유효 시각을 MEMORY_TIME_ZONE 으로 비교한다"`
+	DocType           string          `json:"doc_type,omitempty" jsonschema:"spec | adr | prd | plan | knowledge | guide | note"`
 	Team              string          `json:"team,omitempty" jsonschema:"팀 이름. 생략하면 기본 팀"`
 	Org               string          `json:"org,omitempty" jsonschema:"org(실) 이름. 주면 그 org 에 속한 모든 팀을 함께 검색한다 (team 무시)"`
-	Query             string          `json:"query" jsonschema:"자연어 문장 또는 식별자(repository·서비스·함수 이름, 에러 코드)"`
-	TimeRange         model.TimeRange `json:"time_range,omitempty" jsonschema:"event_time 범위"`
-	Repo              string          `json:"repo,omitempty" jsonschema:"관리 대상 repository 로 좁히기"`
-	DocType           string          `json:"doc_type,omitempty" jsonschema:"spec | adr | prd | plan | knowledge | guide | note"`
 	Size              int             `json:"size,omitempty" jsonschema:"결과 수 (1~50, 기본 8)"`
 	IncludeSuperseded bool            `json:"include_superseded,omitempty" jsonschema:"판정·개정으로 밀린 문서와 deprecate 된 문서도 본다 (기본: 숨김)"`
+}
+
+// Filters 는 사람이 읽는 필터 요약이다 (결과 머리에 붙여, 어떤 조건으로 가져왔는지 보이게).
+func (in SearchInput) Filters() string {
+	var parts []string
+	add := func(k, v string) {
+		if v != "" {
+			parts = append(parts, k+"="+v)
+		}
+	}
+	add("project", in.Project)
+	add("topic", in.Topic)
+	add("date", in.Date)
+	if in.TimeRange.From != "" || in.TimeRange.To != "" {
+		parts = append(parts, "time_range="+in.TimeRange.From+"~"+in.TimeRange.To)
+	}
+	add("doc_type", in.DocType)
+	if in.IncludeSuperseded {
+		parts = append(parts, "include_superseded")
+	}
+	return strings.Join(parts, ", ")
 }
 
 // Search 는 search_memory 다.
@@ -76,7 +101,112 @@ func (h *Handlers) Search(ctx context.Context, in SearchInput) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	req := search.Request{Workspace: h.Config.Workspace, Team: team, Org: in.Org, Query: in.Query, TimeRange: in.TimeRange, Repo: in.Repo, Size: in.Size, IncludeSuperseded: in.IncludeSuperseded}
+	req := search.Request{
+		Workspace: h.Config.Workspace, Team: team, Org: in.Org, Query: in.Query, Date: in.Date, TimeRange: in.TimeRange,
+		TimeZone: h.Config.QueryTimeZone(time.Now()), Project: in.Project, Topic: in.Topic, Size: in.Size, IncludeSuperseded: in.IncludeSuperseded,
+	}
+	if in.DocType != "" {
+		t, ok := model.ParseDocType(in.DocType)
+		if !ok {
+			return "", fmt.Errorf("doc_type 이 잘못됐습니다: %q", in.DocType)
+		}
+		req.DocType = t
+	}
+	if err := search.Validate(req); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(in.Query) == "" && !search.HasFilter(req) {
+		return "", search.ErrEmptyQuery
+	}
+	if err := h.Ready(ctx); err != nil {
+		return "", err
+	}
+	res, err := search.Search(ctx, h.OS, req)
+	if err != nil {
+		return "", err
+	}
+	hits := res.Hits
+	scope := "team=" + team
+	if in.Org != "" {
+		scope = "org=" + in.Org
+	}
+	if f := in.Filters(); f != "" {
+		scope += " · " + f
+	}
+	listing := strings.TrimSpace(in.Query) == ""
+	if len(hits) == 0 {
+		if listing {
+			return fmt.Sprintf("%s · 필터에 맞는 문서가 없습니다. search_filters 로 쓸 수 있는 프로젝트·주제·날짜를 확인하세요.", scope), nil
+		}
+		return fmt.Sprintf("%s hot 영역에서 %q 에 맞는 문서가 없습니다.\n"+
+			"단어(서비스명, 함수명, 에러 코드)를 바꿔 다시 검색하세요. %d일보다 오래된 맥락이면 list_cold 를 확인하세요.", scope, in.Query, h.Config.HotDays), nil
+	}
+	var b strings.Builder
+	switch {
+	case listing && res.Total > len(hits):
+		fmt.Fprintf(&b, "%s · 문서 %d건 중 최신 %d건 (필터, 최신순 — 더 보려면 size 를 늘리거나 필터를 좁히세요)\n\n", scope, res.Total, len(hits))
+	case listing:
+		fmt.Fprintf(&b, "%s · 문서 %d건 (필터, 최신순)\n\n", scope, len(hits))
+	default:
+		fmt.Fprintf(&b, "%s · %d건 (BM25)\n\n", scope, len(hits))
+	}
+	for i, hit := range hits {
+		meta := []string{string(hit.DocType)}
+		if in.Org != "" {
+			meta = append(meta, "team="+hit.Team)
+		}
+		if hit.Project != "" {
+			meta = append(meta, "project="+hit.Project)
+		}
+		if hit.Topic != "" {
+			meta = append(meta, "topic="+hit.Topic)
+		}
+		if day := hit.Day(); day != "" {
+			meta = append(meta, day)
+		}
+		if len(hit.GitSHA) >= 7 {
+			meta = append(meta, hit.GitSHA[:7])
+		}
+		score := ""
+		if !listing {
+			score = fmt.Sprintf("; score %.2f", hit.Score)
+		}
+		flag := ""
+		if hit.SupersededBy != "" {
+			flag = "  [superseded → " + hit.SupersededBy + "]"
+		}
+		if hit.Deprecated {
+			flag += "  [deprecated]"
+		}
+		fmt.Fprintf(&b, "[%d] %s › %s  (%s%s)%s\n", i+1, hit.SourcePath, hit.HeaderPath, strings.Join(meta, ", "), score, flag)
+		if hit.Summary != "" {
+			fmt.Fprintf(&b, "요약: %s\n", hit.Summary)
+		}
+		b.WriteString(hit.Text + "\n\n")
+	}
+	return strings.TrimRight(b.String(), "\n"), nil
+}
+
+// FiltersInput 은 search_filters 입력이다.
+type FiltersInput struct {
+	Project           string          `json:"project,omitempty" jsonschema:"이 프로젝트 안에서 센다"`
+	Topic             string          `json:"topic,omitempty" jsonschema:"이 주제 안에서 센다"`
+	Date              string          `json:"date,omitempty" jsonschema:"이 날짜(YYYY-MM-DD) 안에서 센다"`
+	TimeRange         model.TimeRange `json:"time_range,omitempty" jsonschema:"이 기간 안에서 센다"`
+	DocType           string          `json:"doc_type,omitempty" jsonschema:"이 문서 종류 안에서 센다"`
+	Team              string          `json:"team,omitempty" jsonschema:"팀 이름. 생략하면 기본 팀"`
+	Org               string          `json:"org,omitempty" jsonschema:"org(실) 이름"`
+	IncludeSuperseded bool            `json:"include_superseded,omitempty" jsonschema:"밀린·deprecate 된 문서도 센다"`
+}
+
+// Filters 는 search_filters 다.
+func (h *Handlers) Filters(ctx context.Context, in FiltersInput) (string, error) {
+	team, err := h.team(in.Team)
+	if err != nil {
+		return "", err
+	}
+	req := search.Request{Workspace: h.Config.Workspace, Team: team, Org: in.Org, Project: in.Project, Topic: in.Topic, Date: in.Date,
+		TimeRange: in.TimeRange, TimeZone: h.Config.QueryTimeZone(time.Now()), IncludeSuperseded: in.IncludeSuperseded}
 	if in.DocType != "" {
 		t, ok := model.ParseDocType(in.DocType)
 		if !ok {
@@ -87,7 +217,7 @@ func (h *Handlers) Search(ctx context.Context, in SearchInput) (string, error) {
 	if err := h.Ready(ctx); err != nil {
 		return "", err
 	}
-	hits, err := search.Search(ctx, h.OS, req)
+	f, err := search.FetchFacets(ctx, h.OS, req)
 	if err != nil {
 		return "", err
 	}
@@ -95,37 +225,38 @@ func (h *Handlers) Search(ctx context.Context, in SearchInput) (string, error) {
 	if in.Org != "" {
 		scope = "org=" + in.Org
 	}
-	if len(hits) == 0 {
-		return fmt.Sprintf("%s hot 영역에서 %q 에 맞는 문서가 없습니다.\n"+
-			"단어(서비스명, 함수명, 에러 코드)를 바꿔 다시 검색하세요. %d일보다 오래된 맥락이면 list_cold 를 확인하세요.", scope, in.Query, h.Config.HotDays), nil
+	if s := (SearchInput{Project: in.Project, Topic: in.Topic, Date: in.Date, TimeRange: in.TimeRange, DocType: in.DocType, IncludeSuperseded: in.IncludeSuperseded}).Filters(); s != "" {
+		scope += " · " + s
+	}
+	hidden := " (밀린·deprecate 된 문서 제외)"
+	if in.IncludeSuperseded {
+		hidden = ""
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s · %d건 (BM25)\n\n", scope, len(hits))
-	for i, hit := range hits {
-		meta := []string{string(hit.DocType)}
-		if in.Org != "" {
-			meta = append(meta, "team "+hit.Team)
-		}
-		if hit.Repo != "" {
-			meta = append(meta, hit.Repo)
-		}
-		if len(hit.EventTime) >= 10 {
-			meta = append(meta, hit.EventTime[:10])
-		}
-		if len(hit.GitSHA) >= 7 {
-			meta = append(meta, hit.GitSHA[:7])
-		}
-		flag := ""
-		if hit.SupersededBy != "" {
-			flag = "  [superseded → " + hit.SupersededBy + "]"
-		}
-		fmt.Fprintf(&b, "[%d] %s › %s  (%s; score %.2f)%s\n", i+1, hit.SourcePath, hit.HeaderPath, strings.Join(meta, ", "), hit.Score, flag)
-		if hit.Summary != "" {
-			fmt.Fprintf(&b, "요약: %s\n", hit.Summary)
-		}
-		b.WriteString(hit.Text + "\n\n")
+	fmt.Fprintf(&b, "%s · 문서 %d건%s\n", scope, f.Docs, hidden)
+	if f.Docs == 0 {
+		return strings.TrimRight(b.String(), "\n"), nil
 	}
-	return strings.TrimRight(b.String(), "\n"), nil
+	fmt.Fprintf(&b, "project: %s\n", countsLine(f.Projects, f.NoProject))
+	fmt.Fprintf(&b, "topic: %s\n", countsLine(f.Topics, f.NoTopic))
+	fmt.Fprintf(&b, "doc_type: %s\n", countsLine(f.DocTypes, 0))
+	fmt.Fprintf(&b, "date: %s ~ %s\n", f.First, f.Last)
+	fmt.Fprintf(&b, "날짜별(최신 %d일): %s", len(f.Days), countsLine(f.Days, 0))
+	return b.String(), nil
+}
+
+func countsLine(cs []search.Count, none int) string {
+	parts := make([]string, 0, len(cs)+1)
+	for _, c := range cs {
+		parts = append(parts, fmt.Sprintf("%s(%d)", c.Value, c.Docs))
+	}
+	if none > 0 {
+		parts = append(parts, fmt.Sprintf("(없음)(%d)", none))
+	}
+	if len(parts) == 0 {
+		return "-"
+	}
+	return strings.Join(parts, " ")
 }
 
 // IngestInput 은 ingest_path 입력이다.
@@ -307,20 +438,32 @@ func (h *Handlers) team(t string) (string, error) {
 	return t, naming.ValidateTeam(t)
 }
 
-// NewServer 는 도구 여섯 개를 단 MCP 서버다.
+// ServerName 은 MCP 서버 이름이다. .mcp.json 에도 같은 이름으로 등록한다 (도구는 mcp__drakejin-workspace-memory-mcp__*).
+const ServerName = "drakejin-workspace-memory-mcp"
+
+// NewServer 는 도구 일곱 개를 단 MCP 서버다.
 func NewServer(h *Handlers) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: "memory-mcp", Version: Version}, nil)
+	server := mcp.NewServer(&mcp.Implementation{Name: ServerName, Version: Version}, nil)
 	readOnly := &mcp.ToolAnnotations{ReadOnlyHint: true}
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:  "search_memory",
 		Title: "meta-repository 문서 검색",
-		Description: "meta-repository 에 쌓인 spec·ADR·PRD·plan·knowledge 문서를 BM25 로 검색한다 (hot 영역). " +
+		Description: "meta-repository 에 쌓인 spec·ADR·PRD·plan·knowledge 문서를 BM25 로 검색하거나 필터로 가져온다 (hot 영역). " +
 			"작업을 시작하면 파일 트리를 뒤지기 전에 먼저 부른다. 질의에는 repository 이름, 서비스명, 함수명, 에러 코드 같은 식별자를 그대로 넣고, " +
-			"결과가 부족하면 단어를 바꿔 다시 부른다. 결과의 source_path 를 Read 해서 원문을 근거로 일한다 (스니펫을 답으로 쓰지 않는다). " +
-			"더 새 문서에 밀린 문서는 기본으로 숨긴다.",
+			"결과가 부족하면 단어를 바꿔 다시 부른다. 필터: project(프로젝트), topic(주제), date(날짜 하루), time_range(기간 범위), doc_type — " +
+			"쓸 수 있는 값은 search_filters 로 본다. query 를 비우고 필터만 주면 맞는 문서를 최신순으로 가져온다. " +
+			"결과의 source_path 를 Read 해서 원문을 근거로 일한다 (스니펫을 답으로 쓰지 않는다). 더 새 문서에 밀린 문서는 기본으로 숨긴다.",
 		Annotations: readOnly,
 	}, wrap(h.Log, h.Search))
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:  "search_filters",
+		Title: "검색 필터 값",
+		Description: "search_memory 의 필터에 쓸 수 있는 값과 문서 수를 보여 준다 — 프로젝트, 주제, 문서 종류, 날짜(가장 이른·늦은 날, 날짜별 수). " +
+			"필터를 주면 그 범위 안에서 센다.",
+		Annotations: readOnly,
+	}, wrap(h.Log, h.Filters))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "ingest_path",

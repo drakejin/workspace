@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "memory": {
+    "drakejin-workspace-memory-mcp": {
       "command": "bash",
       "args": ["scripts/mcp/run.sh"]
     }

@@ -154,7 +154,7 @@ func (e *AlreadyRunningError) Error() string {
 	if e.PID > 0 {
 		pid = strconv.Itoa(e.PID)
 	}
-	return "데몬이 이미 돌고 있습니다 (pid " + pid + "). 파생물의 writer 는 하나여야 합니다 — 'make daemon-status' 로 확인하세요"
+	return "데몬이 이미 돌고 있습니다 (pid " + pid + "). 파생물의 writer 는 하나여야 합니다 — 'scripts/memory-daemon/run.sh status' 로 확인하세요"
 }
 
 // AcquireLock 은 데몬 락을 잡는다. 데몬은 하나만 — writer 가 둘이면 수렴이 깨진다. 이미 쥐고 있으면 그대로 둔다.
@@ -187,7 +187,7 @@ func AcquireLock(root string) error {
 	return nil
 }
 
-// lockRetries 는 락이 잡혀 있을 때 다시 시도하는 횟수다. 'make daemon-status' 의 RunningPID 가 확인하느라 아주 잠깐
+// lockRetries 는 락이 잡혀 있을 때 다시 시도하는 횟수다. 'scripts/memory-daemon/run.sh status' 의 RunningPID 가 확인하느라 아주 잠깐
 // 쥐는 것과 겹쳐도 데몬이 "이미 돌고 있다" 로 오인하지 않게.
 const (
 	lockRetries    = 5

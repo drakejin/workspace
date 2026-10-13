@@ -112,7 +112,7 @@ func TestBootstrapToleratesConcurrentPolicyWrite(t *testing.T) {
 		t.Fatalf("409 는 성공으로 본다: %v", err)
 	}
 	want := []string{
-		"PUT /_index_template/mem-template", "PUT /mem-*/_mapping", "PUT /_snapshot/mem-cold",
+		"PUT /_index_template/mem-template", "PUT /mem-*/_mapping", "GET /_snapshot/mem-cold", "PUT /_snapshot/mem-cold",
 		"GET /_plugins/_ism/policies/mem-hot-cold", "PUT /_plugins/_ism/policies/mem-hot-cold",
 		"GET /_plugins/_ism/policies/mem-knowledge-keep", "PUT /_plugins/_ism/policies/mem-knowledge-keep",
 		"POST /mem-*/_search", "GET /mem-*/_alias",
@@ -216,5 +216,37 @@ func TestScanPagesAndUpdateDocAllowlist(t *testing.T) {
 	}
 	if !IsUnmanaged(map[string]any{AutoManageSetting: "false"}) || IsUnmanaged(map[string]any{}) {
 		t.Error("IsUnmanaged")
+	}
+}
+
+func TestSnapshotRepositoryIsLeftAloneWhenUnchanged(t *testing.T) {
+	cfg := config.Snapshot{Repository: "mem-cold", Type: "fs", FSLocation: "/snap"}
+	same := &fakeOS{reply: func(method, path string, _ any) (any, error) {
+		if method == http.MethodGet {
+			return map[string]any{"mem-cold": map[string]any{"type": "fs", "settings": map[string]any{"location": "/snap"}}}, nil
+		}
+		return nil, &Error{Status: 500, Reason: "should not PUT"}
+	}}
+	if err := ensureSnapshotRepository(context.Background(), same, cfg); err != nil || strings.Join(same.calls, "|") != "GET /_snapshot/mem-cold" {
+		t.Errorf("같으면 다시 쓰지 않는다: %v %v", same.calls, err)
+	}
+	// 스냅샷·복원이 도는 동안 OpenSearch 는 repository 를 바꾸지 못하게 한다 — 이미 있으면 그대로 쓴다
+	busy := &fakeOS{reply: func(method, path string, _ any) (any, error) {
+		if method == http.MethodGet {
+			return map[string]any{"mem-cold": map[string]any{"type": "fs", "settings": map[string]any{"location": "/old"}}}, nil
+		}
+		return nil, &Error{Status: 500, Reason: "trying to modify or unregister repository that is currently used"}
+	}}
+	if err := ensureSnapshotRepository(context.Background(), busy, cfg); err != nil {
+		t.Errorf("쓰는 중인 repository 는 다음 bootstrap 에 맞춘다: %v", err)
+	}
+	missing := &fakeOS{reply: func(method, path string, _ any) (any, error) {
+		if method == http.MethodGet {
+			return nil, &Error{Status: 404}
+		}
+		return map[string]any{}, nil
+	}}
+	if err := ensureSnapshotRepository(context.Background(), missing, cfg); err != nil || strings.Join(missing.calls, "|") != "GET /_snapshot/mem-cold|PUT /_snapshot/mem-cold" {
+		t.Errorf("없으면 만든다: %v %v", missing.calls, err)
 	}
 }

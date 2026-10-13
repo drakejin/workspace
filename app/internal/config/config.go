@@ -80,13 +80,15 @@ type Config struct {
 	Workspace   string
 	DefaultTeam string
 	HotDays     int
-	Snapshot    Snapshot
-	Cold        ColdStore
-	Reconcile   Reconcile
-	Judge       Judge
-	Distill     Distill
-	LLM         LLM
-	Graph       Graph
+	// Location 은 문서의 날(event_day)과 날짜 필터의 하루를 정하는 시간대다 (MEMORY_TIME_ZONE, 기본은 이 머신의 시간대).
+	Location  *time.Location
+	Snapshot  Snapshot
+	Cold      ColdStore
+	Reconcile Reconcile
+	Judge     Judge
+	Distill   Distill
+	LLM       LLM
+	Graph     Graph
 	// TeamOrgs 는 팀 → org("실") 매핑이다. 같은 org 의 팀들은 mem-org-{org}-hot alias 로 함께 검색된다.
 	TeamOrgs map[string]string
 }
@@ -97,6 +99,15 @@ func (c Config) OrgOf(team string) string { return c.TeamOrgs[team] }
 // HotWindow 는 hot/cold 경계 기간이다.
 func (c Config) HotWindow() time.Duration {
 	return time.Duration(c.HotDays) * 24 * time.Hour
+}
+
+// QueryTimeZone 은 at 시각의 Location 오프셋(+09:00)이다 — OpenSearch 질의의 time_zone 에 넘긴다.
+func (c Config) QueryTimeZone(at time.Time) string {
+	loc := c.Location
+	if loc == nil {
+		loc = time.UTC
+	}
+	return at.In(loc).Format("-07:00")
 }
 
 // FromEnv 는 프로세스 환경변수로 Load 한다.
@@ -121,6 +132,7 @@ func Load(getenv func(string) string) (Config, error) {
 		Workspace:     p.str("MEMORY_WORKSPACE", workspaceName(root)),
 		DefaultTeam:   p.str("MEMORY_DEFAULT_TEAM", "default"),
 		HotDays:       p.posInt("MEMORY_HOT_DAYS", 60),
+		Location:      p.location("MEMORY_TIME_ZONE"),
 		Snapshot: Snapshot{
 			Repository: p.str("COLD_SNAPSHOT_REPOSITORY", "mem-cold"),
 			Type:       p.str("COLD_SNAPSHOT_TYPE", "fs"),
@@ -224,6 +236,20 @@ func (p *parser) str(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// location 은 IANA 시간대 이름(Asia/Seoul)이다. 없으면 이 머신의 시간대.
+func (p *parser) location(key string) *time.Location {
+	v := p.str(key, "")
+	if v == "" {
+		return time.Local
+	}
+	loc, err := time.LoadLocation(v)
+	if err != nil {
+		p.fail("%s: IANA 시간대 이름이어야 합니다 (예: Asia/Seoul): %q", key, v)
+		return time.Local
+	}
+	return loc
 }
 
 func (p *parser) posInt(key string, def int) int {

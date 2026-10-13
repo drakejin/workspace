@@ -2,6 +2,7 @@ package opensearch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -39,11 +40,41 @@ func Bootstrap(ctx context.Context, c Client, cfg config.Config) error {
 }
 
 func ensureSnapshotRepository(ctx context.Context, c Client, s config.Snapshot) error {
-	body := map[string]any{"type": "fs", "settings": map[string]any{"location": s.FSLocation}}
+	want := map[string]any{"type": "fs", "settings": map[string]any{"location": s.FSLocation}}
 	if s.Type == "s3" {
-		body = map[string]any{"type": "s3", "settings": map[string]any{"bucket": s.S3Bucket, "base_path": "snapshots"}}
+		want = map[string]any{"type": "s3", "settings": map[string]any{"bucket": s.S3Bucket, "base_path": "snapshots"}}
 	}
-	return c.Do(ctx, http.MethodPut, "/_snapshot/"+s.Repository, body, nil, nil)
+	// 이미 같은 설정이면 건드리지 않는다 — 모든 CLI·MCP 호출이 bootstrap 하므로, 다른 프로세스가 스냅샷·복원하는 동안
+	// PUT 하면 OpenSearch 가 "currently used" 로 거부해 읽기 전용 검색까지 실패한다
+	var current map[string]struct {
+		Type     string         `json:"type"`
+		Settings map[string]any `json:"settings"`
+	}
+	err := c.Do(ctx, http.MethodGet, "/_snapshot/"+s.Repository, nil, nil, &current)
+	if err != nil && !IsStatus(err, http.StatusNotFound) {
+		return err
+	}
+	if cur, ok := current[s.Repository]; ok && sameRepository(cur.Type, cur.Settings, want) {
+		return nil
+	}
+	err = c.Do(ctx, http.MethodPut, "/_snapshot/"+s.Repository, want, nil, nil)
+	var e *Error
+	if errors.As(err, &e) && strings.Contains(e.Reason, "currently used") {
+		return nil // 스냅샷·복원 중이라 지금은 못 바꾼다 — 있는 repository 를 쓰고 다음 bootstrap 이 맞춘다
+	}
+	return err
+}
+
+func sameRepository(typ string, settings map[string]any, want map[string]any) bool {
+	if typ != want["type"] {
+		return false
+	}
+	for k, v := range want["settings"].(map[string]any) {
+		if fmt.Sprint(settings[k]) != fmt.Sprint(v) {
+			return false
+		}
+	}
+	return true
 }
 
 func ensurePolicy(ctx context.Context, c Client, id string, body map[string]any) error {

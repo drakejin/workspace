@@ -114,6 +114,7 @@ func (ix *indexer) Prepare(ctx context.Context, input, teamOverride string) (Pre
 		MtimeMs:      info.ModTime().UnixMilli(),
 		Size:         info.Size(),
 		TeamOverride: teamOverride,
+		Location:     ix.Config.Location,
 		Distilled:    ix.Distilled,
 	})
 	if err != nil {

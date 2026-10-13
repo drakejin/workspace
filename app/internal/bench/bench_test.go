@@ -11,7 +11,7 @@ import (
 )
 
 const stream = `{"type":"system","subtype":"init"}
-{"type":"assistant","message":{"content":[{"type":"thinking"},{"type":"tool_use","name":"mcp__memory__search_memory"}]}}
+{"type":"assistant","message":{"content":[{"type":"thinking"},{"type":"tool_use","name":"mcp__drakejin-workspace-memory-mcp__search_memory"}]}}
 {"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read"},{"type":"tool_use","name":"Read"}]}}
 not json
 {"type":"result","subtype":"success","duration_ms":6929,"num_turns":3,"total_cost_usd":0.06,"result":"재시도는 5회, 근거 docs/feature/payment-retry/2026-10-06-retry-policy.md","usage":{"input_tokens":18,"cache_creation_input_tokens":100,"cache_read_input_tokens":200,"output_tokens":319}}`
@@ -31,7 +31,7 @@ func TestRunAndRender(t *testing.T) {
 	var calls [][]string
 	runner := func(_ context.Context, dir string, args []string) (string, error) {
 		calls = append(calls, args)
-		if strings.Contains(strings.Join(args, " "), "mcp__memory__search_memory") {
+		if strings.Contains(strings.Join(args, " "), "mcp__drakejin-workspace-memory-mcp__search_memory") {
 			return stream, nil
 		}
 		return `{"type":"result","num_turns":9,"result":"모르겠다"}`, errors.New("exit 1")
@@ -52,7 +52,7 @@ func TestRunAndRender(t *testing.T) {
 			}
 		}
 	}
-	if strings.Contains(strings.Join(calls[1], " "), "mcp__memory__") {
+	if strings.Contains(strings.Join(calls[1], " "), "mcp__drakejin-workspace-memory-mcp__") {
 		t.Errorf("without 조건에는 memory 도구가 없다: %v", calls[1])
 	}
 	md := Render(results, "haiku", time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC))

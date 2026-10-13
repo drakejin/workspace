@@ -30,6 +30,8 @@ const (
 type DiffEntry struct {
 	SourcePath string
 	Team       string
+	Project    string
+	DocType    model.DocType
 	Kind       model.Kind
 	Change     Change
 	BodySHA    string
@@ -41,7 +43,7 @@ type DiffEntry struct {
 
 func diffFrom(rel string, b document.Built, change Change) DiffEntry {
 	return DiffEntry{
-		SourcePath: rel, Team: b.Meta.Team, Kind: b.Meta.Kind, Change: change, BodySHA: b.BodySHA,
+		SourcePath: rel, Team: b.Meta.Team, Project: b.Meta.Repo, DocType: b.Meta.DocType, Kind: b.Meta.Kind, Change: change, BodySHA: b.BodySHA,
 		EventTime: b.EventTime, Title: b.Title, Body: b.Body, Supersedes: b.Meta.Supersedes,
 	}
 }
@@ -183,7 +185,9 @@ func (r *Reconciler) syncFile(ctx context.Context, f ingest.ScannedFile, st cycl
 	ex, known := st.existing[f.Rel]
 	delete(st.existing, f.Rel)
 	stat := statKey{f.MtimeMs, f.Size}
-	if known && !ex.Duplicate && ex.MtimeMs == f.MtimeMs && ex.Size == f.Size {
+	// current 면 색인에 있는 그대로 써도 된다 — 두 인덱스에 걸쳐 있거나 낮은 판(필드가 빠진 것)이면 다시 쓴다
+	current := known && !ex.Duplicate && ex.IndexVersion >= model.IndexVersion
+	if current && ex.MtimeMs == f.MtimeMs && ex.Size == f.Size {
 		return nil, nil
 	}
 	if rex, ok := st.restored[f.Rel]; !known && ok && rex.MtimeMs == f.MtimeMs && rex.Size == f.Size {
@@ -205,11 +209,23 @@ func (r *Reconciler) syncFile(ctx context.Context, f ingest.ScannedFile, st cycl
 		return nil, nil
 	}
 	b := prepared.Built
-	if known && !ex.Duplicate && ex.ContentSHA == b.ContentSHA {
-		if err := opensearch.UpdateDoc(ctx, r.OS, st.indices, r.Config.Workspace, f.Rel, map[string]any{"mtime_ms": f.MtimeMs, "size": f.Size}); err != nil {
+	if known && ex.ContentSHA == b.ContentSHA {
+		if current {
+			if err := opensearch.UpdateDoc(ctx, r.OS, st.indices, r.Config.Workspace, f.Rel, map[string]any{"mtime_ms": f.MtimeMs, "size": f.Size}); err != nil {
+				return nil, err
+			}
+			sum.StatUpdated++
+			return nil, nil
+		}
+		// 내용은 그대로인데 판이 낮거나(새 필드를 채운다) 두 인덱스에 걸쳐 있다 — 다시 쓰기만 한다. 내용 변경이 아니므로
+		// 판정·증류·그래프에 넘기지 않고(아무도 고치지 않은 문서가 latest-wins 로 숨지 않게), 밀린·deprecate 표시는 색인에 있던 그대로 잇는다
+		for i := range prepared.Built.Chunks {
+			prepared.Built.Chunks[i].SupersededBy, prepared.Built.Chunks[i].Deprecated = ex.SupersededBy, ex.Deprecated
+		}
+		if _, err := r.Indexer.Write(ctx, prepared); err != nil {
 			return nil, err
 		}
-		sum.StatUpdated++
+		sum.Indexed++
 		return nil, nil
 	}
 	if !known {

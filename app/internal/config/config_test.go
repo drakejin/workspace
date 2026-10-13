@@ -63,6 +63,7 @@ func TestLoadRejectsBadValues(t *testing.T) {
 		"MEMORY_DISTILL_ENABLED":  {"MEMORY_DISTILL_ENABLED": "maybe"},
 		"OPENSEARCH_URL":          {"OPENSEARCH_URL": "not a url"},
 		"MEMORY_WORKSPACE":        {"MEMORY_WORKSPACE": "Bad Name"},
+		"MEMORY_TIME_ZONE":        {"MEMORY_TIME_ZONE": "Mars/Base"},
 	}
 	for want, m := range cases {
 		m["META_REPO_ROOT"] = "/m"
@@ -95,5 +96,24 @@ func TestLoadOrgsAndGraphOff(t *testing.T) {
 	}
 	if _, err := Load(env(map[string]string{"META_REPO_ROOT": "/m", "MEMORY_TEAM_ORGS": "bad"})); err == nil || !strings.Contains(err.Error(), "MEMORY_TEAM_ORGS") {
 		t.Errorf("잘못된 org 매핑: %v", err)
+	}
+}
+
+func TestTimeZone(t *testing.T) {
+	cfg, err := Load(env(map[string]string{"META_REPO_ROOT": "/m"}))
+	if err != nil || cfg.Location != time.Local {
+		t.Fatalf("기본은 이 머신의 시간대: %v %v", cfg.Location, err)
+	}
+	cfg, err = Load(env(map[string]string{"META_REPO_ROOT": "/m", "MEMORY_TIME_ZONE": "Asia/Seoul"}))
+	if err != nil || cfg.Location.String() != "Asia/Seoul" {
+		t.Fatalf("Location = %v %v", cfg.Location, err)
+	}
+	// OpenSearch 의 time_zone 에는 그 시각의 오프셋을 넘긴다 (date math 의 /d 반올림이 그 시간대의 하루가 된다)
+	if got := cfg.QueryTimeZone(time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)); got != "+09:00" {
+		t.Errorf("QueryTimeZone = %q", got)
+	}
+	cfg, _ = Load(env(map[string]string{"META_REPO_ROOT": "/m", "MEMORY_TIME_ZONE": "America/Los_Angeles"}))
+	if got := cfg.QueryTimeZone(time.Date(2026, 1, 13, 0, 0, 0, 0, time.UTC)); got != "-08:00" {
+		t.Errorf("겨울 LA = %q", got)
 	}
 }

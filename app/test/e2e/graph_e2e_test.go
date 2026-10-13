@@ -23,8 +23,8 @@ import (
 	"github.com/drakejin/workspace/app/internal/search"
 )
 
-// newGraph 는 실제 Neo4j(make memory-up)에 붙는다. 그래프를 끈 설정(MEMORY_GRAPH_URI=off)이면 건너뛰고,
-// 켜져 있는데 붙지 못하면 실패한다 — make test-e2e 가 그래프 없이 조용히 통과하지 않게.
+// newGraph 는 실제 Neo4j(make memory-init)에 붙는다. 그래프를 끈 설정(MEMORY_GRAPH_URI=off)이면 건너뛰고,
+// 켜져 있는데 붙지 못하면 실패한다 — test-e2e 가 그래프 없이 조용히 통과하지 않게.
 func newGraph(t *testing.T, cfg config.Graph) graph.Store {
 	t.Helper()
 	g, err := graph.New(cfg)
@@ -38,7 +38,7 @@ func newGraph(t *testing.T, cfg config.Graph) graph.Store {
 	defer cancel()
 	if err := g.Ping(ctx); err != nil {
 		_ = g.Close(context.Background())
-		t.Fatalf("Neo4j(%s)에 붙을 수 없습니다 — make memory-up 먼저: %v", cfg.URI, err)
+		t.Fatalf("Neo4j(%s)에 붙을 수 없습니다 — make memory-init 먼저: %v", cfg.URI, err)
 	}
 	t.Cleanup(func() { _ = g.Close(context.Background()) })
 	return g
@@ -74,7 +74,8 @@ func TestKnowledgeGraphAndSupersededRelocation(t *testing.T) {
 	d.Settle() // 증류가 entity 를 붙이면 그래프가 한 번 더 만들어진다
 
 	t.Run("밀린 knowledge 는 knowledge 인덱스를 떠나 자기 달 인덱스로 간다", func(t *testing.T) {
-		hits, err := search.Search(ctx, client, search.Request{Workspace: cfg.Workspace, Team: cfg.DefaultTeam, Query: "OrderStatusEnum", IncludeSuperseded: true})
+		hitsRes, err := search.Search(ctx, client, search.Request{Workspace: cfg.Workspace, Team: cfg.DefaultTeam, Query: "OrderStatusEnum", IncludeSuperseded: true})
+		hits := hitsRes.Hits
 		if err != nil {
 			t.Fatal(err)
 		}

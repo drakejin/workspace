@@ -208,6 +208,6 @@ func Render(r Report) string {
 	b.WriteString("## 다음 단계 (에이전트)\n")
 	b.WriteString("3. 분리: 후보마다 정의가 실제로 다른지 원문으로 확인하고, 유효하지 않은 정의는 deprecated 문서로 떼어 낸다.\n")
 	b.WriteString("4. 다시 쓰기: 살아남은 사실을 오늘 날짜 frontmatter 로 `docs/knowledge/` 에 다시 쓴다. 추론 없이, 출처 경로를 남긴다.\n")
-	b.WriteString("5. 티어 이동: `make tier` — 스냅샷 → hot 원본 제거(git rm) → 인덱스 삭제. 이후 커밋한다.\n")
+	b.WriteString("5. 티어 이동: `scripts/memory/run.sh tier -team <팀>` (먼저 -dry-run) — 쓰기 막기 → 스냅샷 → 인덱스 삭제 → hot 원본 제거(git rm). 이후 커밋한다.\n")
 	return b.String()
 }

@@ -322,7 +322,7 @@ func (r *runner) questions(_ context.Context) error {
 		for _, q := range qs {
 			at, _ := time.Parse(time.RFC3339, q.At)
 			if !at.IsZero() && r.Now.Sub(at) > staleQuestionAge {
-				r.add(StaleQuestion, q.Old.Path, fmt.Sprintf("[%s] %s ↔ %s — %s 부터 답을 기다린다 (make questions)", team, q.Old.Path, q.New.Path, model.Day(q.At)), false)
+				r.add(StaleQuestion, q.Old.Path, fmt.Sprintf("[%s] %s ↔ %s — %s 부터 답을 기다린다 (scripts/memory/run.sh questions)", team, q.Old.Path, q.New.Path, model.Day(q.At)), false)
 			}
 		}
 	}
@@ -363,7 +363,7 @@ func Render(rep Report) string {
 		case f.Fixed:
 			mark = " [고침]"
 		case fixable[f.Kind] && !rep.Applied:
-			mark = " [make audit APPLY=1 로 고칠 수 있음]"
+			mark = " [scripts/memory/run.sh audit -apply 로 고칠 수 있음]"
 		}
 		fmt.Fprintf(&b, "- %-16s %s — %s%s\n", f.Kind, f.Path, f.Detail, mark)
 	}
@@ -384,7 +384,7 @@ func Summary(rep Report) string {
 		kinds = append(kinds, fmt.Sprintf("%s=%d", k, n))
 	}
 	sort.Strings(kinds)
-	return fmt.Sprintf("%d건 (%s) — make audit 로 확인", len(rep.Findings), strings.Join(kinds, " "))
+	return fmt.Sprintf("%d건 (%s) — scripts/memory/run.sh audit 로 확인", len(rep.Findings), strings.Join(kinds, " "))
 }
 
 // insideRoot 는 링크 대상이 meta-repo 기준 상대 경로인가다.

@@ -37,15 +37,22 @@ const (
 	KindKnowledge Kind = "knowledge"
 )
 
+// IndexVersion 은 청크에 담는 필드 구성의 판이다. 필드를 더하면 올린다 — 데몬은 판이 낮은 문서를 내용이 같아도 다시 써서
+// 새 필드(예: topic)를 채운다. 1: 처음, 2: topic, 3: topic·repo 를 질의어로도 검색 (text 하위 필드),
+// 4: event_day (날짜 필터가 UTC 가 아니라 문서의 날로 맞게).
+const IndexVersion = 4
+
 // Chunk 는 OpenSearch 에 들어가는 청크 한 건이다. ID 는 _id 라 본문(_source)에 넣지 않는다.
 type Chunk struct {
 	ID           string   `json:"-"`
 	Workspace    string   `json:"workspace"`
 	Team         string   `json:"team"`
-	Repo         string   `json:"repo,omitempty"`
+	Repo         string   `json:"repo,omitempty"`  // 프로젝트 — 관리 대상 repository 이름 (frontmatter repo 또는 project)
+	Topic        string   `json:"topic,omitempty"` // 주제 — frontmatter topic 또는 docs/{feature,specs,issues}/{주제}/
 	DocType      DocType  `json:"doc_type"`
 	Kind         Kind     `json:"memory_kind"`
 	EventTime    string   `json:"event_time"`
+	EventDay     string   `json:"event_day"` // 문서의 날 (YYYY-MM-DD) — frontmatter 날짜 그대로, 아니면 설정한 시간대에서 본 유효 시각의 날
 	SourcePath   string   `json:"source_path"`
 	GitSHA       string   `json:"git_sha,omitempty"`
 	HeaderPath   string   `json:"header_path"`
@@ -57,6 +64,7 @@ type Chunk struct {
 	MtimeMs      int64    `json:"mtime_ms"`
 	Size         int64    `json:"size"`
 	Title        string   `json:"title"`
+	IndexVersion int      `json:"index_version"`
 	Supersedes   string   `json:"supersedes,omitempty"`
 	SupersededBy string   `json:"superseded_by,omitempty"`
 	Deprecated   bool     `json:"deprecated,omitempty"`

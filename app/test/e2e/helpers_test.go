@@ -1,6 +1,6 @@
 //go:build e2e
 
-// Package e2e 는 실제 OpenSearch(make memory-up)에 붙는 블랙박스 테스트다: make test-e2e
+// Package e2e 는 실제 OpenSearch·Neo4j(루트의 make memory-init)에 붙는 블랙박스 테스트다: app/ 에서 make test-e2e
 package e2e
 
 import (
@@ -58,7 +58,7 @@ func newConfig(t *testing.T, extra map[string]string) config.Config {
 	hotDays = cfg.HotDays
 	client := opensearch.New(cfg.OpenSearchURL)
 	if err := client.Do(context.Background(), http.MethodGet, "/_cluster/health", nil, nil, nil); err != nil {
-		t.Skipf("OpenSearch(%s)에 붙을 수 없습니다 — make memory-up 먼저: %v", cfg.OpenSearchURL, err)
+		t.Skipf("OpenSearch(%s)에 붙을 수 없습니다 — make memory-init 먼저: %v", cfg.OpenSearchURL, err)
 	}
 	if err := opensearch.Bootstrap(context.Background(), client, cfg); err != nil {
 		t.Fatalf("bootstrap: %v", err) // 붙는데 bootstrap 이 실패하면 버그다 — 건너뛰지 않는다
@@ -128,9 +128,10 @@ func paths(hits []search.Hit) []string {
 
 func searchPaths(t *testing.T, cfg config.Config, query string, includeSuperseded bool) []string {
 	t.Helper()
-	hits, err := search.Search(context.Background(), opensearch.New(cfg.OpenSearchURL), search.Request{
+	hitsRes, err := search.Search(context.Background(), opensearch.New(cfg.OpenSearchURL), search.Request{
 		Workspace: cfg.Workspace, Team: cfg.DefaultTeam, Query: query, IncludeSuperseded: includeSuperseded,
 	})
+	hits := hitsRes.Hits
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +158,8 @@ func eventuallyFound(cfg config.Config, query string, timeout time.Duration) boo
 	client := opensearch.New(cfg.OpenSearchURL)
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		hits, err := search.Search(context.Background(), client, search.Request{Workspace: cfg.Workspace, Team: cfg.DefaultTeam, Query: query})
+		hitsRes, err := search.Search(context.Background(), client, search.Request{Workspace: cfg.Workspace, Team: cfg.DefaultTeam, Query: query})
+		hits := hitsRes.Hits
 		if err == nil && len(hits) > 0 {
 			return true
 		}

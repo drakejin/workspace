@@ -25,7 +25,7 @@ import (
 	"github.com/drakejin/workspace/app/internal/state"
 )
 
-// auditEvery 는 데몬이 정합성 감사를 도는 주기다 (보고만 한다 — 수리는 make audit APPLY=1).
+// auditEvery 는 데몬이 정합성 감사를 도는 주기다 (보고만 한다 — 수리는 scripts/memory/run.sh audit -apply).
 const auditEvery = 7 * 24 * time.Hour
 
 // Deps 는 데몬 의존이다. nil 이면 설정으로 만든다.
@@ -110,7 +110,7 @@ func New(ctx context.Context, d Deps) (*Daemon, error) {
 		d.RetryDelays = []time.Duration{5 * time.Second, 15 * time.Second, 60 * time.Second}
 	}
 	corrupt := func(file string, line int) {
-		d.Log("[ledger] %s:%d 읽을 수 없는 줄 — 건너뜀 (make audit)", file, line)
+		d.Log("[ledger] %s:%d 읽을 수 없는 줄 — 건너뜀 (scripts/memory/run.sh audit)", file, line)
 	}
 	judgeState := state.NewJudgeState(cfg.MetaRepoRoot)
 	archiveState := state.NewArchiveState(cfg.MetaRepoRoot)
@@ -146,7 +146,7 @@ func (d *Daemon) Boot(ctx context.Context, once bool) error {
 	}
 	if d.graph != nil {
 		if err := d.graph.Ping(ctx); err != nil {
-			d.log("[graph] Neo4j 에 붙지 못했습니다 — 그래프 단계 없이 돈다 (make memory-up): %v", err)
+			d.log("[graph] Neo4j 에 붙지 못했습니다 — 그래프 단계 없이 돈다 (make memory-init): %v", err)
 		}
 	}
 	d.serial.Run("boot")
