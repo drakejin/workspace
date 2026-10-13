@@ -23,7 +23,7 @@ const (
 )
 
 // TestISMMovesIndexToColdAndTierPrunesHot 는 tier 를 한 번도 돌리지 않아도 ISM 이 hot → snapshot → delete 로 인덱스를 옮기고,
-// 그다음 tier 가 cold 로 간 달의 hot 원본을 치우는(pruned) 흐름이다. ISM 은 실제 시간으로 돈다 — make test-e2e-slow (6~15분).
+// 그다음 tier 가 cold 로 간 달의 hot 원본을 치우는(pruned) 흐름이다. ISM 은 실제 시간으로 돈다 — app/ 에서 make test-e2e-slow (6~15분).
 //
 // 실제 메모리와 같은 클러스터를 쓰므로 공용 정책(mem-hot-cold)은 건드리지 않는다. 같은 본문에 hot 0일·ism_template 없는
 // 테스트 정책을 만들어 이 인덱스에만 붙이고, ISM 주기만 잠깐 1분으로 줄였다가 되돌린다.

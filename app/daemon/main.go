@@ -1,7 +1,7 @@
 // memory-daemon 은 reconcile 데몬이다.
 //
 //	memory-daemon         상주 — boot 1회 + 타이머(MEMORY_RECONCILE_INTERVAL_SECONDS) + 파일 watcher(debounce) 힌트
-//	memory-daemon -once   사이클 1회 + 증류 큐 비우기 후 종료 (make reconcile, memory-up 의 최초 색인)
+//	memory-daemon -once   사이클 1회 + 증류 큐 비우기 후 종료 (scripts/memory-daemon/run.sh once, make memory-init 의 최초 색인)
 package main
 
 import (

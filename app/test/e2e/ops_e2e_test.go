@@ -207,11 +207,13 @@ func TestOrgAliasSearchesEveryTeamOfTheOrg(t *testing.T) {
 	if _, err := m.indexer.IngestPath(ctx, "docs", ""); err != nil {
 		t.Fatal(err)
 	}
-	byTeam, err := search.Search(ctx, m.os, search.Request{Workspace: cfg.Workspace, Team: teamA, Query: "SharedOrgToken"})
+	byTeamRes, err := search.Search(ctx, m.os, search.Request{Workspace: cfg.Workspace, Team: teamA, Query: "SharedOrgToken"})
+	byTeam := byTeamRes.Hits
 	if err != nil || len(byTeam) != 1 {
 		t.Errorf("팀 검색은 자기 팀만 = %v %v", paths(byTeam), err)
 	}
-	byOrg, err := search.Search(ctx, m.os, search.Request{Workspace: cfg.Workspace, Org: org, Query: "SharedOrgToken"})
+	byOrgRes, err := search.Search(ctx, m.os, search.Request{Workspace: cfg.Workspace, Org: org, Query: "SharedOrgToken"})
+	byOrg := byOrgRes.Hits
 	if err != nil || len(byOrg) != 2 {
 		t.Errorf("org 검색은 두 팀 모두 = %v %v", paths(byOrg), err)
 	}

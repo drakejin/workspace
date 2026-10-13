@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# 테스트
+# app/ 테스트 (app/Makefile 이 부른다)
 #   (인자 없음)  단위 테스트 (-race)
-#   e2e         실제 스택(make memory-up)에 붙는 e2e 포함 + 커버리지 (.cache/coverage.out)
-#   slow        ISM 이 실제 시간으로 인덱스를 옮기는 e2e (6~15분, make memory-up 필요)
+#   e2e         실제 스택(루트의 make memory-init)에 붙는 e2e 포함 + 커버리지 (.cache/coverage.out)
+#   slow        ISM 이 실제 시간으로 인덱스를 옮기는 e2e (6~15분, make memory-init 필요)
 #   s3          cold 층을 S3(LocalStack)에 두는 e2e — 전용 스택(app/test/s3)을 올렸다가 내린다
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-source "${SCRIPT_DIR}/../memory-common.sh"
+source "${ROOT_DIR}/scripts/memory-common.sh"
 memory_find_go
 cd "${ROOT_DIR}/app"
 
@@ -17,7 +17,7 @@ S3_COMPOSE=(docker compose -f "${ROOT_DIR}/app/test/s3/docker-compose.yml")
 require_stack() {
     memory_load_env "$ROOT_DIR"
     if ! curl -sf "${OPENSEARCH_URL}/_cluster/health" >/dev/null 2>&1; then
-        echo "[test] opensearch: not reachable at ${OPENSEARCH_URL} — 'make memory-up' 먼저" >&2
+        echo "[test] opensearch: not reachable at ${OPENSEARCH_URL} — 'make memory-init' 먼저" >&2
         exit 1
     fi
 }
@@ -30,7 +30,7 @@ require_graph() {
     local host="${hostport%%:*}" port="${hostport##*:}"
     [[ "$port" == "$hostport" ]] && port=7687
     if ! (exec 3<>"/dev/tcp/${host}/${port}") 2>/dev/null; then
-        echo "[test] neo4j: not reachable at ${MEMORY_GRAPH_URI} — 'make memory-up' 먼저 (그래프 e2e 를 빼려면 MEMORY_GRAPH_URI=off)" >&2
+        echo "[test] neo4j: not reachable at ${MEMORY_GRAPH_URI} — 'make memory-init' 먼저 (그래프 e2e 를 빼려면 MEMORY_GRAPH_URI=off)" >&2
         exit 1
     fi
 }

@@ -1,6 +1,6 @@
 # 메모리 층 스크립트 공용 헬퍼. source 로만 쓴다 (실행 파일이 아니다).
 
-# .env 를 읽는다. 이미 환경에 있는 값이 이긴다 — 'META_REPO_ROOT=... make reconcile' 처럼 명령줄에서 준 값을
+# .env 를 읽는다. 이미 환경에 있는 값이 이긴다 — 'META_REPO_ROOT=... scripts/memory-daemon/run.sh once' 처럼 명령줄에서 준 값을
 # .env 가 덮지 않게. docker compose 와 같은 규칙으로 읽는다: `export KEY=v`, 따옴표, 줄 끝 ` # 주석`.
 memory_load_env() {
     local root_dir="$1" line key value
@@ -57,14 +57,59 @@ memory_build() {
 # http 엔드포인트가 응답할 때까지 기다린다 (최대 5분)
 memory_wait_http() {
     local name="$1" url="$2"
-    echo "[memory-up] ${name}: waiting ${url}"
+    echo "[memory-init] ${name}: waiting ${url}"
     for _ in $(seq 1 150); do
         if curl -sf "$url" >/dev/null 2>&1; then
-            echo "[memory-up] ${name}: ready"
+            echo "[memory-init] ${name}: ready"
             return 0
         fi
         sleep 2
     done
-    echo "[memory-up] ${name}: 5분 내 응답 없음 — 'docker logs dj-workspace-${name}' 확인 (Docker 메모리 3GB 이상)" >&2
+    echo "[memory-init] ${name}: 5분 내 응답 없음 — 'docker logs dj-workspace-${name}' 확인 (Docker 메모리 3GB 이상)" >&2
     return 1
+}
+
+# launchd 잡에 넣을 PATH. launchd 는 로그인 셸의 PATH 를 모르므로 지금 보이는 docker·git·claude·mise·go 위치를 넣는다
+memory_job_path() {
+    local dirs=() bin
+    for bin in docker git claude mise go curl jq; do
+        if command -v "$bin" >/dev/null 2>&1; then
+            dirs+=("$(dirname "$(command -v "$bin")")")
+        fi
+    done
+    dirs+=(/usr/local/bin /opt/homebrew/bin /usr/bin /bin /usr/sbin /sbin)
+    printf '%s\n' "${dirs[@]}" | awk '!seen[$0]++' | paste -sd: -
+}
+
+# launchd(macOS)를 쓸 수 있는가
+memory_has_launchd() {
+    [[ "$(uname -s)" == "Darwin" ]] && command -v launchctl >/dev/null 2>&1
+}
+
+# meta-repo 의 workspace 이름 — MEMORY_WORKSPACE 또는 루트 디렉토리 이름 (Go config 와 같은 규칙: 소문자, [a-z0-9-] 밖은 하이픈)
+memory_workspace_name() {
+    local ws="${MEMORY_WORKSPACE:-}"
+    if [[ -z "$ws" ]]; then
+        ws="$(basename "${META_REPO_ROOT:?}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9-]+/-/g; s/^-+//; s/-+$//')"
+    fi
+    echo "${ws:-workspace}"
+}
+
+# launchd 잡의 EnvironmentVariables <dict> 안쪽. start 때의 메모리 설정(.env 와 명령줄)을 잡에 박아 둔다 —
+# launchd 는 셸 환경을 넘기지 않는다. 비밀(AWS 키, 그래프 비밀번호)은 plist 에 쓰지 않는다: 잡이 .env·AWS 기본 체인에서 읽는다
+memory_launchd_env_xml() {
+    local name value
+    printf '<key>PATH</key><string>%s</string>' "$(memory_job_path | memory_xml_escape)"
+    while IFS='=' read -r name value; do
+        case "$name" in
+            META_REPO_ROOT|OPENSEARCH_URL|OS_PORT|NEO4J_*|COLD_*|MEMORY_*|AWS_REGION|AWS_PROFILE|AWS_ENDPOINT_URL_S3) ;;
+            *) continue ;;
+        esac
+        [[ "$name" == "MEMORY_GRAPH_PASSWORD" ]] && continue
+        printf '<key>%s</key><string>%s</string>' "$name" "$(printf '%s' "$value" | memory_xml_escape)"
+    done < <(env | grep -E '^(META_REPO_ROOT|OPENSEARCH_URL|OS_PORT|NEO4J_[A-Z_]*|COLD_[A-Z_]*|MEMORY_[A-Z_]*|AWS_REGION|AWS_PROFILE|AWS_ENDPOINT_URL_S3)=' | sort)
+}
+
+memory_xml_escape() {
+    sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
 }

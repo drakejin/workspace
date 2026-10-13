@@ -154,7 +154,8 @@ func TestDaemonLifecycle(t *testing.T) {
 
 	t.Run("증류: 변경분에 요약이 붙는다", func(t *testing.T) {
 		d.Settle()
-		hits, _ := search.Search(ctx, client, search.Request{Workspace: cfg.Workspace, Team: cfg.DefaultTeam, Query: "IdempotencyKeyHeader"})
+		hitsRes, _ := search.Search(ctx, client, search.Request{Workspace: cfg.Workspace, Team: cfg.DefaultTeam, Query: "IdempotencyKeyHeader"})
+		hits := hitsRes.Hits
 		if len(hits) == 0 || hits[0].Summary != "요약: ADR-0001 멱등 키" {
 			t.Errorf("summary = %+v", hits)
 		}
@@ -163,8 +164,9 @@ func TestDaemonLifecycle(t *testing.T) {
 	t.Run("재구축 계약: 인덱스를 지워도 같은 결과 — 판정·증류는 원장에서, LLM 0회", func(t *testing.T) {
 		d.Settle()
 		snapshot := func() []string {
-			hits, _ := search.Search(ctx, client, search.Request{Workspace: cfg.Workspace, Team: cfg.DefaultTeam, Size: 50, IncludeSuperseded: true,
+			hitsRes, _ := search.Search(ctx, client, search.Request{Workspace: cfg.Workspace, Team: cfg.DefaultTeam, Size: 50, IncludeSuperseded: true,
 				Query: "OrderRetryPolicy RefundWindowDays OrderStatusEnum IdempotencyKeyHeader ShippingZoneTable"})
+			hits := hitsRes.Hits
 			var out []string
 			for _, h := range hits {
 				out = append(out, h.SourcePath+"|"+h.SupersededBy+"|"+h.Summary)

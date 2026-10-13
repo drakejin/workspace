@@ -39,13 +39,17 @@ func merge(a, b map[string]any) map[string]any {
 func Properties() map[string]any {
 	text := merge(map[string]any{"type": "text"}, analyzed())
 	return map[string]any{
-		"workspace":     map[string]any{"type": "keyword"},
-		"team":          map[string]any{"type": "keyword"},
-		"deprecated":    map[string]any{"type": "boolean"},
-		"repo":          map[string]any{"type": "keyword"},
+		"workspace":  map[string]any{"type": "keyword"},
+		"team":       map[string]any{"type": "keyword"},
+		"deprecated": map[string]any{"type": "boolean"},
+		// 프로젝트·주제는 필터(keyword)이면서 질의어로도 맞게(text) 둔다
+		"repo":          map[string]any{"type": "keyword", "fields": map[string]any{"text": text}},
+		"topic":         map[string]any{"type": "keyword", "fields": map[string]any{"text": text}},
+		"index_version": map[string]any{"type": "integer"},
 		"doc_type":      map[string]any{"type": "keyword"},
 		"memory_kind":   map[string]any{"type": "keyword"},
 		"event_time":    map[string]any{"type": "date"},
+		"event_day":     map[string]any{"type": "keyword"}, // YYYY-MM-DD — 날짜 필터는 이 문자열로 비교한다 (시간대와 무관)
 		"source_path":   map[string]any{"type": "keyword", "fields": map[string]any{"text": text}},
 		"git_sha":       map[string]any{"type": "keyword"},
 		"header_path":   merge(text, map[string]any{"fields": map[string]any{"keyword": map[string]any{"type": "keyword", "ignore_above": 512}}}),

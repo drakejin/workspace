@@ -43,7 +43,7 @@ func (f fakeProbe) Graph(context.Context) (graph.Stats, bool, error) {
 func TestRenderStatusAllDown(t *testing.T) {
 	cfg := config.Config{MetaRepoRoot: t.TempDir(), OpenSearchURL: "http://localhost:9202"}
 	out := RenderStatus(context.Background(), cfg, fakeProbe{}, time.Now())
-	for _, want := range []string{"docker: not running", "opensearch: unreachable", "graph: off", "daemon: stopped", "make daemon-service", "judge: off", "distill: off"} {
+	for _, want := range []string{"docker: not running", "opensearch: unreachable", "graph: off", "daemon: stopped", "make memory-daemon-start", "judge: off", "distill: off"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("%q 없음:\n%s", want, out)
 		}
@@ -68,7 +68,7 @@ func TestRenderStatusRunning(t *testing.T) {
 	probe := fakeProbe{containers: map[string]string{"opensearch": "running", "neo4j": "exited"}, containersOK: true, health: "green", healthOK: true, graphOn: true}
 	out := RenderStatus(context.Background(), cfg, probe, now)
 	for _, want := range []string{"container neo4j: exited", "graph: 4 docs, 2 entities, 3 edges", "daemon: running", "cycles=4", "heartbeat 가 멈췄다",
-		"REFUSED", "PARTIAL-SCAN", "last graph: docs=4", "cold 로 넘어간 hot 원본 2개", "질문 1건", "make questions", "reconcile' 로 1회 색인", "tier: 마지막"} {
+		"REFUSED", "PARTIAL-SCAN", "last graph: docs=4", "cold 로 넘어간 hot 원본 2개", "질문 1건", "scripts/memory/run.sh questions", "memory-daemon/run.sh once'", "tier: 마지막"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("%q 없음:\n%s", want, out)
 		}

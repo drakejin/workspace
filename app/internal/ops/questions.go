@@ -48,7 +48,7 @@ func RenderQuestions(root string) (string, error) {
 	if len(rows) == 0 {
 		return "답을 기다리는 질문이 없습니다.", nil
 	}
-	return fmt.Sprintf("질문 %d건 — 답: make answer KEY=<pairKey> A=latest|old|keep\n"+
+	return fmt.Sprintf("질문 %d건 — 답: scripts/memory/run.sh answer <pairKey> latest|old|keep\n"+
 		"  latest = 최신을 사실로(구판 숨김) · old = 구판이 사실(신판 숨김) · keep = 둘 다 유지(공존)\n\n%s",
 		len(rows), strings.Join(rows, "\n")), nil
 }
@@ -93,9 +93,9 @@ func AnswerQuestion(root, pairKey string, answer Answer, now time.Time) (string,
 		if err := judge.Ledger.Append(team, rec); err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("%s: %s — 다음 데몬 사이클(또는 'make reconcile')이 인덱스에 반영합니다", pairKey, rec.Reason), nil
+		return fmt.Sprintf("%s: %s — 다음 데몬 사이클(또는 'scripts/memory-daemon/run.sh once')이 인덱스에 반영합니다", pairKey, rec.Reason), nil
 	}
-	return "", fmt.Errorf("질문을 찾지 못했습니다: %s ('make questions' 로 확인)", pairKey)
+	return "", fmt.Errorf("질문을 찾지 못했습니다: %s ('scripts/memory/run.sh questions' 로 확인)", pairKey)
 }
 
 // questionOf 는 쌍의 가장 최근 질문 기록이다.

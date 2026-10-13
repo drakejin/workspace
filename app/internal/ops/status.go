@@ -154,7 +154,7 @@ func statusInfra(ctx context.Context, s *screen, cfg config.Config, probe Probe)
 	containers, ok := probe.Containers(ctx)
 	if !ok {
 		s.add("docker: not running")
-		s.hint("Docker(OrbStack) 실행 후 'make memory-up'")
+		s.hint("Docker(OrbStack) 실행 후 'make memory-init'")
 	} else {
 		for _, svc := range []string{"opensearch", "neo4j"} {
 			st := containers[svc]
@@ -163,13 +163,13 @@ func statusInfra(ctx context.Context, s *screen, cfg config.Config, probe Probe)
 			}
 			s.add("container %s: %s", svc, st)
 			if st != "running" && (svc == "opensearch" || cfg.Graph.URI != "") {
-				s.hint("'make memory-up' 으로 스택 기동")
+				s.hint("'make memory-init' 으로 스택 기동")
 			}
 		}
 	}
 	if health, ok := probe.ClusterHealth(ctx); !ok {
 		s.add("opensearch: unreachable (%s)", cfg.OpenSearchURL)
-		s.hint("'make memory-up' 으로 스택 기동")
+		s.hint("'make memory-init' 으로 스택 기동")
 	} else {
 		s.add("opensearch: %s (%s)", health, cfg.OpenSearchURL)
 		if st, ok := probe.IndexStats(ctx); ok {
@@ -178,7 +178,7 @@ func statusInfra(ctx context.Context, s *screen, cfg config.Config, probe Probe)
 				s.add("last indexed: %s", st.LastIndexed)
 			}
 			if st.Documents == 0 {
-				s.hint("'make reconcile' 로 1회 색인 (또는 'make daemon')")
+				s.hint("'make memory-daemon-start' 로 데몬 상주 (1회만: 'scripts/memory-daemon/run.sh once')")
 			}
 		}
 	}
@@ -187,7 +187,7 @@ func statusInfra(ctx context.Context, s *screen, cfg config.Config, probe Probe)
 		s.add("graph: off (MEMORY_GRAPH_URI=off)")
 	case err != nil:
 		s.add("graph: unreachable (%s)", cfg.Graph.URI)
-		s.hint("'make memory-up' 으로 Neo4j 기동 — 색인·검색은 그래프 없이도 돈다")
+		s.hint("'make memory-init' 으로 Neo4j 기동 — 색인·검색은 그래프 없이도 돈다")
 	default:
 		s.add("graph: %s docs, %d entities, %d edges (%s)", fmt.Sprint(gst.Nodes[graph.LabelDoc]), gst.Nodes[graph.LabelEntity], sum(gst.Edges), cfg.Graph.URI)
 	}
@@ -198,7 +198,7 @@ func statusDaemon(s *screen, cfg config.Config, status *state.Status, now time.T
 	switch {
 	case pid == 0:
 		s.add("daemon: stopped")
-		s.hint("'make daemon' 으로 데몬 실행 (또는 'make daemon-service' 로 로그인 시 자동 실행)")
+		s.hint("'make memory-daemon-start' 로 데몬 상주 (macOS 는 launchd — 로그인 때 다시 켠다)")
 	case status != nil:
 		s.add("daemon: running pid=%d since %s, cycles=%d", pid, status.StartedAt, status.Cycles)
 		heartbeat, _ := time.Parse(time.RFC3339Nano, status.HeartbeatAt)
@@ -232,7 +232,7 @@ func statusDaemon(s *screen, cfg config.Config, status *state.Status, now time.T
 			s.hint(fmt.Sprintf("색인에 실패한 파일 %d개 — 데몬 로그의 '[reconcile] fail' 줄을 보세요 (다음 사이클이 다시 시도한다)", c.Failed))
 		}
 		if c.ColdOwned > 0 {
-			s.hint(fmt.Sprintf("cold 로 넘어간 hot 원본 %d개 — 'make tier' 가 정리한다", c.ColdOwned))
+			s.hint(fmt.Sprintf("cold 로 넘어간 hot 원본 %d개 — 'scripts/memory/run.sh tier' 가 정리한다", c.ColdOwned))
 		}
 	}
 	if last.Graph != "" {
@@ -255,7 +255,7 @@ func statusLedgers(s *screen, cfg config.Config, status *state.Status) {
 	}
 	s.add("judge: %s, 답을 기다리는 질문 %d건", onOff(cfg.Judge.Enabled), questions)
 	if questions > 0 {
-		s.hint("'make questions' 로 질문 확인 후 'make answer KEY=<pairKey> A=latest|old|keep'")
+		s.hint("'scripts/memory/run.sh questions' 로 질문 확인 후 'scripts/memory/run.sh answer <pairKey> latest|old|keep'")
 	}
 	cache := state.NewDistillCache(cfg.MetaRepoRoot)
 	cache.Ledger.OnCorrupt = count
@@ -268,7 +268,7 @@ func statusLedgers(s *screen, cfg config.Config, status *state.Status) {
 	}
 	s.add("distill: %s, cache %d건%s", onOff(cfg.Distill.Enabled), cache.Size(""), pending)
 	if corrupt > 0 {
-		s.hint(fmt.Sprintf("원장에 읽을 수 없는 줄 %d개 — 'make audit' 로 확인", corrupt))
+		s.hint(fmt.Sprintf("원장에 읽을 수 없는 줄 %d개 — 'scripts/memory/run.sh audit' 로 확인", corrupt))
 	}
 	tick := state.NewTick(cfg.MetaRepoRoot, "tier")
 	if last := tick.Last(); !last.IsZero() {

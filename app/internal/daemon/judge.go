@@ -183,6 +183,25 @@ type Neighbor struct {
 
 // BestNeighbor 는 같은 workspace·팀 hot 영역에서 가장 비슷한 다른 episodic 문서다. 이미 밀린 문서와는 재판정하지 않는다.
 func BestNeighbor(ctx context.Context, c opensearch.Client, d DiffEntry, workspace string, minScore float64) (*Neighbor, error) {
+	filter := []any{
+		map[string]any{"term": map[string]any{"memory_kind": model.KindEpisodic}},
+		map[string]any{"term": map[string]any{"workspace": workspace}},
+	}
+	mustNot := []any{
+		map[string]any{"exists": map[string]any{"field": "superseded_by"}},
+		map[string]any{"term": map[string]any{"deprecated": true}},
+	}
+	// 같은 프로젝트 안, 같은 종류의 기록끼리만 (vms: "같은 project 안") — 짧은 문서끼리는 조사·흔한 낱말만으로도
+	// 비슷해 보여 엉뚱한 쌍이 latest-wins 로 숨는다 (예: ADR 이 같은 프로젝트의 PRD 에 밀림).
+	// 프로젝트가 없는 문서(여러 프로젝트에 걸친 주제)는 프로젝트 없는 문서끼리 견준다
+	if d.DocType != "" {
+		filter = append(filter, map[string]any{"term": map[string]any{"doc_type": d.DocType}})
+	}
+	if d.Project != "" {
+		filter = append(filter, map[string]any{"term": map[string]any{"repo": d.Project}})
+	} else {
+		mustNot = append(mustNot, map[string]any{"exists": map[string]any{"field": "repo"}})
+	}
 	body := map[string]any{
 		"size": neighborCandidates,
 		"query": map[string]any{"bool": map[string]any{
@@ -190,14 +209,8 @@ func BestNeighbor(ctx context.Context, c opensearch.Client, d DiffEntry, workspa
 				"fields": []string{"text", "title"}, "like": truncate(d.Body, likeRunes),
 				"min_term_freq": 1, "min_doc_freq": 1, "max_query_terms": mltMaxQueryTerms,
 			}}},
-			"filter": []any{
-				map[string]any{"term": map[string]any{"memory_kind": model.KindEpisodic}},
-				map[string]any{"term": map[string]any{"workspace": workspace}},
-			},
-			"must_not": []any{
-				map[string]any{"exists": map[string]any{"field": "superseded_by"}},
-				map[string]any{"term": map[string]any{"deprecated": true}},
-			},
+			"filter":   filter,
+			"must_not": mustNot,
 		}},
 		"_source": []string{"source_path", "body_sha", "event_time", "text"},
 	}

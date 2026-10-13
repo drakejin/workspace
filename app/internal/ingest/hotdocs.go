@@ -14,6 +14,7 @@ type IndexedDoc struct {
 	SourcePath   string
 	Team         string
 	Repo         string
+	Topic        string
 	Title        string
 	DocType      model.DocType
 	Kind         model.Kind
@@ -28,6 +29,8 @@ type IndexedDoc struct {
 	Summary      string
 	Entities     []string
 	Index        string
+	// IndexVersion 은 이 문서를 쓴 필드 구성의 판이다 (model.IndexVersion 보다 낮으면 다시 쓴다)
+	IndexVersion int
 	// Duplicate 면 같은 문서가 두 인덱스 이상에 있다 (인덱스를 옮기다 끊긴 경우). 다시 쓰면 한 곳만 남는다.
 	Duplicate bool
 }
@@ -72,7 +75,7 @@ func FetchIndexedDocs(ctx context.Context, c opensearch.Client, indices []string
 	if len(indices) == 0 {
 		return docs, nil
 	}
-	source := []string{"workspace", "team", "repo", "title", "source_path", "chunk_index", "doc_type", "memory_kind", "content_sha", "body_sha",
+	source := []string{"workspace", "team", "repo", "topic", "index_version", "title", "source_path", "chunk_index", "doc_type", "memory_kind", "content_sha", "body_sha",
 		"mtime_ms", "size", "event_time", "supersedes", "superseded_by", "deprecated", "summary", "entities"}
 	err := opensearch.Scan(ctx, c, joinIndices(indices), opensearch.FirstChunks(workspace), source, opensearch.ChunkSort,
 		func(h opensearch.Hit[model.Chunk]) error {
@@ -83,7 +86,7 @@ func FetchIndexedDocs(ctx context.Context, c opensearch.Client, indices []string
 				return nil
 			}
 			docs[s.SourcePath] = IndexedDoc{
-				SourcePath: s.SourcePath, Team: s.Team, Repo: s.Repo, Title: s.Title, DocType: s.DocType, Kind: s.Kind,
+				SourcePath: s.SourcePath, Team: s.Team, Repo: s.Repo, Topic: s.Topic, IndexVersion: s.IndexVersion, Title: s.Title, DocType: s.DocType, Kind: s.Kind,
 				ContentSHA: s.ContentSHA, BodySHA: s.BodySHA, MtimeMs: s.MtimeMs, Size: s.Size, EventTime: s.EventTime,
 				Supersedes: s.Supersedes, SupersededBy: s.SupersededBy, Deprecated: s.Deprecated, Summary: s.Summary,
 				Entities: s.Entities, Index: h.Index,

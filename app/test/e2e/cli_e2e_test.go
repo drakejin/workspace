@@ -20,7 +20,7 @@ import (
 	"github.com/drakejin/workspace/app/internal/ops"
 )
 
-// cliHarness 는 memory-mcp <command> 와 같은 배선의 운영 CLI 다 (make query·tier·audit·archive·graph 가 부르는 것).
+// cliHarness 는 memory-mcp <command> 와 같은 배선의 운영 CLI 다 (scripts/memory/run.sh 가 부르는 것).
 type cliHarness struct {
 	cli *ops.CLI
 	out *bytes.Buffer
@@ -55,7 +55,7 @@ func (c *cliHarness) fail(name string, args ...string) error {
 	return c.cli.Run(context.Background(), name, args)
 }
 
-// TestOperatorCLIWalkthrough 는 사람이 Makefile 로 하는 운영 순서 그대로다:
+// TestOperatorCLIWalkthrough 는 사람이 운영 CLI 로 하는 순서 그대로다:
 // bootstrap → ingest → query → compaction-report → tier(미리보기·실행) → list-cold → archive → restore → reload → audit →
 // tier-tick → questions → status.
 func TestOperatorCLIWalkthrough(t *testing.T) {
@@ -73,7 +73,7 @@ func TestOperatorCLIWalkthrough(t *testing.T) {
 	if out := c.run(t, "ingest", "docs"); !strings.Contains(out, legacy) {
 		t.Errorf("ingest = %s", out)
 	}
-	if out := c.run(t, "search", "-repo", "payments", "RefundWindowDays"); !strings.Contains(out, "docs/specs/payments/refund.md") {
+	if out := c.run(t, "search", "-project", "payments", "RefundWindowDays"); !strings.Contains(out, "docs/specs/payments/refund.md") {
 		t.Errorf("search = %s", out)
 	}
 	if err := c.fail("search"); !errors.Is(err, ops.ErrUsage) {

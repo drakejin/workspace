@@ -53,7 +53,7 @@ func TestRender(t *testing.T) {
 		Expired:   []ExpiredDoc{{SourcePath: "old.md", Repo: "svc", DocType: model.DocADR, EventTime: "2026-07-01T00:00:00Z"}},
 		Conflicts: []Conflict{{Topic: "t", Entries: []ConflictEntry{{SourcePath: "a.md", HeaderPath: "A > t", EventTime: "2026-07-01", Excerpt: "e"}}}},
 	})
-	for _, want := range []string{"`old.md` (adr, svc, 2026-07-01)", "(repo 없음) — t", "다시 쓰기", "make tier"} {
+	for _, want := range []string{"`old.md` (adr, svc, 2026-07-01)", "(repo 없음) — t", "다시 쓰기", "scripts/memory/run.sh tier -team"} {
 		if !strings.Contains(md, want) {
 			t.Errorf("render 에 %q 없음:\n%s", want, md)
 		}

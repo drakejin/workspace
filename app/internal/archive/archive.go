@@ -41,7 +41,7 @@ type Audit struct {
 
 func (a Audit) validate() error {
 	if strings.TrimSpace(a.By) == "" || strings.TrimSpace(a.Reason) == "" {
-		return errors.New("--by 와 --reason 이 필요합니다 (cold 쓰기의 감사 기록)")
+		return errors.New("-by 와 -reason 이 필요합니다 (cold 쓰기의 감사 기록)")
 	}
 	return nil
 }
@@ -149,7 +149,7 @@ func (s *Service) Edit(ctx context.Context, team, path, file string, a Audit) (s
 	}
 	built, err := document.Build(document.Input{
 		Workspace: s.Config.Workspace, SourcePath: path, Content: string(content), DefaultTeam: team, TeamOverride: team,
-		FallbackTime: old[0].EventTimeValue(), GitSHA: old[0].GitSHA, Now: s.Now(), Size: int64(len(content)),
+		FallbackTime: old[0].EventTimeValue(), GitSHA: old[0].GitSHA, Now: s.Now(), Size: int64(len(content)), Location: s.Config.Location,
 	})
 	if err != nil {
 		return "", err

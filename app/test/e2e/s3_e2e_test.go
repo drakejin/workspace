@@ -24,7 +24,7 @@ import (
 const s3Bucket = "mem-e2e"
 
 // TestS3ColdLayer 는 cold 층 두 가지 — OpenSearch 스냅샷(repository-s3)과 cold store(raw·청크 JSONL) — 를 S3 에 두고
-// tier → 복원 → 재적재를 돈다. LocalStack 스택(app/test/s3)이 필요하다: make test-e2e-s3.
+// tier → 복원 → 재적재를 돈다. LocalStack 스택(app/test/s3)이 필요하다: app/ 에서 make test-e2e-s3.
 func TestS3ColdLayer(t *testing.T) {
 	endpoint := envOr("S3_E2E_ENDPOINT", "http://localhost:4576")
 	osURL := envOr("S3_E2E_OPENSEARCH_URL", "http://localhost:9203")
@@ -32,7 +32,7 @@ func TestS3ColdLayer(t *testing.T) {
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
 	ctx := context.Background()
 	if err := opensearch.New(osURL).Do(ctx, http.MethodGet, "/_cluster/health", nil, nil, nil); err != nil {
-		t.Fatalf("S3 e2e OpenSearch(%s) 가 없다 — make test-e2e-s3 로 돌린다: %v", osURL, err)
+		t.Fatalf("S3 e2e OpenSearch(%s) 가 없다 — app/ 에서 make test-e2e-s3 로 돌린다: %v", osURL, err)
 	}
 	client := newS3(t, endpoint)
 	ensureBucket(t, client)

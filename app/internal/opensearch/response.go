@@ -19,6 +19,9 @@ type Hit[T any] struct {
 // SearchResponse 는 _search 응답 중 hits 부분이다.
 type SearchResponse[T any] struct {
 	Hits struct {
+		Total struct {
+			Value int `json:"value"`
+		} `json:"total"`
 		Hits []Hit[T] `json:"hits"`
 	} `json:"hits"`
 }

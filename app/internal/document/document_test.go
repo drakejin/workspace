@@ -67,7 +67,7 @@ func TestResolveMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Metadata{Team: "ads-data", Repo: "x", DocType: model.DocPRD, Kind: model.KindEpisodic, DeclaredTime: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), Supersedes: "docs/old.md"}
+	want := Metadata{Team: "ads-data", Repo: "x", DocType: model.DocPRD, Kind: model.KindEpisodic, DeclaredTime: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), DeclaredDay: "2026-08-01", Supersedes: "docs/old.md"}
 	if !reflect.DeepEqual(meta, want) {
 		t.Errorf("meta = %+v", meta)
 	}
@@ -176,5 +176,64 @@ func TestLinks(t *testing.T) {
 	}
 	if Title("본문만", "docs/a/b.md") != "b" || Title("# 제목 \n", "x.md") != "제목" {
 		t.Error("Title")
+	}
+}
+
+func TestTopicAndProject(t *testing.T) {
+	cases := []struct {
+		rel, fmTopic, fmProject, wantTopic, wantProject string
+	}{
+		{"docs/feature/payment-retry/a.md", "", "", "payment-retry", ""},
+		{"docs/specs/Onboarding/plan.md", "", "", "onboarding", ""},
+		{"docs/issues/ISSUE-7/README.md", "", "", "issue-7", ""},
+		{"docs/repository/alpha-api/adr/0001.md", "", "", "", "alpha-api"},
+		{"docs/repository/alpha-api/adr/0001.md", "Payments Ledger", "", "payments-ledger", "alpha-api"},
+		{"docs/knowledge/x.md", "", "beta-web", "", "beta-web"}, // frontmatter project 는 repo 와 같은 뜻
+		{"docs/feature/payments/INDEX.md", "", "", "payments", ""},
+		{"README.md", "", "", "", ""},
+	}
+	for _, c := range cases {
+		fm := markdown.Frontmatter{}
+		if c.fmTopic != "" {
+			fm["topic"] = c.fmTopic
+		}
+		if c.fmProject != "" {
+			fm["project"] = c.fmProject
+		}
+		m, err := ResolveMetadata(fm, c.rel, "t")
+		if err != nil || m.Topic != c.wantTopic || m.Repo != c.wantProject {
+			t.Errorf("%s: topic=%q project=%q err=%v, want %q %q", c.rel, m.Topic, m.Repo, err, c.wantTopic, c.wantProject)
+		}
+	}
+	b, err := Build(Input{Workspace: "ws", SourcePath: "docs/feature/payments/a.md", Content: "# A\n본문", DefaultTeam: "t", Now: time.Now()})
+	if err != nil || b.Chunks[0].Topic != "payments" || b.Chunks[0].IndexVersion != model.IndexVersion {
+		t.Errorf("chunk topic/version = %+v %v", b.Chunks[0], err)
+	}
+}
+
+func TestEventDay(t *testing.T) {
+	seoul := time.FixedZone("KST", 9*3600)
+	la := time.FixedZone("PDT", -7*3600)
+	// frontmatter 날짜는 적힌 그대로의 날
+	for _, loc := range []*time.Location{seoul, la, nil} {
+		b, err := Build(Input{Workspace: "ws", SourcePath: "docs/a.md", Content: "---\ndate: 2026-10-06\n---\n# A", DefaultTeam: "t", Now: time.Now(), Location: loc})
+		if err != nil || b.Chunks[0].EventDay != "2026-10-06" {
+			t.Errorf("loc=%v frontmatter day = %q %v", loc, b.Chunks[0].EventDay, err)
+		}
+	}
+	// 커밋·mtime 시각은 설정한 시간대의 날 — KST 오전 8시 커밋은 UTC 로는 전날이지만 그날이다
+	commit := time.Date(2026, 10, 12, 23, 30, 0, 0, time.UTC)
+	b, _ := Build(Input{Workspace: "ws", SourcePath: "docs/b.md", Content: "# B", DefaultTeam: "t", Now: time.Now(), FallbackTime: commit, Location: seoul})
+	if b.Chunks[0].EventDay != "2026-10-13" {
+		t.Errorf("KST day = %q", b.Chunks[0].EventDay)
+	}
+	b, _ = Build(Input{Workspace: "ws", SourcePath: "docs/b.md", Content: "# B", DefaultTeam: "t", Now: time.Now(), FallbackTime: commit})
+	if b.Chunks[0].EventDay != "2026-10-12" {
+		t.Errorf("시간대가 없으면 UTC = %q", b.Chunks[0].EventDay)
+	}
+	// frontmatter 에 시각까지 적었으면 그 시각을 시간대로 본다
+	b, _ = Build(Input{Workspace: "ws", SourcePath: "docs/c.md", Content: "---\ndate: 2026-10-06T23:30:00Z\n---\n# C", DefaultTeam: "t", Now: time.Now(), Location: seoul})
+	if b.Chunks[0].EventDay != "2026-10-07" || b.EventDay != "2026-10-07" {
+		t.Errorf("frontmatter 시각 = %q", b.Chunks[0].EventDay)
 	}
 }
