@@ -247,3 +247,20 @@ func TestBenchRefusesQuestionsInsideMetaRepo(t *testing.T) {
 		t.Errorf("밖의 질문 파일은 검사를 통과하고 claude 실행에서 실패해야 한다: %v", err)
 	}
 }
+
+func TestRunPrintsWhatACommandDidBeforeItFailed(t *testing.T) {
+	boom := errors.New("boom")
+	commands["test-partial"] = command{offline: true, run: func(context.Context, *CLI, []string) (string, error) {
+		return "tiered mem-t-2026.01", boom
+	}}
+	t.Cleanup(func() { delete(commands, "test-partial") })
+	var out bytes.Buffer
+	cli := &CLI{Out: &out}
+
+	err := cli.Run(context.Background(), "test-partial", nil)
+
+	// 파괴적인 명령(tier)이 중간에 실패해도 이미 한 일은 보여야 한다
+	if !errors.Is(err, boom) || !strings.Contains(out.String(), "tiered mem-t-2026.01") {
+		t.Errorf("out = %q err = %v", out.String(), err)
+	}
+}
