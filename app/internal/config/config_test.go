@@ -133,6 +133,20 @@ func TestLoadRejectsBadGraphURIScheme(t *testing.T) {
 	}
 }
 
+// R4-query-a-5: routing 이 없는 bolt 계열 주소에 붙은 query(?policy=x)는 scheme 이 아니라 query 가 문제라고 알린다 — 예전
+// 안내는 받는 scheme 목록에 bolt:// 를 적은 채 거부해, 무엇이 틀렸는지는 GUIDE 의 표를 봐야 알았다.
+func TestGraphURIQueryOnBoltNamesTheQuery(t *testing.T) {
+	_, err := Load(env(map[string]string{"META_REPO_ROOT": "/m", "MEMORY_GRAPH_URI": "bolt+s://h:7687?policy=x"}))
+
+	if err == nil || !strings.Contains(err.Error(), "query(?policy=x)") || !strings.Contains(err.Error(), "neo4j://") {
+		t.Errorf("bolt 의 query 를 짚어 알린다: %v", err)
+	}
+	_, err = Load(env(map[string]string{"META_REPO_ROOT": "/m", "MEMORY_GRAPH_URI": "http://h:7474"}))
+	if err == nil || strings.Contains(err.Error(), "query") {
+		t.Errorf("scheme 오타는 scheme 목록으로 알린다: %v", err)
+	}
+}
+
 // API-13: OpenSearch time_zone 에는 IANA 이름을 넘긴다 — 지금 시각의 고정 오프셋을 넘기면 DST 를 넘는 date math(now-90d/d)가
 // 한 시간 어긋난다. 이름이 없는 시간대(이름을 못 찾은 time.Local)만 그 시각의 오프셋이다.
 func TestQueryTimeZoneUsesIANAName(t *testing.T) {

@@ -38,12 +38,13 @@ func HasFilter(r Request) bool {
 }
 
 // boundFilter 는 범위 경계 하나다. 날짜만 준 경계는 문서의 날(event_day)끼리 비교하고(그날 전체 포함),
-// date math·시각은 유효 시각(event_time)에 시간대를 붙여 비교한다.
+// date math·시각은 유효 시각(event_time)에 시간대를 붙여 비교한다. epoch 밀리초는 같은 시각의 UTC 표기로 바꿔 보낸다 —
+// OpenSearch 가 epoch 에도 시간대를 입혀 엉뚱한 시각으로 읽는다 (epochAsISO).
 func boundFilter(op, v, timeZone string) map[string]any {
 	if isDay(v) {
 		return map[string]any{"range": map[string]any{"event_day": map[string]any{op: v}}}
 	}
-	rng := map[string]any{op: v}
+	rng := map[string]any{op: epochAsISO(v)}
 	if timeZone != "" {
 		rng["time_zone"] = timeZone
 	}

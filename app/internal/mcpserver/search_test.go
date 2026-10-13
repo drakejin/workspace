@@ -122,6 +122,22 @@ func TestMissingTeamOrOrgIsNamed(t *testing.T) {
 	}
 }
 
+// R4-query-a-4: 읽기(검색·필터 값·MCP 시작)는 org alias 를 맞추지 않는다 (API-1) — MEMORY_TEAM_ORGS 를 바꾼 뒤 org 검색이
+// "색인이 없다" 면 bootstrap 이나 데몬 재시작이 alias 를 맞춘다고 함께 알린다. 팀 검색에는 붙이지 않는다 (팀 alias 는 적재가 만든다).
+func TestMissingOrgPointsAtBootstrap(t *testing.T) {
+	h := &Handlers{Deps: Deps{Config: config.Config{Workspace: "ws", DefaultTeam: "default", HotDays: 60}, OS: notFoundOS{}}, ready: true}
+	ctx := context.Background()
+
+	org, err := h.Search(ctx, SearchInput{Org: "newly-mapped", Query: "memory"})
+	if err != nil || !strings.Contains(org, "MEMORY_TEAM_ORGS") || !strings.Contains(org, "scripts/memory/run.sh bootstrap") || !strings.Contains(org, "데몬") {
+		t.Errorf("org 의 색인 없음 안내 = %q %v", org, err)
+	}
+	team, err := h.Search(ctx, SearchInput{Team: "nosuchteam", Query: "memory"})
+	if err != nil || strings.Contains(team, "bootstrap") {
+		t.Errorf("팀의 색인 없음 안내 = %q %v", team, err)
+	}
+}
+
 // API-3 / RUN-18: 잘못된 time_range(꼴이 아니거나 뒤집힌 날짜)·org 이름은 OpenSearch 에 묻기 전에 거부한다 (OS 가 nil 이어도).
 func TestTimeRangeAndOrgValidatedBeforeIO(t *testing.T) {
 	h := NewHandlers(Deps{Config: config.Config{DefaultTeam: "ads"}})

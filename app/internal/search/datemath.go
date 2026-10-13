@@ -10,12 +10,15 @@ import (
 )
 
 // 이 파일은 time_range 경계를 OpenSearch 처럼 읽는다 — 받는 꼴인지 보고(Validate), 뒤집힌 범위를 미리 알아보려고 경계가
-// 가리키는 시각을 계산한다. 꼴은 event_time 의 형식(strict_date_optional_time||epoch_millis)과 date math 를 따른다.
+// 가리키는 시각을 계산한다. 꼴은 event_time 의 형식(strict_date_optional_time||epoch_millis)과 date math 를 따르되, 그중 흔한
+// 꼴만 받는다: OpenSearch 가 읽더라도 쉼표 소수(…:00,5), 초까지 적은 오프셋(+09:00:00), 소수 epoch, 끝의 T, 다섯 자리 연도,
+// 오프셋 뒤의 Z, 없는 날(2026-02-30 — OpenSearch 는 lte 에서 그달 끝으로 당긴다)은 거부한다. 거부는 안전한 쪽이다 — 여기서
+// 받은 값을 OpenSearch 가 거부하는 일은 없다.
 
 var (
 	// absoluteBound 는 strict_date_optional_time 이다: 연[-월[-일[T시[:분[:초[.소수]]][시간대]]]]. 시간대는 시각 뒤에만 붙는다.
 	absoluteBound = regexp.MustCompile(`^(\d{4})(?:-(\d{2})(?:-(\d{2})(?:T(\d{2})(?::(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?)?(Z|[+-]\d{2}(?::?\d{2})?)?)?)?)?$`)
-	// epochMillis 는 1970 이후의 epoch 밀리초다 (음수는 OpenSearch 가 받기는 하지만 엉뚱한 시각으로 읽어 받지 않는다)
+	// epochMillis 는 1970 이후의 epoch 밀리초다 (1970 이전 문서는 없어 음수는 받지 않는다)
 	epochMillis = regexp.MustCompile(`^\d+$`)
 	// offsetOnly 는 요청 시간대가 IANA 이름 대신 고정 오프셋일 때다 (이름 없는 시간대 — config.QueryTimeZone)
 	offsetOnly = regexp.MustCompile(`^[+-]\d{2}(?::?\d{2})?$`)
@@ -45,10 +48,22 @@ const fractionDigits = 9
 // maxOffset 은 시간대 오프셋의 한계다 (OpenSearch(java.time)는 ±18:00 까지 받는다).
 const maxOffset = 18 * time.Hour
 
+// maxYear 는 받는 시각의 마지막 해다 — 날짜·시각의 연은 네 자리이고, epoch 도 그 꼴(UTC 시각)로 바꿔 보낸다.
+const maxYear = 9999
+
+// parsedOffset 은 날짜·시각 경계의 벽시계가 두 번 올 때(겹침) 고르는 오프셋이다 — OpenSearch 는 적힌 벽시계를 UTC 로 읽어
+// 요청의 시간대로 옮기므로(java.time withZoneSameLocal) +00:00 이 맞으면 그쪽, 아니면 앞의 것이다 (런던 01:30 → GMT, 베를린
+// 02:30 → CEST — 재 보니 그렇다).
+const parsedOffset time.Duration = 0
+
+// isoMillis 는 epoch 기준을 OpenSearch 에 보낼 꼴이다 (UTC, 밀리초까지 — strict_date_optional_time 이 그대로 읽는다).
+const isoMillis = "2006-01-02T15:04:05.000Z"
+
 // bound 는 읽은 경계 하나다.
 type bound struct {
 	isNow  bool
 	anchor time.Time // now 가 아니면 적힌 시각 (빠진 칸은 가장 이른 값)
+	wall   time.Time // 날짜·시각이면 적힌 벽시계 (칸을 UTC 로 둔 값) — 올려 읽을 때 빠진 칸을 끝으로 채워 다시 읽는다
 	unit   byte      // anchor 에 적힌 가장 작은 단위 — 올려 읽으면 그 단위의 끝으로 간다
 	plain  bool      // date math 없는 날짜·시각이다 (|| 뒤에 계산이 붙으면 기준 날짜는 올리지 않는다)
 	ops    []mathOp
@@ -114,27 +129,81 @@ func parseAbsolute(s string, loc *time.Location) (bound, bool) {
 	if m := absoluteBound.FindStringSubmatch(s); m != nil {
 		return dateBound(m, loc)
 	}
-	if !epochMillis.MatchString(s) {
+	t, ok := epochOf(s)
+	if !ok {
 		return bound{}, false
+	}
+	return bound{anchor: t.In(loc), unit: exact, plain: true}, true
+}
+
+// epochOf 는 epoch 밀리초가 가리키는 시각이다 (시간대를 입히지 않는다 — 그 시각 그대로). 네 자리 연도를 넘으면 받지 않는다.
+func epochOf(s string) (time.Time, bool) {
+	if !epochMillis.MatchString(s) {
+		return time.Time{}, false
 	}
 	ms, err := strconv.ParseInt(s, 10, 64)
 	if err != nil {
-		return bound{}, false
+		return time.Time{}, false
 	}
-	// OpenSearch 2.19 는 time_zone 을 epoch 밀리초에도 입힌다 — UTC 벽시계를 그 시간대의 벽시계로 읽는다 (재 보니 그렇다)
-	wall := time.UnixMilli(ms).UTC()
-	return bound{anchor: inZone(wall, loc), unit: exact, plain: true}, true
+	t := time.UnixMilli(ms).UTC()
+	return t, t.Year() <= maxYear
 }
 
-// inZone 은 UTC 로 둔 벽시계 wall 을 loc 의 벽시계로 읽은 시각이다. DST 틈에 빠진(없는) 벽시계는 OpenSearch(java.time)처럼 틈
-// 앞의 오프셋으로 읽는다 (02:30 → 03:30 서머타임) — time.Date 는 틈 뒤의 오프셋으로 읽는다.
-func inZone(wall time.Time, loc *time.Location) time.Time {
-	t := time.Date(wall.Year(), wall.Month(), wall.Day(), wall.Hour(), wall.Minute(), wall.Second(), wall.Nanosecond(), loc)
-	if t.Hour() == wall.Hour() && t.Minute() == wall.Minute() {
-		return t
+// epochAsISO 는 epoch 밀리초 기준(1759312800000, 1759312800000||+1d)을 같은 시각의 UTC 표기(2025-10-01T10:00:00.000Z)로 바꾼다.
+// OpenSearch 2.19 는 time_zone 을 epoch 밀리초에도 입혀 UTC 벽시계를 그 시간대의 벽시계로 읽는다 (서울이면 9시간 이르다 — 재
+// 보니 그렇다). 시간대를 적은 시각은 그대로 읽고 뒤의 date math 만 time_zone 에서 계산하므로, 바꾼 값은 다른 경계처럼
+// time_zone 을 붙여 보내도 된다. epoch 기준이 아니면 v 그대로다.
+// 네 자리 수(2026)는 epoch 가 아니라 연도다 — OpenSearch 도, parseAbsolute 도 날짜 꼴을 먼저 읽는다.
+func epochAsISO(v string) string {
+	anchor, ops, anchored := strings.Cut(v, "||")
+	if absoluteBound.MatchString(anchor) {
+		return v
 	}
-	_, before := t.Zone()
-	return wall.Add(-time.Duration(before) * time.Second).In(loc)
+	t, ok := epochOf(anchor)
+	if !ok {
+		return v
+	}
+	if anchored {
+		return t.Format(isoMillis) + "||" + ops
+	}
+	return t.Format(isoMillis)
+}
+
+// inZone 은 UTC 로 둔 벽시계 wall 을 loc 의 벽시계로 읽은 시각이다 — 날짜·시각 경계는 OpenSearch(java.time)처럼 겹치면
+// +00:00 쪽(맞지 않으면 앞의 것), DST 틈에 빠지면 틈 앞의 오프셋으로 읽는다 (parsedOffset·resolveLocal).
+func inZone(wall time.Time, loc *time.Location) time.Time {
+	return resolveLocal(wall, loc, parsedOffset)
+}
+
+// wallLike 는 t 의 시간대에서 벽시계(넘친 칸은 다음 칸으로 넘긴다)가 가리키는 시각이다 — date math 의 더하기·반올림 뒤처럼,
+// 벽시계가 두 번 오면 t 의 오프셋을 고집한다 (java.time 의 ZonedDateTime.plusDays·with 와 같다).
+func wallLike(t time.Time, y int, mo time.Month, d, h, mi, s, ns int) time.Time {
+	return resolveLocal(time.Date(y, mo, d, h, mi, s, ns, time.UTC), t.Location(), offsetAt(t, t.Location()))
+}
+
+// resolveLocal 은 loc 의 벽시계 wall(칸을 UTC 로 둔 값)이 가리키는 시각이다 — java.time(ZonedDateTime.ofLocal)처럼 고른다:
+// 벽시계가 한 번뿐이면 그 시각, 서머타임이 끝나 두 번 오면(겹침) prefer 오프셋 쪽(맞지 않으면 앞의 것), DST 틈에 빠져 없으면
+// 틈 앞의 오프셋으로 읽어 틈 길이만큼 늦어진다 (베를린 02:30 → 03:30 CEST). time.Date 는 고르는 쪽이 정해져 있지 않고 실제로
+// UTC 서쪽과 동쪽에서 다르게 고른다. 오프셋은 ±18시간 안이라 바뀌기 전·후의 오프셋은 wall 의 ±18시간에서 본다.
+func resolveLocal(wall time.Time, loc *time.Location, prefer time.Duration) time.Time {
+	before, after := offsetAt(wall.Add(-maxOffset), loc), offsetAt(wall.Add(maxOffset), loc)
+	early, late := wall.Add(-before), wall.Add(-after)
+	earlyFits, lateFits := offsetAt(early, loc) == before, offsetAt(late, loc) == after
+	switch {
+	case earlyFits && lateFits && prefer == after:
+		return late.In(loc)
+	case earlyFits:
+		return early.In(loc)
+	case lateFits:
+		return late.In(loc)
+	}
+	return early.In(loc) // 틈
+}
+
+// offsetAt 은 시각 t 에서 loc 의 UTC 오프셋이다.
+func offsetAt(t time.Time, loc *time.Location) time.Duration {
+	_, seconds := t.In(loc).Zone()
+	return time.Duration(seconds) * time.Second
 }
 
 // dateBound 는 strict_date_optional_time 으로 읽은 칸들의 시각이다. 없는 날·시각(2월 30일, 25시)은 거부한다.
@@ -157,12 +226,12 @@ func dateBound(m []string, loc *time.Location) (bound, bool) {
 		nanos, _ = strconv.Atoi((m[7] + strings.Repeat("0", fractionDigits))[:fractionDigits])
 		unit = exact
 	}
-	// time.Date 는 넘친 칸을 다음 칸으로 넘겨 맞추므로 UTC 로 만들어 적은 값 그대로인지 본다 (시간대의 DST 틈은 inZone 이 맞춘다)
-	check := time.Date(f[0], time.Month(f[1]), f[2], f[3], f[4], f[5], 0, time.UTC)
-	if int(check.Month()) != f[1] || check.Day() != f[2] || check.Hour() != f[3] || check.Minute() != f[4] || check.Second() != f[5] {
+	// time.Date 는 넘친 칸을 다음 칸으로 넘겨 맞추므로 UTC 로 만들어 적은 값 그대로인지 본다 (시간대의 DST 틈·겹침은 inZone 이 고른다)
+	wall := time.Date(f[0], time.Month(f[1]), f[2], f[3], f[4], f[5], nanos, time.UTC)
+	if int(wall.Month()) != f[1] || wall.Day() != f[2] || wall.Hour() != f[3] || wall.Minute() != f[4] || wall.Second() != f[5] {
 		return bound{}, false
 	}
-	return bound{anchor: inZone(time.Date(f[0], time.Month(f[1]), f[2], f[3], f[4], f[5], nanos, time.UTC), zone), unit: unit, plain: true}, true
+	return bound{anchor: inZone(wall, zone), wall: wall, unit: unit, plain: true}, true
 }
 
 // zoneOf 는 시각에 붙은 시간대다 — 없으면 loc, Z 면 UTC, ±HH[:MM]·±HHMM 이면 그 오프셋 (±18:00 까지).
@@ -219,12 +288,13 @@ func rangeEdges(tr model.TimeRange, now time.Time, loc *time.Location) (from, to
 }
 
 // at 은 경계가 가리키는 시각이다 — OpenSearch 처럼 from(gte)은 그대로, to(lte)는 올려 읽는다(roundUp): 날짜·시각은 빠진 시각
-// 칸을 끝으로(빠진 월·일은 1 이라 to=2026-10 은 10월 1일 끝까지다 — 달 전체는 2026-10||/M), /단위 반올림은 그 단위의
-// 끝으로. date math 는 요청의 시간대(loc)에서 계산한다.
+// 칸을 끝으로 채운 벽시계를(빠진 월·일은 1 이라 to=2026-10 은 10월 1일 끝까지다 — 달 전체는 2026-10||/M), /단위 반올림은 그
+// 단위의 끝으로. 채운 벽시계는 그대로 다시 읽으므로 30분에 바뀌는 시간대도 02 → 02:59:59.999 다. date math 는 요청의
+// 시간대(loc)에서 계산한다.
 func (b bound) at(now time.Time, loc *time.Location, roundUp bool) time.Time {
 	if b.plain {
-		if roundUp {
-			return endOf(b.anchor, roundUpUnit(b.unit))
+		if roundUp && b.unit != exact {
+			return inZone(endOf(b.wall, roundUpUnit(b.unit)), b.anchor.Location())
 		}
 		return b.anchor
 	}
@@ -260,22 +330,21 @@ func (op mathOp) apply(t time.Time, roundUp bool) time.Time {
 // startOf 는 t 가 든 단위의 시작이다 (주는 월요일에 시작한다). exact 면 t 그대로.
 func startOf(t time.Time, unit byte) time.Time {
 	y, mo, d := t.Date()
-	loc := t.Location()
 	switch unit {
 	case unitYear:
-		return time.Date(y, 1, 1, 0, 0, 0, 0, loc)
+		return wallLike(t, y, 1, 1, 0, 0, 0, 0)
 	case unitMonth:
-		return time.Date(y, mo, 1, 0, 0, 0, 0, loc)
+		return wallLike(t, y, mo, 1, 0, 0, 0, 0)
 	case unitWeek:
-		return time.Date(y, mo, d-(int(t.Weekday())+6)%7, 0, 0, 0, 0, loc)
+		return wallLike(t, y, mo, d-(int(t.Weekday())+6)%7, 0, 0, 0, 0)
 	case unitDay:
-		return time.Date(y, mo, d, 0, 0, 0, 0, loc)
+		return wallLike(t, y, mo, d, 0, 0, 0, 0)
 	case unitHour:
-		return time.Date(y, mo, d, t.Hour(), 0, 0, 0, loc)
+		return wallLike(t, y, mo, d, t.Hour(), 0, 0, 0)
 	case unitMinute:
-		return time.Date(y, mo, d, t.Hour(), t.Minute(), 0, 0, loc)
+		return wallLike(t, y, mo, d, t.Hour(), t.Minute(), 0, 0)
 	case unitSecond:
-		return time.Date(y, mo, d, t.Hour(), t.Minute(), t.Second(), 0, loc)
+		return wallLike(t, y, mo, d, t.Hour(), t.Minute(), t.Second(), 0)
 	}
 	return t
 }
@@ -288,7 +357,8 @@ func endOf(t time.Time, unit byte) time.Time {
 	return add(startOf(t, unit), unit, 1).Add(-time.Millisecond)
 }
 
-// add 는 t 에 n 단위를 더한다. 연·달은 그달 끝에서 멈춘다 (1/31 + 1M = 2/28 — OpenSearch(java.time)와 같다).
+// add 는 t 에 n 단위를 더한다. 연·달·주·날은 벽시계로 더하고(서머타임이 바뀌어도 같은 시각), 연·달은 그달 끝에서 멈춘다
+// (1/31 + 1M = 2/28 — OpenSearch(java.time)와 같다). 시·분·초는 흐른 시간으로 더한다.
 func add(t time.Time, unit byte, n int) time.Time {
 	switch unit {
 	case unitYear:
@@ -296,9 +366,9 @@ func add(t time.Time, unit byte, n int) time.Time {
 	case unitMonth:
 		return addMonths(t, n)
 	case unitWeek:
-		return t.AddDate(0, 0, 7*n)
+		return addDays(t, 7*n)
 	case unitDay:
-		return t.AddDate(0, 0, n)
+		return addDays(t, n)
 	case unitHour:
 		return t.Add(time.Duration(n) * time.Hour)
 	case unitMinute:
@@ -307,10 +377,15 @@ func add(t time.Time, unit byte, n int) time.Time {
 	return t.Add(time.Duration(n) * time.Second)
 }
 
+func addDays(t time.Time, n int) time.Time {
+	y, mo, d := t.Date()
+	return wallLike(t, y, mo, d+n, t.Hour(), t.Minute(), t.Second(), t.Nanosecond())
+}
+
 func addMonths(t time.Time, n int) time.Time {
 	y, mo, d := t.Date()
-	first := time.Date(y, mo+time.Month(n), 1, t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
-	return first.AddDate(0, 0, min(d, daysIn(first))-1)
+	first := time.Date(y, mo+time.Month(n), 1, 0, 0, 0, 0, time.UTC)
+	return wallLike(t, first.Year(), first.Month(), min(d, daysIn(first)), t.Hour(), t.Minute(), t.Second(), t.Nanosecond())
 }
 
 // daysIn 은 t 가 든 달의 날 수다.

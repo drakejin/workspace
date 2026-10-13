@@ -132,6 +132,36 @@ func TestFiltersDateRangeTopicProject(t *testing.T) {
 	}
 }
 
+// R4-query-a-2: OpenSearch 2.19 는 time_zone 을 epoch 밀리초에도 입혀 UTC 벽시계를 그 시간대의 벽시계로 읽는다 (서울이면
+// 9시간 이르다 — 경계보다 이른 문서가 조용히 섞였다). epoch 기준은 같은 시각의 UTC 표기로 바꿔 보낸다: 시간대를 적은 시각은
+// OpenSearch 가 그대로 읽고, 뒤의 date math 만 time_zone 에서 계산한다 — 다른 경계와 같다.
+func TestEpochBoundIsSentAsUTCInstant(t *testing.T) {
+	q := BuildQuery(Request{Query: "x", TimeZone: "Asia/Seoul", TimeRange: model.TimeRange{From: "1759312800000", To: "1759312800000||+1d/d"}})
+
+	got, _ := json.Marshal(filterOf(t, q))
+
+	want := `[{"range":{"event_time":{"gte":"2025-10-01T10:00:00.000Z","time_zone":"Asia/Seoul"}}},` +
+		`{"range":{"event_time":{"lte":"2025-10-01T10:00:00.000Z||+1d/d","time_zone":"Asia/Seoul"}}}]`
+	if string(got) != want {
+		t.Errorf("epoch 경계\n got  %s\n want %s", got, want)
+	}
+}
+
+// 네 자리 수(2026, 2026||+1M)는 epoch 밀리초가 아니라 연도다 — OpenSearch 는 날짜 꼴을 epoch 보다 먼저 읽고, 검사(parseAbsolute)
+// 도 같은 순서다. 연도를 epoch 로 바꿔 보내면 1970-01-01T00:00:02.026Z 가 되어 조용히 엉뚱한 문서가 나온다.
+func TestYearBoundIsSentAsTyped(t *testing.T) {
+	for _, v := range []string{"2026", "2026||+1M", "9999||/y"} {
+		q := BuildQuery(Request{Query: "x", TimeZone: "Asia/Seoul", TimeRange: model.TimeRange{From: v}})
+
+		got, _ := json.Marshal(filterOf(t, q))
+
+		want := `[{"range":{"event_time":{"gte":"` + v + `","time_zone":"Asia/Seoul"}}}]`
+		if string(got) != want {
+			t.Errorf("연도 경계 %q\n got  %s\n want %s", v, got, want)
+		}
+	}
+}
+
 func TestFilterOnlyListingIsOneHitPerDocumentNewestFirst(t *testing.T) {
 	q := BuildQuery(Request{Project: "beta-web"})
 	b := q["query"].(map[string]any)["bool"].(map[string]any)

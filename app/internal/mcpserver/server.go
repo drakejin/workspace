@@ -287,7 +287,8 @@ type RestoreInput struct {
 }
 
 // Restore 는 restore_cold 다. 인덱스가 이 workspace 팀의 cold 에 있는지 먼저 보고, confirmed 가 없으면 복원하지 않고
-// "먼저 물으라"고 돌려준다.
+// "먼저 물으라"고 돌려준다 — list_cold 의 표시처럼, 이미 복원돼 검색에 나오는 인덱스는 물을 것이 없다고, hot 에 다시 열린
+// 인덱스는 지금 복원할 수 없다고 알린다.
 func (h *Handlers) Restore(ctx context.Context, in RestoreInput) (string, error) {
 	if !naming.IsMonthly(in.Index) {
 		return "", fmt.Errorf("index 이름이 잘못됐습니다: %q", in.Index)
@@ -295,11 +296,15 @@ func (h *Handlers) Restore(ctx context.Context, in RestoreInput) (string, error)
 	if err := h.Ready(ctx); err != nil {
 		return "", err
 	}
-	if err := h.inCold(ctx, in.Index); err != nil {
+	target, err := h.coldIndex(ctx, in.Index)
+	if err != nil {
 		return "", err
 	}
+	if target.Reopened {
+		return "", cold.Reopened(ctx, h.OS, h.Config, in.Index)
+	}
 	if !in.Confirmed {
-		return fmt.Sprintf("복원하지 않았습니다. 사용자에게 \"cold 인덱스 %s가 있는데 복원할까요\"라고 먼저 묻고, 동의하면 confirmed=true 로 다시 호출하세요.", in.Index), nil
+		return askBeforeRestore(target), nil
 	}
 	restored, err := cold.Restore(ctx, h.OS, h.Config, in.Index)
 	if err != nil {
@@ -309,19 +314,28 @@ func (h *Handlers) Restore(ctx context.Context, in RestoreInput) (string, error)
 		restored.Name, strings.Join(restored.Snapshots, ","), searchHint), nil
 }
 
-// inCold 는 index 가 이 workspace 팀의 cold 인덱스인지 본다 — 없는 인덱스를 두고 사용자에게 "복원할까요" 를 묻게 시키지 않는다.
-func (h *Handlers) inCold(ctx context.Context, index string) error {
+// askBeforeRestore 는 confirmed 없는 restore_cold 의 답이다. 이미 복원돼 검색에 나오는 인덱스([현재 복원됨])는 사용자에게
+// 물을 것이 없다 — 합치다 멈춘 복원본은 다시 복원해야 검색에 나오므로 예전처럼 먼저 묻게 한다.
+func askBeforeRestore(target cold.Index) string {
+	if target.Restored && target.Searchable {
+		return fmt.Sprintf("%s 는 이미 복원돼 있어 %s 결과에 나옵니다 — 복원하지 않았고, 사용자에게 복원을 물을 필요도 없습니다.", target.Name, searchHint)
+	}
+	return fmt.Sprintf("복원하지 않았습니다. 사용자에게 \"cold 인덱스 %s가 있는데 복원할까요\"라고 먼저 묻고, 동의하면 confirmed=true 로 다시 호출하세요.", target.Name)
+}
+
+// coldIndex 는 index 의 이 workspace 팀 cold 목록 항목이다 — 없는 인덱스를 두고 사용자에게 "복원할까요" 를 묻게 시키지 않는다.
+func (h *Handlers) coldIndex(ctx context.Context, index string) (cold.Index, error) {
 	idx, _ := naming.ParseIndex(index)
 	list, err := h.coldList(ctx, idx.Team)
 	if err != nil {
-		return err
+		return cold.Index{}, err
 	}
 	for _, c := range list {
 		if c.Name == index {
-			return nil
+			return c, nil
 		}
 	}
-	return fmt.Errorf("team=%s 의 cold 에 %s 가 없습니다 — %s 로 복원할 수 있는 인덱스를 확인하세요", idx.Team, index, listColdHint)
+	return cold.Index{}, fmt.Errorf("team=%s 의 cold 에 %s 가 없습니다 — %s 로 복원할 수 있는 인덱스를 확인하세요", idx.Team, index, listColdHint)
 }
 
 // RelatedInput 은 related_docs 입력이다.
@@ -359,13 +373,19 @@ func (h *Handlers) Related(ctx context.Context, in RelatedInput) (string, error)
 }
 
 // graphPath 는 입력 경로를 그래프의 문서 경로(source_path)로 맞춘다 — ingest_path 와 같은 규칙이다: ./docs/… 와 meta-repo 안의
-// 절대 경로는 meta-repo 기준 상대 경로로, 철자는 디스크의 것(대소문자·NFC)으로.
+// 절대 경로는 meta-repo 기준 상대 경로로, 철자는 디스크의 것(대소문자·NFC)으로. 읽기만 하므로 meta-repo 밖의 경로는 ingest_path
+// 의 "적재할 수 없다" 가 아니라 "밖의 경로" 로 거부하고, 링크를 푼 철자의 meta-repo 경로도 받는다 (inMetaRepo).
 func (h *Handlers) graphPath(input string) (string, error) {
 	input = strings.TrimSpace(input)
 	if input == "" {
 		return "", fmt.Errorf("path 가 비어 있습니다")
 	}
-	_, rel, err := ingest.ResolveOnDisk(h.Config.MetaRepoRoot, input)
+	inside, ok := inMetaRepo(h.Config.MetaRepoRoot, input)
+	if !ok {
+		return "", fmt.Errorf("related_docs: meta-repository 밖의 경로입니다 — 그래프는 meta-repository 안의 문서만 담습니다 "+
+			"(경로는 %s 결과의 source_path): %s", searchHint, input)
+	}
+	_, rel, err := ingest.ResolveOnDisk(h.Config.MetaRepoRoot, inside)
 	if err != nil {
 		return "", fmt.Errorf("related_docs: %w", err)
 	}

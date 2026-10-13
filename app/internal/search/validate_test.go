@@ -12,7 +12,7 @@ import (
 	"github.com/drakejin/workspace/app/internal/opensearch"
 )
 
-// API-3 / RUN-10: time_range 경계는 OpenSearch 가 읽는 꼴(strict_date_optional_time||epoch_millis, date math)만 받는다 —
+// API-3 / RUN-10: time_range 경계는 OpenSearch 가 읽는 꼴(strict_date_optional_time||epoch_millis, date math) 중 흔한 것만 받는다 —
 // 예전에는 'yesterday' 같은 값이 Validate 를 지나 OpenSearch 에서 원인 없는 "all shards failed" 로 돌아왔다. 받는 꼴은
 // OpenSearch 2.19 에 그대로 보내 확인한 목록이다 (연·연월, 시만 적은 시각, 숫자 없는 now-d, epoch 밀리초도 OpenSearch 가 받는다).
 func TestValidateTimeRangeBounds(t *testing.T) {
@@ -61,6 +61,7 @@ func TestValidateRejectsReversedRange(t *testing.T) {
 		{From: "2026-10-03||+1d", To: "2026-10-03"},
 		{From: "now", To: "2000-01-01"},
 		{From: "2026-10-02", To: "2026-10"},
+		{From: "1759312800000", To: "2025-10-01T10:00"}, // epoch(10:00Z = 서울 19:00)는 서울 10:00 보다 늦다
 	}
 	for _, tr := range reversed {
 		err := Validate(Request{TimeRange: tr, TimeZone: "Asia/Seoul"})
@@ -76,7 +77,7 @@ func TestValidateRejectsReversedRange(t *testing.T) {
 		{From: "now-30d", To: "now-1d"}, {From: "now/d", To: "now/d"}, {From: "now-1d/d", To: "now/d"}, {From: "2000-01-01", To: "now"},
 		{From: "2026-01-31||+1M", To: "2026-02-28"}, // 달 더하기는 그달 끝에서 멈춘다 (1/31 + 1M = 2/28) — OpenSearch 와 같다
 		{From: "2026-10-03T18:00+09:00", To: "2026-10-03T10:00Z"},
-		{From: "1759312800000", To: "2025-10-01T10:00"},
+		{From: "1759312800000", To: "2025-10-01T19:00"}, // epoch 는 그 시각 그대로다 — 2025-10-01T10:00Z 는 서울 19:00
 	}
 	err := Validate(Request{TimeRange: model.TimeRange{From: "2026-10-02", To: "2026-10"}, TimeZone: "Asia/Seoul"})
 	if err == nil || !strings.Contains(err.Error(), "2026-10-01T23:59:59.999+09:00") {
@@ -85,6 +86,51 @@ func TestValidateRejectsReversedRange(t *testing.T) {
 	for _, tr := range ok {
 		if err := Validate(Request{TimeRange: tr, TimeZone: "Asia/Seoul"}); err != nil {
 			t.Errorf("%+v 는 받는다: %v", tr, err)
+		}
+	}
+}
+
+// R4-query-a-1: UTC 동쪽 시간대의 서머타임 틈(베를린 02:00~03:00)에 걸친 범위는 뒤집히지 않았다 — OpenSearch 는 to 02:30 을
+// 틈 앞의 오프셋으로 읽어 03:30 CEST 까지로 본다. 예전에는 to 를 한 시간 이르게(01:30) 읽어 "뒤집혔다" 고 거부했다.
+func TestValidateAcceptsRangesAcrossDSTGapsEastOfUTC(t *testing.T) {
+	ranges := []struct {
+		zone string
+		tr   model.TimeRange
+	}{
+		{"Europe/Berlin", model.TimeRange{From: "2026-03-29T01:45", To: "2026-03-29T02:30"}},
+		{"Europe/London", model.TimeRange{From: "2026-03-29T00:45", To: "2026-03-29T01:30"}},
+		{"America/Los_Angeles", model.TimeRange{From: "2026-03-08T01:45", To: "2026-03-08T02:30"}},
+		// 겹침(01:00~02:00 이 두 번)의 01:30 을 OpenSearch 는 GMT(01:30Z)로 읽는다 — 00:50Z 부터는 뒤집히지 않았다
+		{"Europe/London", model.TimeRange{From: "2026-10-25T00:50Z", To: "2026-10-25T01:30"}},
+	}
+	for _, r := range ranges {
+		if err := Validate(Request{TimeRange: r.tr, TimeZone: r.zone}); err != nil {
+			t.Errorf("%s %+v 는 받는다: %v", r.zone, r.tr, err)
+		}
+	}
+}
+
+// R4-query-a-2: epoch 밀리초는 OpenSearch 의 epoch_millis 처럼 네 자리 연도 안의 시각만 받는다 — 보낼 때 UTC 시각
+// (2025-10-01T10:00:00.000Z)으로 바꾸므로, 그 꼴로 적을 수 없는 시각(10000년 이후)은 OpenSearch 에 닿기 전에 거부한다.
+func TestValidateEpochWithinFourDigitYears(t *testing.T) {
+	if err := Validate(Request{TimeRange: model.TimeRange{From: "253402300799999"}}); err != nil { // 9999-12-31T23:59:59.999Z
+		t.Errorf("9999년 끝까지는 받는다: %v", err)
+	}
+	for _, v := range []string{"253402300800000", "99999999999999999"} {
+		if err := Validate(Request{TimeRange: model.TimeRange{From: v}}); err == nil || !strings.Contains(err.Error(), "epoch 밀리초") {
+			t.Errorf("%q 는 받을 수 있는 꼴을 알리며 거부: %v", v, err)
+		}
+	}
+}
+
+// R4-query-a-5: 받는 꼴은 OpenSearch 가 읽는 꼴의 일부다 — OpenSearch 가 읽더라도 드문 꼴(쉼표 소수, 초까지 적은 오프셋, 소수 epoch,
+// 끝의 T, 다섯 자리 연도, 오프셋 뒤의 Z)과 없는 날(OpenSearch 는 lte 에서 그달 끝으로 당긴다)은 받지 않는다. 거부는 안전한
+// 쪽이다 — 무엇이 틀렸는지 알리고, 여기서 받은 값을 OpenSearch 가 거부하는 일은 없다 (TestValidateTimeRangeBounds 의 목록).
+func TestValidateRejectsRareFormsOpenSearchAlsoReads(t *testing.T) {
+	for _, v := range []string{"2026-10-01T10:00:00,5", "2026-10-01T10:00:00+09:00:00", "1759312800000.5", "2026-10-01T", "+12345-01-01",
+		"2026-10-01T10:00+09:00Z", "2026-02-29T00:00", "2026-02-30", "2026-04-31"} {
+		if err := Validate(Request{TimeRange: model.TimeRange{To: v}}); err == nil || !strings.Contains(err.Error(), "time_range.to") {
+			t.Errorf("%q 는 받을 수 있는 꼴을 알리며 거부: %v", v, err)
 		}
 	}
 }

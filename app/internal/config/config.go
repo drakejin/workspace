@@ -182,8 +182,10 @@ func (p *parser) validate(cfg Config) {
 	if u, err := url.Parse(cfg.OpenSearchURL); err != nil || u.Scheme == "" || u.Host == "" {
 		p.fail("OPENSEARCH_URL: URL 이 아닙니다: %q", cfg.OpenSearchURL)
 	}
-	if cfg.Graph.URI != "" && !validGraphURI(cfg.Graph.URI) {
-		p.fail("MEMORY_GRAPH_URI: bolt://, bolt+s://, bolt+ssc://, neo4j://, neo4j+s://, neo4j+ssc:// 주소, bolt+unix:///소켓경로 또는 off 여야 합니다: %q", cfg.Graph.URI)
+	if cfg.Graph.URI != "" {
+		if problem := graphURIProblem(cfg.Graph.URI); problem != "" {
+			p.fail("MEMORY_GRAPH_URI: %s: %q", problem, cfg.Graph.URI)
+		}
 	}
 	if !naming.ValidName(cfg.Workspace) {
 		p.fail("MEMORY_WORKSPACE: 소문자/숫자/하이픈만: %q", cfg.Workspace)
@@ -209,22 +211,31 @@ var graphSchemes = map[string]bool{"bolt": false, "bolt+s": false, "bolt+ssc": f
 // unixGraphScheme 은 unix 소켓 주소다 — host 없이 소켓 경로만 둔다 (bolt+unix:///var/run/neo4j.sock).
 const unixGraphScheme = "bolt+unix"
 
-// validGraphURI 는 Neo4j 드라이버가 받는 주소인가다 — scheme 오타(http://, host:port)를 graph.New 까지 미루지 않고 다른 설정
-// 오류와 함께 알리려고 Load 에서 본다. 드라이버(NewDriverWithContext)의 주소 검사를 따르고, 연결은 하지 않는다
-// (Neo4j 가 꺼져 있어도 색인·검색은 돈다).
-func validGraphURI(raw string) bool {
+// graphURIForms 는 MEMORY_GRAPH_URI 로 받는 꼴이다. scheme·host 가 틀린 주소를 거부할 때 그대로 알린다.
+const graphURIForms = "bolt://, bolt+s://, bolt+ssc://, neo4j://, neo4j+s://, neo4j+ssc:// 주소, bolt+unix:///소켓경로 또는 off 여야 합니다"
+
+// graphURIProblem 은 Neo4j 드라이버가 거부할 주소의 까닭이다 (받는 주소면 "") — scheme 오타(http://, host:port)를 graph.New
+// 까지 미루지 않고 다른 설정 오류와 함께 알리려고 Load 에서 본다. 드라이버(NewDriverWithContext)의 주소 검사를 따르고, 연결은
+// 하지 않는다 (Neo4j 가 꺼져 있어도 색인·검색은 돈다). scheme 은 맞는데 routing 이 없는 bolt 계열에 query 가 붙었으면 scheme
+// 목록이 아니라 query 가 문제라고 알린다.
+func graphURIProblem(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return false
+		return graphURIForms
 	}
 	routing, known := graphSchemes[u.Scheme]
 	switch {
-	case !known, !routing && u.RawQuery != "":
-		return false
-	case u.Scheme == unixGraphScheme:
-		return u.Host == "" && u.Path != ""
+	case !known:
+		return graphURIForms
+	case !routing && u.RawQuery != "":
+		return fmt.Sprintf("%s:// 주소에는 query(?%s)를 붙일 수 없습니다 — routing context 는 neo4j:// 계열 주소만 받는다 (query 를 빼거나 neo4j:// 로)",
+			u.Scheme, u.RawQuery)
+	case u.Scheme == unixGraphScheme && (u.Host != "" || u.Path == ""):
+		return graphURIForms
+	case u.Scheme != unixGraphScheme && u.Host == "":
+		return graphURIForms
 	}
-	return u.Host != ""
+	return ""
 }
 
 var nonName = regexp.MustCompile(`[^a-z0-9-]+`)
