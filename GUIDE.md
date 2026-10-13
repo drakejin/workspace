@@ -171,7 +171,8 @@ launchd 가 없는 머신은 nohup 백그라운드라(`[memory-daemon] backgroun
 [status] distill: off, cache 0건, 대기 0건
 ```
 
-데몬이 꺼져 있으면 `daemon: stopped` 아래로 마지막으로 돈 데몬의 사이클이 그대로 보인다.
+`index:` 줄의 docs·chunks 는 이 workspace 가 색인에 둔 문서·청크 수(밀린 문서도 센다)이고, `memory indices` 는 이 workspace 의 팀(문서를 둔 팀)이 가진 메모리 인덱스 수다 —
+같은 클러스터의 다른 meta-repo·샘플·테스트 인덱스는 세지 않는다. 데몬이 꺼져 있으면 `daemon: stopped` 아래로 마지막으로 돈 데몬의 사이클이 그대로 보인다.
 
 꺼진 게 있으면 마지막 `할 일` 줄이 무엇을 실행할지 알려 준다. 단일 노드라 `yellow` 가 정상이다.
 
@@ -454,9 +455,15 @@ hot 원본 3개를 cold 로 넘겼습니다 (git rm). 원본은 cold store raw �
 
 현행 knowledge(`order-status-v2.md`)는 노화하지 않는다. 하지만 v2 에 밀린 구판 `order-status.md`(2026-06-20)는 자기 달 인덱스로 옮겨 가 있어서
 episodic 과 같이 cold 로 간다 — 리포트(episodic 만 보는 수명 확인)에는 없지만 tier 에는 나온다.
-지우기 전에 cold store 에 같은 내용(sha)이 있는지 확인하므로 그 사이에 고친 문서는 지우지 않는다. git 레포면 `git rm` 으로 지워 커밋만 하면 된다.
+지우기 전에 cold store 에 같은 내용(sha)이 있는지 확인하므로 그 사이에 고친 문서는 지우지 않는다. git 이 meta-repo 아래 파일을 다루면(meta-repo 가 git 레포의
+꼭대기이거나, 바깥 레포가 그 아래 파일을 추적한다) `git rm` 으로 지워 커밋만 하면 된다 — 지운 원본은 git 히스토리에도 남는다.
 git 이 되살릴 수 없는 원본 — 커밋하지 않았거나 커밋 뒤 고친(add 만 한) 파일 — 은 지우지 않고 `- hot 에 남김: … (git 에 커밋된 내용이 아니다)` 로 알린다
 (그 달의 원본만 남았으면 결정이 `kept-uncommitted`). 커밋하면 다음 tier 가 뺀다.
+git 이 다루지 않는 meta-repo(git 레포가 아니거나, 바깥 레포 — 홈 디렉토리의 dotfiles 레포 등 — 가 그 아래를 하나도 추적하지 않는다)는 되살릴 히스토리가
+처음부터 없으므로 cold store 확인만으로 지운다 — 그 원본은 cold store 와 스냅샷에만 남는다.
+git 이 레포를 거부하거나(소유자가 다른 디렉토리 — `detected dubious ownership`) 돌지 않으면 커밋됐는지 알 수 없어 원본을 지우지 않고 멈춘다:
+`[tier] 중간에 실패했습니다 — 그 전에 한 일:` 아래에 이미 cold 로 보낸 인덱스가, 에러에 `git 으로 … 를 확인하지 못해 hot 원본을 지우지 않았습니다` 와 git 의 안내
+(`git config --global --add safe.directory …`)가 나오고 exit 1 이다. 남은 원본은 데몬이 cold 소유로 두고(`cold_owned`), git 을 고친 뒤 tier 를 다시 돌리면 치운다(`pruned`).
 
 ```bash
 scripts/memory/run.sh list-cold
@@ -589,7 +596,7 @@ knowledge 는 유사도로 판정하지 않으므로 선언이 없으면 구판�
 | | `tier` | ISM `mem-hot-cold` |
 | --- | --- | --- |
 | 기준 | 인덱스 안 문서의 **유효 시각** 중 가장 최근 것 | 인덱스 **생성 시각** |
-| 하는 일 | 쓰기 막기 → 스냅샷(끝까지 뜬 것만 믿는다) → 스냅샷 목록(manifest) 기록 → 인덱스 삭제 → hot 원본 제거(sha 가 cold store raw 와 같고, git 레포면 커밋된 그대로일 때만) | 스냅샷 → 인덱스 삭제 (파일은 모른다) |
+| 하는 일 | 쓰기 막기 → 스냅샷(끝까지 뜬 것만 믿는다) → 스냅샷 목록(manifest) 기록 → 인덱스 삭제 → hot 원본 제거(sha 가 cold store raw 와 같고, git 이 다루는 meta-repo 면 커밋된 그대로일 때만 — §4.6) | 스냅샷 → 인덱스 삭제 (파일은 모른다) |
 | 범위 | 이 workspace 의 팀 인덱스만 (`-team` 이 없으면 이 workspace 의 모든 팀) | 클러스터의 모든 `mem-*` 월별 인덱스 |
 | 놓치는 것 | 돌리지 않으면 아무 일도 없다 | 늦게 적재된 오래된 문서 (생성은 최근) |
 
@@ -600,6 +607,7 @@ knowledge 는 유사도로 판정하지 않으므로 선언이 없으면 구판�
 그 달에 나중에 쓴 hot 문서까지 cold 소유로 읽힌다. 달(인덱스 이름의 연.월)이 hot 기간을 다 지났으면 스냅샷 없이 지우고(`dropped-empty`,
 미리보기는 `would-drop-empty`), 아니면 그대로 둔다(`kept-hot`). 스냅샷 뒤 인덱스 삭제가 실패하면 쓰기 막기를 풀어 인덱스를 hot 으로 돌려놓고,
 뒤의 인덱스에서 실패해도 그때까지 한 일(지운 인덱스, hot 에서 뺀 원본)을 `[tier] 중간에 실패했습니다 — 그 전에 한 일:` 아래에 에러와 함께 출력한다.
+git 이 meta-repo 를 거부하거나 돌지 않아 원본이 커밋됐는지 알 수 없을 때도 이렇게 멈추고 원본은 지우지 않는다 (§4.6).
 
 ISM 이 먼저 옮긴 달은 hot 원본이 남아 데몬 로그에 `cold_owned` 가 찍힌다. 다음 `scripts/memory/run.sh tier` 가 그 원본을 치운다(`pruned`).
 ISM 스냅샷 뒤에 그 달로 늦게 쓴 문서는 스냅샷에 없으므로 치우지 않는다 — 데몬이 다시 색인하고, tier 가 스냅샷에 넣은 뒤에야 뺀다 (§7 cold 소유).
@@ -694,7 +702,7 @@ tier 정기 실행(`scripts/schedule/run.sh install`)도 같은 규칙으로 ins
 | `MEMORY_WORKSPACE` | 루트 디렉토리 이름 | 같은 스택을 쓰는 meta-repo 끼리의 격리 축 (소문자·숫자·하이픈) |
 | `MEMORY_DEFAULT_TEAM` | `default` | frontmatter 에 team 이 없을 때 |
 | `MEMORY_TEAM_ORGS` | — | `팀=org,팀=org` — org alias |
-| `MEMORY_HOT_DAYS` | `60` | hot/cold 경계. tier 는 바로 따른다. ISM 정책은 bootstrap 이 고치지만 **이미 정책이 붙은 인덱스는 처음 붙은 기간을 유지한다** (새로 만드는 인덱스부터) |
+| `MEMORY_HOT_DAYS` | `60` | hot/cold 경계. tier 는 바로 따른다. ISM 정책은 `scripts/memory/run.sh bootstrap` 이 고친다(시작할 때의 bootstrap 은 다른 값이면 경고만 — 아래 클러스터 전역 설정). 고쳐도 **이미 정책이 붙은 인덱스는 처음 붙은 기간을 유지한다** (새로 만드는 인덱스부터) |
 | `MEMORY_TIME_ZONE` | 이 머신의 시간대 | 문서의 날(`date`·`time_range` 날짜 필터, `search_filters` 날짜별 수)을 정하는 IANA 시간대 (예: `Asia/Seoul`). 비우면 `TZ` 나 `/etc/localtime` 링크에서 이 머신의 시간대 이름을 찾는다 — date math(`now-90d/d`)·시각 경계는 OpenSearch 에 이 이름으로 넘겨 DST 를 넘어도 맞는다 (이름을 못 찾으면 그 시각의 오프셋). frontmatter `date` 는 적힌 날 그대로, 없으면 커밋·mtime 시각을 이 시간대에서 본 날. 바꾸면 `scripts/memory/run.sh ingest .` 로 이미 색인된 문서의 날을 다시 쓴다 (데몬은 내용이 바뀐 문서만 다시 쓴다) |
 | `MEMORY_RECONCILE_INTERVAL_SECONDS` | `60` | 데몬 타이머 |
 | `MEMORY_RECONCILE_DEBOUNCE_MS` | `3000` | watcher 힌트 debounce |
@@ -738,11 +746,12 @@ tier 정기 실행(`scripts/schedule/run.sh install`)도 같은 규칙으로 ins
 | `다른 workspace 가 쓰는 팀입니다` | 다른 meta-repo 가 같은 팀 이름을 쓴다 | 이 meta-repo 는 다른 `MEMORY_DEFAULT_TEAM`/frontmatter team |
 | `데몬이 이미 돌고 있습니다` | 데몬 중복 실행 | `scripts/memory-daemon/run.sh status` 로 pid 확인 |
 | `cold_owned` 가 계속 찍힌다 | cold 로 간 원본이 hot 에 남아 있다 (ISM 이 옮긴 경우 등) | `scripts/memory/run.sh tier` 가 정리한다 |
+| tier 가 `git 으로 … 를 확인하지 못해 hot 원본을 지우지 않았습니다` 로 멈춘다 (exit 1) | git 이 meta-repo 를 거부한다(소유자가 다른 디렉토리 — `detected dubious ownership`) 또는 git 이 돌지 않는다. 커밋 여부를 알 수 없어 원본을 지우지 않았다 — 인덱스는 이미 cold 로 갔다 | 에러에 나온 git 의 안내대로 `git config --global --add safe.directory <경로>` (또는 git 을 고친다) 뒤 `scripts/memory/run.sh tier` — 남은 원본을 치운다(`pruned`) (§4.6) |
 | `[bootstrap] 경고: ISM 정책 … 덮어쓰지 않습니다` (또는 스냅샷 repository) | 클러스터의 정책·repository 가 이 설정과 다르다 — 같은 스택을 쓰는 다른 meta-repo 가 다른 `MEMORY_HOT_DAYS`·`COLD_SNAPSHOT_*` 로 만들었거나, 이 레포를 업데이트해 정책 본문이 바뀌었다 (`설명(…)은 같고 본문이 다르다`) | 이 설정이 맞으면 `scripts/memory/run.sh bootstrap` (클러스터 전역 — §8) |
 | `graph: failed …` / 그래프 도구가 "꺼져 있다" | Neo4j 가 꺼져 있다 / `MEMORY_GRAPH_URI=off` | `make memory-init`, 그다음 `scripts/memory/run.sh graph rebuild` |
 | `related_docs` 에 entity 경로가 없다 | 증류가 꺼져 있다 | `.env` 에 `MEMORY_DISTILL_ENABLED=true` 후 `make memory-daemon-stop && make memory-daemon-start` (본문이 LLM 으로 간다) |
 | Claude 에 도구가 안 보인다 | `.mcp.json` 승인 전 | `claude mcp get drakejin-workspace-memory-mcp` → `claude` 실행해 승인, 세션에서 `/mcp` |
-| `.cache` 를 지웠다 | 파생물·원장·**cold 정본** 삭제 | 인덱스·그래프는 `make memory-daemon-stop` → `make memory-init` → `make memory-daemon-start` 로 다시 만들고 (데몬이 지워진 락을 모른 채 돌지 않게 먼저 멈춘다), 판정은 다시 묻고 증류는 다시 한다. tier 가 git 에서 지운 원본은 git 히스토리에 커밋된 판이 있다 (tier 는 커밋된 그대로인 원본만 지운다). 하지만 스냅샷, archive edit 로 고친 본문, 이 판 전의 tier 가 지운 커밋 안 된 원본, git 레포가 아닌 meta-repo 의 원본은 `cold-store/`·`snapshots/` 에만 있다 — 이 둘은 지우지 않는다 |
+| `.cache` 를 지웠다 | 파생물·원장·**cold 정본** 삭제 | 인덱스·그래프는 `make memory-daemon-stop` → `make memory-init` → `make memory-daemon-start` 로 다시 만들고 (데몬이 지워진 락을 모른 채 돌지 않게 먼저 멈춘다), 판정은 다시 묻고 증류는 다시 한다. tier 가 `git rm` 한 원본은 git 히스토리에 커밋된 판이 있다 (git 이 다루는 meta-repo 에서 tier 는 커밋된 그대로인 원본만 지운다). 하지만 스냅샷, archive edit 로 고친 본문, 이 판 전의 tier 가 지운 커밋 안 된 원본, git 이 다루지 않는 meta-repo(git 레포가 아니거나 바깥 레포가 그 아래를 추적하지 않는다)의 원본은 `cold-store/`·`snapshots/` 에만 있다 — 이 둘은 지우지 않는다 |
 
 ---
 

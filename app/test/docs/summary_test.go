@@ -1,0 +1,137 @@
+package docs
+
+import (
+	"regexp"
+	"strings"
+	"testing"
+)
+
+// fencedLines 는 문서의 펜스 코드 블록 안 줄들이다 (앞뒤 공백을 지우고, 빈 줄은 뺀다).
+func fencedLines(content string) []string {
+	var out []string
+	inFence := false
+	for _, line := range strings.Split(content, "\n") {
+		if fence.MatchString(line) {
+			inFence = !inFence
+			continue
+		}
+		if s := strings.TrimSpace(line); inFence && s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// guideSection 은 GUIDE 에서 heading 줄부터 다음 같은 단계 이상의 제목 전까지다.
+func guideSection(t *testing.T, heading string) string {
+	t.Helper()
+	guide := readDoc(t, "GUIDE.md")
+	i := strings.Index(guide, "\n"+heading+"\n")
+	if i < 0 {
+		t.Fatalf("GUIDE 에 %q 절이 없다", heading)
+	}
+	rest := guide[i+len(heading)+2:]
+	level := heading[:strings.Index(heading, " ")+1]
+	for _, end := range []string{"\n" + level, "\n## ", "\n---\n"} {
+		if j := strings.Index(rest, end); j >= 0 {
+			rest = rest[:j]
+		}
+	}
+	return rest
+}
+
+// 설치 출력 예가 있는 GUIDE §2 의 절 — README 는 이 앵커로 링크한다.
+const (
+	guideInit   = "### 2.1 `make memory-init` — 인프라 올리기 (멱등)"
+	guideStart  = "### 2.2 `make memory-daemon-start` — 상주"
+	guideStatus = "### 2.3 `scripts/memory-daemon/run.sh status`"
+)
+
+// DOC-7: README 는 GUIDE 의 요약이다 — 프로그램 출력 예([memory-init]·[memory-daemon]·[status] … 줄)는 GUIDE 에만 두고 README 는
+// 그 절로 링크한다. 두 문서의 코드 블록이 같은 출력 줄을 나눠 가지면 숫자(docs·chunks·pid)가 바뀔 때 한쪽만 고쳐져 어긋난다.
+func TestReadmeLinksGuideOutputInsteadOfCopying(t *testing.T) {
+	guide := map[string]bool{}
+	for _, line := range fencedLines(readDoc(t, "GUIDE.md")) {
+		guide[line] = true
+	}
+	readme := readDoc(t, "README.md")
+	for _, line := range fencedLines(readme) {
+		if strings.HasPrefix(line, "[") && guide[line] {
+			t.Errorf("README 가 GUIDE 의 출력 줄을 복사했다: %q", line)
+		}
+	}
+	for _, heading := range []string{guideInit, guideStart, guideStatus} {
+		anchor := githubSlug(headingText(strings.TrimLeft(heading, "# ")))
+		if !strings.Contains(readme, "](./GUIDE.md#"+anchor+")") {
+			t.Errorf("README 가 GUIDE 의 출력 예 %q (#%s) 로 링크하지 않는다", heading, anchor)
+		}
+	}
+}
+
+var (
+	startedPID  = regexp.MustCompile(`\[memory-daemon\] started \(pid (\d+)\)`)
+	runningPID  = regexp.MustCompile(`\[status\] daemon: running pid=(\d+) `)
+	startLabel  = regexp.MustCompile(`\[memory-daemon\] launchd: com\.drakejin\.memory\.([a-z0-9-]+)\.daemon \(workspace=([a-z0-9-]+),`)
+	loadedLabel = regexp.MustCompile(`\[memory-daemon\] launchd: loaded \(com\.drakejin\.memory\.([a-z0-9-]+)\.daemon\)`)
+	indexLine   = regexp.MustCompile(`\[status\] index: workspace=([a-z0-9-]+) \d+ docs, \d+ chunks \(memory indices \d+\)`)
+)
+
+// submatch 는 re 의 첫 그룹들이다 (맞지 않으면 실패).
+func submatch(t *testing.T, re *regexp.Regexp, where, text string) []string {
+	t.Helper()
+	m := re.FindStringSubmatch(text)
+	if m == nil {
+		t.Fatalf("%s 에 %s 꼴의 줄이 없다", where, re)
+	}
+	return m[1:]
+}
+
+// R4-query-b-2: status 출력 예는 GUIDE §2.3 한 곳에만 있고, 'memory indices' 가 무엇을 세는지(이 workspace 의 팀 인덱스) 그 옆에서 밝힌다.
+// §2.2·§2.3 의 출력은 한 번의 실행에서 찍은 것이다 — start 의 pid 와 status 의 pid, launchd 잡의 workspace 와 index 줄의 workspace 가 같다.
+func TestStatusSampleLivesInGuideAndIsOneRun(t *testing.T) {
+	if strings.Contains(readDoc(t, "README.md"), "(memory indices ") {
+		t.Error("README 에 status 출력 예가 남았다 — GUIDE §2.3 에만 둔다")
+	}
+	status := guideSection(t, guideStatus)
+	if !strings.Contains(status, "`memory indices` 는 이 workspace 의 팀") {
+		t.Errorf("GUIDE §2.3 이 memory indices 가 이 workspace 의 팀 인덱스 수라고 밝히지 않는다:\n%s", status)
+	}
+	start := guideSection(t, guideStart)
+	if pid, want := submatch(t, runningPID, "§2.3", status)[0], submatch(t, startedPID, "§2.2", start)[0]; pid != want {
+		t.Errorf("§2.3 status 의 pid %s 가 §2.2 start 의 pid %s 와 다르다 — 한 번의 실행에서 찍는다", pid, want)
+	}
+	label := submatch(t, startLabel, "§2.2", start)
+	loaded := submatch(t, loadedLabel, "§2.3", status)[0]
+	index := submatch(t, indexLine, "§2.3", status)[0]
+	if label[0] != label[1] || loaded != label[0] || index != label[0] {
+		t.Errorf("출력 예의 workspace 가 서로 다르다: start 잡 %s (workspace=%s), status 잡 %s, index 줄 %s", label[0], label[1], loaded, index)
+	}
+}
+
+// R4-ops-cold-2 · R4-ops-scripts-3: 문서가 동작보다 많이 약속하지 않는다.
+func TestDocsDoNotOverclaim(t *testing.T) {
+	checkFacts(t, []fact{
+		// tier 가 지운 원본이 git 히스토리에 남는 것은 git 이 meta-repo 아래 파일을 다룰 때뿐이다 (cold/tier.go gitWorkTree)
+		{id: "R4-ops-cold-2 (1)", file: "README.md",
+			must:    []string{"git 이 다루지 않는 meta-repo"},
+			mustNot: []string{"git 히스토리에도 커밋된 판이 있다"}},
+		{id: "R4-ops-cold-2 (1)", file: "GUIDE.md", must: []string{"git 이 다루지 않는 meta-repo"}},
+		// git 이 레포를 거부하면(dubious ownership) tier 는 원본을 지우지 않고 멈춘다
+		{id: "R4-ops-cold-2 (3)", file: "GUIDE.md", must: []string{"safe.directory", "를 확인하지 못해 hot 원본을 지우지 않았습니다"}},
+	})
+	hotDays := lineWith(t, readDoc(t, "GUIDE.md"), "| `MEMORY_HOT_DAYS` |")
+	if !strings.Contains(hotDays, "`scripts/memory/run.sh bootstrap`") {
+		t.Errorf("R4-ops-cold-2 (2): MEMORY_HOT_DAYS 줄이 ISM 정책을 고치는 것을 scripts/memory/run.sh bootstrap 으로 밝히지 않는다: %q", hotDays)
+	}
+	readme := readDoc(t, "README.md")
+	// schedule/ 의 launchd.label 은 uninstall·status 가 깐 잡을 찾는 기록이다 — 지워도 되는 것으로 묶지 않는다
+	schedule := lineWith(t, readme, "├── schedule/")
+	if !strings.Contains(schedule, "launchd.label") || strings.Contains(schedule, "지워도 된다") {
+		t.Errorf("R4-ops-scripts-3 (1): .cache 트리의 schedule/ 줄: %q", schedule)
+	}
+	// make init 은 sync 를 부르므로 pull 에 실패한 repo 가 있으면 exit 1 로 끝난다 (clone 에 실패하면 그 전에)
+	initRow := lineWith(t, readme, "| `make init` |")
+	if !strings.Contains(initRow, "exit 1") {
+		t.Errorf("R4-ops-scripts-3 (2): make init 줄이 실패 시 exit 1 을 밝히지 않는다: %q", initRow)
+	}
+}
