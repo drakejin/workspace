@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# main/ 의 리포마다 기본 브랜치(origin/HEAD — clone 이 원격의 기본 브랜치로 정한다, run-issues 와 같은 규칙)에 있으면 pull 한다.
+# 다른 브랜치에서 작업 중인 리포는 건너뛴다. origin/HEAD 가 없는 리포(예전 clone)는 main/master 를 기본 브랜치로 본다.
 set -euo pipefail
 
 REPOS_DIR="$1"
@@ -7,14 +9,28 @@ synced=0
 skipped=0
 failed=0
 
+# default_branch <repo> <현재 브랜치> — 그 리포의 기본 브랜치 이름
+default_branch() {
+    local head
+    head=$(git -C "$1" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null) || head=""
+    if [[ -n "$head" ]]; then
+        echo "${head#origin/}"
+    elif [[ "$2" == "main" || "$2" == "master" ]]; then
+        echo "$2"
+    else
+        echo "main"
+    fi
+}
+
 for repo in "${REPOS_DIR}"/*/; do
     [[ -d "${repo}/.git" ]] || continue
 
     name=$(basename "$repo")
     branch=$(git -C "$repo" rev-parse --abbrev-ref HEAD 2>/dev/null)
+    default=$(default_branch "$repo" "$branch")
 
-    if [[ "$branch" != "main" && "$branch" != "master" ]]; then
-        echo "[skip] ${name}: on branch '${branch}'"
+    if [[ "$branch" != "$default" ]]; then
+        echo "[skip] ${name}: on branch '${branch}' (기본 브랜치 '${default}')"
         skipped=$((skipped + 1))
         continue
     fi

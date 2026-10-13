@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 최신화 — main/master 브랜치인 리포만 pull 하고, INDEX.md 에 없는 리포가 있으면 행을 추가한다.
+# 최신화 — 기본 브랜치(origin/HEAD)에 있는 리포만 pull 하고, INDEX.md 에 없는 리포가 있으면 행을 추가한다.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

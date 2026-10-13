@@ -4,12 +4,19 @@ drakejin 개인 repository 들을 한 곳에서 다루는 **meta-repository** �
 그 repository 들의 메타 정보(spec, ADR, PRD, AI plan)는 `docs/` 에 쌓는다. 코딩 에이전트(Claude Code)는 파일 트리를 뒤지는 대신
 **메모리 층**에 묻는다 — OpenSearch(BM25 검색) + Neo4j(knowledge graph) + reconcile 데몬 + memory-mcp.
 
+## 문서 지도
+
 | 문서 | 내용 |
 | --- | --- |
 | 이 README | 설치 → Claude 연결 → 활용 → 저장된 데이터 확인 (OpenSearch·Neo4j) → 명령어·구조 |
 | [GUIDE.md](./GUIDE.md) | 메모리 층 안내서 — 원리, 샘플로 따라 하기, 판정·증류·compaction·cold·그래프 운영, 설정·트러블슈팅 |
 | [CLAUDE.md](./CLAUDE.md) | 에이전트 작업 규칙 (search_memory 선행, 문서 위치, frontmatter, 에피소드 다섯 줄) |
-| [docs/feature/memory-layer/](./docs/feature/memory-layer/INDEX.md) | 설계 배경 — 발표·drakejin 회사와의 대조 |
+| [INDEX.md](./INDEX.md) | 관리 대상 repository 목록 (`make sync` 가 새 repo 행을 더한다) |
+| `docs/` 진입점: [repository](./docs/repository/INDEX.md) · [feature](./docs/feature/INDEX.md) · [specs](./docs/specs/INDEX.md) · [issues](./docs/issues/INDEX.md) · [knowledge](./docs/knowledge/INDEX.md) | 위치별 문서 목록 — 무엇을 어디에 두나는 §3.2 |
+| [docs/feature/memory-layer/](./docs/feature/memory-layer/INDEX.md) · [talk-alignment.md](./docs/feature/memory-layer/talk-alignment.md) | 설계 배경 — 발표·drakejin 회사와의 대조, 데모 4단계 측정 |
+| [.claude/commands/compaction.md](./.claude/commands/compaction.md) | 주간 `/compaction` 절차 (Claude Code 슬래시 명령) |
+| [examples/sample-workspace/](./examples/sample-workspace/README.md) | 체험용 가상 meta-repo — 따라 하기는 GUIDE §4 |
+| [scenarios/SCENARIOS.md](./scenarios/SCENARIOS.md) | 시나리오 테스트 — Claude 서브에이전트가 읽으며 실행하는 `명령 → 기대` (§8) |
 
 ```
  사람·에이전트가 쓰는 문서                                   에이전트가 묻는 길
@@ -63,7 +70,7 @@ scripts/memory-daemon/run.sh status  # 5) 확인 — 무엇이 꺼져 있으면 
 [memory-init] neo4j: waiting http://localhost:7476
 [memory-init] neo4j: ready
 [reconcile] scanned=11 indexed=11 stat_updated=0 removed=0 skipped=0 failed=0 cold_owned=0 flags=0 trigger=boot took=365ms
-[graph] docs=12 entities=0 edges=12
+[graph] docs=14 entities=0 edges=29
 [memory-init] reconcile: done
 
 [memory-init] 다음: 'make memory-daemon-start' 로 데몬을 상주시키고, 'scripts/memory-daemon/run.sh status' 로 확인하세요
@@ -85,13 +92,13 @@ scripts/memory-daemon/run.sh status  # 5) 확인 — 무엇이 꺼져 있으면 
 [status] container opensearch: running
 [status] container neo4j: running
 [status] opensearch: yellow (http://localhost:9202)
-[status] index: workspace=workspace 11 docs, 96 chunks (memory indices 6)
+[status] index: workspace=workspace 11 docs, 97 chunks (memory indices 6)
 [status] last indexed: 2026-10-13T00:32:11.795Z
-[status] graph: 12 docs, 0 entities, 12 edges (bolt://localhost:7689)
+[status] graph: 14 docs, 0 entities, 29 edges (bolt://localhost:7689)
 [status] daemon: running pid=39975 since 2026-10-13T00:32:29.33219Z, cycles=1
 [status] heartbeat: 1s ago (interval 60s)
 [status] last cycle: 2026-10-13T00:32:29.422157Z trigger=boot scanned=11 indexed=0 stat_updated=0 removed=0 skipped=0 failed=0 cold_owned=0 took=11ms
-[status] last graph: docs=12 entities=0 edges=12
+[status] last graph: docs=14 entities=0 edges=29
 [status] judge: on, 답을 기다리는 질문 0건
 [status] distill: off, cache 0건, 대기 0건
 ```
@@ -139,7 +146,7 @@ claude mcp add drakejin-workspace-memory-mcp -s user -- bash ~/Workspace/drakeji
 
 | 도구 | 하는 일 |
 | --- | --- |
-| `search_memory(query?, project?, topic?, date?, time_range?, doc_type?, team?, org?, size?, include_superseded?)` | hot 영역 BM25 검색, 또는 필터로 가져오기. 필터: **프로젝트**(`project`), **주제**(`topic`), **날짜**(`date`, 그날 하루 — 문서의 날: frontmatter `date`, 없으면 커밋 시각을 `MEMORY_TIME_ZONE` 에서 본 날), **범위**(`time_range` from~to), 문서 종류. `query` 를 비우고 필터만 주면 맞는 문서를 최신순으로(문서 하나에 한 건) 가져온다. 결과는 `source_path › header_path (종류, project=, topic=, 날짜)`, 청크, (증류가 켜져 있으면) 요약 |
+| `search_memory(query?, project?, topic?, date?, time_range?, doc_type?, team?, org?, size?, include_superseded?)` | hot 영역 BM25 검색, 또는 필터로 가져오기. 필터: **프로젝트**(`project`), **주제**(`topic`), **날짜**(`date`, 그날 하루 — 문서의 날: frontmatter `date`, 없으면 커밋 시각을 `MEMORY_TIME_ZONE` 에서 본 날), **범위**(`time_range` from~to), 문서 종류. `query` 를 비우고 필터만 주면 맞는 문서를 최신순으로(문서 하나에 한 건, 머리 `문서 N건`) 가져온다. 질의어 검색은 청크 단위라(머리 `청크 N건 (BM25)`) 한 문서의 여러 절이 따로 나올 수 있다. 결과는 `source_path › header_path (종류, project=, topic=, 날짜)`, 청크, (증류가 켜져 있으면) 요약 |
 | `search_filters(project?, topic?, date?, time_range?, doc_type?, …)` | 필터에 쓸 수 있는 값과 문서 수 — 프로젝트·주제·문서 종류·날짜 범위·날짜별 수 |
 | `related_docs(path, depth?)` | knowledge graph 에서 이어진 문서 — supersedes·derived_from·relates·링크·같은 entity·같은 repo |
 | `docs_by_entity(entity)` | 증류가 뽑은 entity(`service:order-api` 등)를 다루는 문서 |
@@ -147,7 +154,7 @@ claude mcp add drakejin-workspace-memory-mcp -s user -- bash ~/Workspace/drakeji
 | `list_cold(team?)` | 60일이 지나 cold 로 간 인덱스 목록 (인덱스마다 그 인덱스를 담은 스냅샷 전부). 이 meta-repo 의 팀만 — 다른 workspace 의 팀이면 거부한다 |
 | `restore_cold(index, confirmed?)` | cold 인덱스 복원 (그 인덱스를 담은 스냅샷 전부를 합친다). `confirmed=true` 가 없으면 "사용자에게 먼저 물으라" 고 돌려준다 |
 
-앞의 넷(검색·적재·cold 둘)은 발표의 도구 그대로이고, `search_filters` 는 필터 값을 고르려고, 그래프 둘은 Neo4j 를 붙이며 더했다. 그래프를 끄면(`MEMORY_GRAPH_URI=off`) 그래프 도구는 "꺼져 있다" 를,
+발표의 넷(`search_memory`·`ingest_path`·`list_cold`·`restore_cold`)은 발표 그대로이고, `search_filters` 는 필터 값을 고르려고, 그래프 둘(`related_docs`·`docs_by_entity`)은 Neo4j 를 붙이며 더했다. 그래프를 끄면(`MEMORY_GRAPH_URI=off`) 그래프 도구는 "꺼져 있다" 를,
 Neo4j 에 붙지 못하면 연결 오류를 돌려준다. 어느 쪽이든 나머지 다섯은 그대로 돈다.
 
 ---
@@ -165,14 +172,15 @@ Neo4j 에 붙지 못하면 연결 오류를 돌려준다. 어느 쪽이든 나�
 
 | 무엇 | 위치 | 성질 |
 | --- | --- | --- |
-| 특정 repo 의 ADR·배경·용어 | `docs/repository/{repo}/` | episodic — 60일 뒤 cold |
-| 여러 repo 에 걸친 주제 | `docs/feature/{topic}/` | episodic |
-| 스펙·작업 plan | `docs/specs/{spec}/` | episodic |
-| 이슈 조사 | `docs/issues/{issue}/` | episodic |
-| 살아남은 사실·용어 정의 | `docs/knowledge/` | knowledge — 노화 없음, `supersedes:` 로만 밀린다 |
+| 특정 repo 의 ADR·배경·용어 | [`docs/repository/{repo}/`](./docs/repository/INDEX.md) | episodic — 60일 뒤 cold |
+| 여러 repo 에 걸친 주제 | [`docs/feature/{topic}/`](./docs/feature/INDEX.md) | episodic |
+| 스펙·작업 plan | [`docs/specs/{spec}/`](./docs/specs/INDEX.md) | episodic |
+| 이슈 조사 | [`docs/issues/{issue}/`](./docs/issues/INDEX.md) | episodic |
+| 살아남은 사실·용어 정의 | [`docs/knowledge/`](./docs/knowledge/INDEX.md) | knowledge — 노화 없음, `supersedes:` 로만 밀린다 |
 | 관리 대상 repo 자신의 문서 | `main/{repo}/docs/` (그 repo 에 커밋) | knowledge |
 
-frontmatter(`team`, `repo`, `doc_type`, `date`, `supersedes`, `derived_from`, `relates`)와 에피소드 다섯 줄은 [CLAUDE.md](./CLAUDE.md#frontmatter).
+frontmatter(`team`, `repo`(또는 `project`), `topic`, `doc_type`, `date`, `supersedes`, `derived_from`, `relates`)는 [CLAUDE.md](./CLAUDE.md#frontmatter), 에피소드 다섯 줄은 [CLAUDE.md](./CLAUDE.md#에피소드-기록-다섯-줄).
+설계 배경·안내처럼 낡지 않는 문서는 어디에 두든 `doc_type: guide` 로 둔다 (knowledge 처럼 노화하지 않는다).
 저장하면 데몬이 3초 뒤 색인하고, 링크·`supersedes`·`derived_from` 은 그래프의 관계가 된다.
 
 ### 3.3 매일·매주
@@ -180,10 +188,10 @@ frontmatter(`team`, `repo`, `doc_type`, `date`, `supersedes`, `derived_from`, `r
 | 언제 | 할 일 | 명령 |
 | --- | --- | --- |
 | 아무 때나 | 검색해 보기 | `scripts/memory/run.sh search "PaymentRetryPolicy 재시도"` (`-team` / `-org` 는 질의어 앞에) |
-| repo 최신화 | main/master 인 repo 만 pull + INDEX.md 에 새 repo 행 | `make sync` |
+| repo 최신화 | 기본 브랜치(origin/HEAD)에 있는 repo 만 pull + INDEX.md 에 새 repo 행 | `make sync` |
 | 이슈 작업 | worktree 만들기 / 정리 | `scripts/run-issues/run.sh ISSUE-1 books-guitar` → `main/books-guitar/.worktrees/ISSUE-1` / `scripts/done-issue/run.sh ISSUE-1 books-guitar` (커밋하지 않은 변경이 있으면 남긴다 — 버리려면 `--force`) |
 | 질문이 쌓이면 | 판정이 사람에게 넘긴 질문 | `scripts/memory/run.sh questions` → `scripts/memory/run.sh answer <pairKey> latest\|old\|keep` |
-| 주 1회 | compaction — 60일 지난 사실을 knowledge 로 다시 쓰고 원문은 cold 로 | Claude 에서 `/compaction [team]` (리포트 `scripts/memory/run.sh compaction-report -team T`, 이동 `scripts/memory/run.sh tier -team T` — 먼저 `-dry-run`) |
+| 주 1회 | compaction — 60일 지난 사실을 knowledge 로 다시 쓰고 원문은 cold 로 | Claude 에서 `/compaction [team]` ([절차](./.claude/commands/compaction.md). 리포트 `scripts/memory/run.sh compaction-report -team T`, 이동 `scripts/memory/run.sh tier -team T` — 먼저 `-dry-run`) |
 | 주 1회 (데몬이 자동) | 정합성 감사 — 색인·파일·cold store·원장·링크 | `scripts/memory/run.sh audit` (고치려면 `-apply`) |
 | 틀린 cold 문서 | deprecate·undeprecate·purge·edit (감사 기록 필수) | `scripts/memory/run.sh archive deprecate -team T -by <누가> -reason <왜> <path>` |
 | 그래프 보기 | 문서 주변·entity·통계 / 다시 만들기 | `scripts/memory/run.sh graph neighbors <path>` · `scripts/memory/run.sh graph entity <name>` · `scripts/memory/run.sh graph stats` / `scripts/memory/run.sh graph rebuild` |
@@ -212,7 +220,7 @@ frontmatter(`team`, `repo`, `doc_type`, `date`, `supersedes`, `derived_from`, `r
 | `mem-org-{org}-hot` | org(실) alias — `MEMORY_TEAM_ORGS` 로 묶은 팀 전부 |
 | 스냅샷 repo `mem-cold` | cold 스냅샷 (기본 fs: `./.cache/snapshots`) |
 
-청크 한 건의 주요 필드: `workspace`, `team`, `repo`, `doc_type`, `memory_kind`(episodic/knowledge), `event_time`, `source_path`, `header_path`, `chunk_index`, `text`, `title`, `superseded_by`, `deprecated`, `summary`, `entities`, `content_sha`.
+청크 한 건의 주요 필드: `workspace`, `team`, `repo`(프로젝트), `topic`(주제), `doc_type`, `memory_kind`(episodic/knowledge), `event_time`, `event_day`(문서의 날 — 날짜 필터가 본다), `source_path`, `header_path`, `chunk_index`, `text`, `title`, `superseded_by`, `deprecated`, `summary`, `entities`, `content_sha`.
 
 ```bash
 OS=http://localhost:9202
@@ -280,7 +288,7 @@ Dev Tools 콘솔에서는 위 curl 의 본문을 그대로 쓴다. `scripts/memo
 
 | 노드 | 속성 | 무엇 |
 | --- | --- | --- |
-| `Doc` | `workspace, path, title, team, repo, docType, kind, status, summary` | 문서. `status`: `hot` · `superseded` · `deprecated` · `unindexed`(링크로만 알려졌다 — cold 로 갔거나 오타) |
+| `Doc` | `workspace, path, title, team, repo, docType, kind, status, summary` | 문서. `status`: `hot` · `superseded` · `deprecated` · `unindexed`(링크로만 알려졌고 hot 에 없다 — cold 로 갔거나 오타) · `out-of-scope`(링크로만 알려졌지만 디스크에 있는 색인 범위 밖 파일 — `scenarios/`·`.claude/`·`examples/` 의 가이드. 깨진 링크가 아니다) |
 | `Entity` | `workspace, type, name` | 증류가 뽑은 것 (`service:order-api`, `concept:idempotency` …) |
 | `Repo` | `workspace, name` | 관리 대상 repository |
 
@@ -311,7 +319,8 @@ MATCH p = (:Doc {workspace: 'workspace'})-[:SUPERSEDES*]->(:Doc) RETURN p;
 // 근거(derived_from)와 그 이유
 MATCH (a:Doc {workspace: 'workspace'})-[r:DERIVED_FROM]->(b:Doc) RETURN a.path, r.why, b.path;
 
-// 깨진 링크 — 링크 대상이 hot 에 없다
+// 깨진 링크 후보 — 링크 대상이 hot 에 없다 (cold 로 간 문서도 나온다. 디스크에 있는 색인 범위 밖 가이드는 out-of-scope 라 빠진다
+// — 확정은 scripts/memory/run.sh audit 의 broken-link: 디스크에도 hot 에도 cold 에도 없는 대상)
 MATCH (s:Doc {workspace: 'workspace'})-[r]->(d:Doc {status: 'unindexed'}) RETURN s.path, type(r), d.path;
 
 // entity 별 문서 (증류를 켰을 때)
@@ -354,7 +363,7 @@ cat .cache/daemon/status.json | jq .lastCycle         # 마지막 사이클
 | 명령어 | 설명 |
 | --- | --- |
 | `make init` | `workspace.seed.json` 의 repo 를 `main/` 에 clone (`docsOnly: true` 면 `docs/` 만) + pre-commit hook + `make sync`. 멱등 |
-| `make sync` | main/master 브랜치인 repo 만 pull, `INDEX.md` 에 없는 repo 행 추가 (로컬 claude, 읽기 도구만) |
+| `make sync` | 기본 브랜치(origin/HEAD)에 있는 repo 만 pull (다른 브랜치에서 작업 중이면 건너뜀), `INDEX.md` 에 없는 repo 행 추가 (로컬 claude, 읽기 도구만) |
 | **`make memory-init`** | 메모리 층 올리기 — 도구·빌드·OpenSearch·Neo4j·템플릿·ISM·스냅샷 repository·최초 색인 (멱등) |
 | **`make memory-daemon-start`** | reconcile 데몬(색인·판정·증류·그래프·주간 감사) 상주 — macOS 는 launchd, 없으면 nohup. 이미 돌고 있으면 그대로 둔다 |
 | **`make memory-daemon-stop`** | 데몬 상주 해제 — launchd 에서 내리고 SIGTERM, 최대 60초 기다린다 |
@@ -374,14 +383,14 @@ cat .cache/daemon/status.json | jq .lastCycle         # 마지막 사이클
 | `scripts/docs-cleaner/run.sh` | `docs/issues`, `docs/specs` 문서 전체 삭제 (파괴적 — 확인을 묻는다. `CONFIRM=yes` 면 묻지 않는다) |
 | `scripts/mcp/run.sh` | MCP 서버 (stdio) 수동 실행 (`.mcp.json` 이 부르는 진입점) |
 | `scripts/memory/run.sh search [-project P] [-topic T] [-date YYYY-MM-DD] [-from D] [-to D] [-type K] [-team T \| -org O] [-size N] [-superseded] [query]` | 검색 — 질의어 없이 필터만 주면 최신순으로 가져온다 (플래그는 질의어 앞에) |
-| `scripts/memory/run.sh filters [-project P] [-topic T] [-date D] [-from D] [-to D] [-type K]` | 검색 필터에 쓸 수 있는 값과 문서 수 (MCP `search_filters` 와 같다) |
+| `scripts/memory/run.sh filters [-project P] [-topic T] [-date D] [-from D] [-to D] [-type K] [-team T \| -org O] [-superseded]` | 검색 필터에 쓸 수 있는 값과 문서 수 (MCP `search_filters` 와 같다) |
 | `scripts/memory/run.sh questions` / `answer <pairKey> latest\|old\|keep` | 판정 질문 보기 / 답하기 |
 | `scripts/memory/run.sh compaction-report [-team T]` | 주간 compaction 1·2단계 리포트 (수명 확인·충돌 후보) |
 | `scripts/memory/run.sh tier [-team T] [-dry-run] [-keep-files]` | 60일 지난 episodic(과 밀린 knowledge) → 쓰기 막기 → 스냅샷 → 인덱스 삭제 → hot 원본 제거(`git rm`). `-team` 이 없으면 이 workspace 의 모든 팀 |
 | `scripts/memory/run.sh audit [-apply]` | 정합성 감사 (고칠 수 있는 것: 고아 색인·미색인·내용 불일치·고아 청크) |
 | `scripts/memory/run.sh archive <deprecate\|undeprecate\|purge\|edit> [-team T] -by B -reason R [-superseded-by P] [-file F] <path>` | cold 문서 조치 |
 | `scripts/memory/run.sh graph <neighbors [-depth N] <path> \| entity <name> \| stats \| rebuild>` | knowledge graph 조회 / 재구축 (LLM 0회) |
-| `scripts/memory/run.sh bench -questions F [-model M] [-modes with,without] [-runs N]` | memory-mcp 유무 비교 측정 → `.cache/bench/*.md` (F 는 meta-repo 밖) |
+| `scripts/memory/run.sh bench -questions F [-model M] [-modes with,without] [-runs N] [-max-turns N] [-mcp-script P]` | memory-mcp 유무 비교 측정 → `.cache/bench/*.md` (F 는 meta-repo 밖. `-max-turns` 질문당 최대 턴, 기본 15 · `-mcp-script` MCP 서버 진입점, 기본 이 레포의 `scripts/mcp/run.sh`) |
 
 전체 목록은 `scripts/memory/run.sh help` — 위 표에 없는 명령(`list-cold`, `restore`, `reload`, `ingest`, `bootstrap`, `tier-tick` …)도
 이 진입점으로 부른다 (`.env` 를 읽고, 바뀐 게 있으면 빌드한다. `.cache/bin/memory-mcp` 를 직접 부르면 `.env` 가 빠진다).
@@ -454,14 +463,15 @@ cat .cache/daemon/status.json | jq .lastCycle         # 마지막 사이클
   "githubHost": "github.com",
   "org": "drakejin",
   "workspaces": [
-    { "name": "books-guitar", "mainBranch": "main" },
-    { "name": "big-repo", "mainBranch": "main", "docsOnly": true }
+    { "name": "books-guitar" },
+    { "name": "big-repo", "docsOnly": true }
   ]
 }
 ```
 
 repo 를 추가하면 `make init` 을 다시 실행한다 — 이미 있는 repo 는 건너뛰고, 데몬이 다음 사이클에 `main/{repo}/docs/` 를 색인한다.
 `docsOnly: true` 는 sparse checkout 으로 `docs/` 만 받는다 (코드가 큰 repo 의 문서만 메모리에 넣을 때).
+브랜치는 적지 않는다 — `make sync` 는 repo 마다 원격의 기본 브랜치(clone 이 정한 `origin/HEAD`, `run-issues` 가 worktree 를 따는 기준과 같다)에 있을 때만 pull 한다.
 
 ### 7.2 .env
 

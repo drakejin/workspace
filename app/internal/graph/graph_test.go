@@ -1,9 +1,12 @@
 package graph
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
+	"github.com/drakejin/workspace/app/internal/ingest"
 	"github.com/drakejin/workspace/app/internal/model"
 )
 
@@ -18,7 +21,7 @@ func TestBuild(t *testing.T) {
 			}},
 		{Path: "docs/knowledge/v1.md", Team: "t", Kind: "knowledge", SupersededBy: "docs/knowledge/v2.md"},
 		{Path: "docs/specs/a.md", Team: "t", Repo: "order-api", Deprecated: true},
-	})
+	}, nil)
 	status := map[string]string{}
 	for _, d := range g.Docs {
 		status[d.Path] = d.Status
@@ -43,7 +46,44 @@ func TestBuild(t *testing.T) {
 	if len(g.Entities) != 2 || g.Entities[0].Type == "" || len(g.Repos) != 1 {
 		t.Errorf("entities=%+v repos=%+v", g.Entities, g.Repos)
 	}
-	if !reflect.DeepEqual(Build("ws", nil), Graph{Workspace: "ws"}) {
+	if !reflect.DeepEqual(Build("ws", nil, nil), Graph{Workspace: "ws"}) {
 		t.Error("빈 입력")
+	}
+}
+
+// DOC-1: 색인 범위 밖이지만 디스크에 있는 링크 대상(scenarios/·.claude/·examples/)은 unindexed(깨진 링크 후보)가 아니라
+// out-of-scope 다 — README §4.2 의 깨진 링크 질의({status: 'unindexed'})에 나오지 않는다. 디스크에 없는 대상은 그대로 unindexed.
+func TestFromHotTellsOutOfScopeFilesFromMissingOnes(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, body string) {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("README.md", "# 안내\n[시나리오](./scenarios/SCENARIOS.md) · [compaction](./.claude/commands/compaction.md)\n"+
+		"[없음](./scenarios/missing.md) · [cold](./docs/specs/old.md)\n")
+	write("scenarios/SCENARIOS.md", "# 시나리오\n")
+	write(".claude/commands/compaction.md", "# compaction\n")
+	docs := map[string]ingest.IndexedDoc{"README.md": {SourcePath: "README.md", Team: "t", Kind: model.KindKnowledge}}
+
+	g := FromHot(root, "ws", docs)
+
+	status := map[string]string{}
+	for _, d := range g.Docs {
+		status[d.Path] = d.Status
+	}
+	want := map[string]string{
+		"README.md":                      StatusHot,
+		"scenarios/SCENARIOS.md":         StatusOutOfScope,
+		".claude/commands/compaction.md": StatusOutOfScope,
+		"scenarios/missing.md":           StatusUnindexed,
+		"docs/specs/old.md":              StatusUnindexed,
+	}
+	if !reflect.DeepEqual(status, want) {
+		t.Errorf("status\n got  %v\n want %v", status, want)
 	}
 }

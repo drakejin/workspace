@@ -31,7 +31,7 @@ const (
 	Unindexed       Kind = "unindexed"        // 파일이 있는데 색인에 없고 cold 소유도 아니다 (고칠 수 있음: 색인)
 	StaleContent    Kind = "stale-content"    // 색인 내용과 파일 내용(sha)이 다르다 (고칠 수 있음: 재색인)
 	OrphanChunks    Kind = "orphan-chunks"    // cold store 청크 JSONL 의 파일도, cold 보관도 없다 (고칠 수 있음: JSONL 삭제)
-	BrokenLink      Kind = "broken-link"      // 링크 대상이 hot 에도 cold 에도 없다
+	BrokenLink      Kind = "broken-link"      // 링크 대상이 디스크에도(색인 범위 밖 포함) hot 에도 cold 에도 없다
 	UnsourcedFact   Kind = "unsourced-fact"   // knowledge 에 근거(derived_from 또는 ## 출처)가 없다
 	StaleQuestion   Kind = "stale-question"   // 답을 오래 기다리는 판정 질문
 	CorruptedLedger Kind = "corrupted-ledger" // 원장에 읽을 수 없는 줄이 있다
@@ -139,18 +139,8 @@ func (r *runner) load(ctx context.Context) error {
 
 // hotVsIndex 는 파일과 색인을 stat 을 무시하고 내용(sha)으로 대조한다 (deep pass).
 func (r *runner) hotVsIndex(ctx context.Context) error {
-	for rel, doc := range r.docs {
-		if _, ok := r.files[rel]; ok || r.partial {
-			continue
-		}
-		fixed := false
-		if r.apply {
-			if _, err := r.Indexer.RemoveFile(ctx, rel, r.indices); err != nil {
-				return err
-			}
-			fixed = true
-		}
-		r.add(OrphanIndex, rel, fmt.Sprintf("색인(%s)에는 있는데 파일이 없다", doc.Index), fixed)
+	if err := r.orphanIndex(ctx); err != nil {
+		return err
 	}
 	rels := make([]string, 0, len(r.files))
 	for rel := range r.files {
@@ -163,6 +153,37 @@ func (r *runner) hotVsIndex(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// orphanIndex 는 색인에는 있는데 그 철자의 파일이 스캔에 없는 문서다.
+func (r *runner) orphanIndex(ctx context.Context) error {
+	for rel, doc := range r.docs {
+		if _, ok := r.files[rel]; ok || r.partial {
+			continue
+		}
+		fixed := false
+		if r.apply {
+			if _, err := r.Indexer.RemoveFile(ctx, rel, r.indices); err != nil {
+				return err
+			}
+			fixed = true
+		}
+		r.add(OrphanIndex, rel, r.orphanDetail(rel, doc.Index), fixed)
+	}
+	return nil
+}
+
+// orphanDetail 은 orphan-index 의 설명이다. 같은 파일이 디스크에 다른 철자(대소문자·NFD)로 있으면 옛 철자의 색인일 뿐이라
+// "파일이 없다" 대신 디스크의 철자를 알린다 — 조치(-apply)는 같다: 옛 철자만 색인에서 빼고 파일·청크 JSONL 은 그대로 둔다.
+func (r *runner) orphanDetail(rel, index string) string {
+	if !ingest.LiveUnderOtherSpelling(r.Config.MetaRepoRoot, rel) {
+		return fmt.Sprintf("색인(%s)에는 있는데 파일이 없다", index)
+	}
+	_, onDisk, err := ingest.ResolveOnDisk(r.Config.MetaRepoRoot, rel)
+	if err != nil {
+		return fmt.Sprintf("색인(%s)에 옛 철자로 남았다 — 파일은 디스크에 다른 철자로 있다 (옛 철자만 색인에서 뺀다)", index)
+	}
+	return fmt.Sprintf("색인(%s)에 옛 철자로 남았다 — 파일은 디스크에 %s 로 있다 (옛 철자만 색인에서 뺀다)", index, onDisk)
 }
 
 func (r *runner) checkFile(ctx context.Context, f ingest.ScannedFile) error {
@@ -272,7 +293,7 @@ func (r *runner) orphanChunks(ctx context.Context) error {
 	return nil
 }
 
-// links 는 링크 대상이 hot 에도 cold 에도 없는 것을 찾는다.
+// links 는 링크 대상이 디스크에도 hot 에도 cold 에도 없는 것을 찾는다.
 func (r *runner) links(ctx context.Context) error {
 	rels := make([]string, 0, len(r.files))
 	for rel := range r.files {
@@ -289,23 +310,35 @@ func (r *runner) links(ctx context.Context) error {
 			team = d.Team
 		}
 		for _, l := range document.Links(string(b), rel) {
-			if _, ok := r.files[l.To]; ok {
-				continue
+			if err := r.checkLink(ctx, rel, team, l); err != nil {
+				return err
 			}
-			if !insideRoot(l.To) {
-				// meta-repo 밖(../ 로 시작)이나 절대 경로 — cold store 키가 될 수 없으니 깨진 링크로만 알린다
-				r.add(BrokenLink, rel, fmt.Sprintf("%s → %s 는 meta-repository 안의 경로가 아니다", l.Type, l.To), false)
-				continue
-			}
-			if _, ok, err := r.Cold.Get(ctx, cold.RawKey(team, l.To)); err != nil {
-				return fmt.Errorf("audit cold store: %w", err)
-			} else if ok {
-				continue // cold 로 간 문서를 가리킨다 — 정상
-			}
-			r.add(BrokenLink, rel, fmt.Sprintf("%s → %s 가 hot 에도 cold 에도 없다", l.Type, l.To), false)
 		}
 	}
 	return nil
+}
+
+// checkLink 는 rel 의 링크 하나가 살아 있는지 본다: hot(스캔한 파일) → 디스크 → cold store 순서.
+func (r *runner) checkLink(ctx context.Context, rel, team string, l model.Link) error {
+	if _, ok := r.files[l.To]; ok {
+		return nil
+	}
+	if !insideRoot(l.To) {
+		// meta-repo 밖(../ 로 시작)이나 절대 경로 — cold store 키가 될 수 없으니 깨진 링크로만 알린다
+		r.add(BrokenLink, rel, fmt.Sprintf("%s → %s 는 meta-repository 안의 경로가 아니다", l.Type, l.To), false)
+		return nil
+	}
+	if ingest.ExistsAsSpelled(r.Config.MetaRepoRoot, l.To) {
+		return nil // 디스크에 있다 — 색인 범위 밖(scenarios/·.claude/·examples/)이거나 게이트에 걸린 파일이어도 링크는 산다
+	}
+	_, ok, err := r.Cold.Get(ctx, cold.RawKey(team, l.To))
+	if err != nil {
+		return fmt.Errorf("audit cold store: %w", err)
+	}
+	if !ok {
+		r.add(BrokenLink, rel, fmt.Sprintf("%s → %s 가 디스크에도 hot 에도 cold 에도 없다", l.Type, l.To), false)
+	}
+	return nil // ok 면 cold 로 간 문서를 가리킨다 — 정상
 }
 
 func (r *runner) questions(_ context.Context) error {

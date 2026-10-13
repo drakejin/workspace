@@ -11,7 +11,7 @@ argument-hint: "[team]"
    scripts/memory/run.sh compaction-report -team T
    ```
 2. 리포트의 "충돌 후보" 묶음마다 원문(`source_path`)을 Read 해서 정의가 실제로 다른지 확인한다. 표현만 다르고 같은 정의면 넘어간다.
-3. **분리** — 유효하지 않은 정의를 `docs/knowledge/deprecated/{주제}.md` 로 떼어 낸다. frontmatter `doc_type: knowledge`, 본문에 "무엇이, 언제, 어떤 문서로 대체됐나"와 원문 경로를 적는다.
+3. **분리** — 유효하지 않은 정의를 `docs/knowledge/deprecated/{주제}.md` 로 떼어 낸다. frontmatter `doc_type: knowledge` 와 근거 `derived_from: [{path: <원문>, why: <무엇이 무효가 됐나>}]`, 본문에 "무엇이, 언제, 어떤 문서로 대체됐나"와 끝에 `## 출처`(원문 `source_path`)를 남긴다 — 근거가 없으면 6단계 감사가 `unsourced-fact` 로 알린다.
 4. **다시 쓰기** — "수명 확인" 목록의 문서 중 아직 유효한 사실·정의는 오늘 날짜로 `docs/knowledge/{주제}.md` 에 다시 쓴다.
    - frontmatter: `doc_type: knowledge`, `date: <오늘>`, 해당되면 `repo`. 기존 knowledge 를 개정하면 새 문서에 `supersedes: <구판 경로>`
    - 근거를 남긴다: frontmatter `derived_from: [{path: <원문>, why: <무엇을 가져왔나>}]` 와 본문 끝 `## 출처` 의 원문 `source_path`.

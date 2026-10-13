@@ -66,7 +66,7 @@ func init() {
 		"archive":           {usage: "<deprecate|undeprecate|purge|edit> [-team T] -by B -reason R [-superseded-by P] [-file F] <path>   cold 문서 조치", run: runArchive},
 		"graph":             {usage: "<neighbors [-depth N] <path> | entity <name> | stats | rebuild>   knowledge graph (Neo4j)", offline: true, run: runGraph},
 		"session-context":   {usage: "Claude Code SessionStart 훅 — stdin 의 훅 JSON 을 읽고 관련 메모리를 출력한다 (실패해도 조용히)", offline: true, run: runSessionContext},
-		"bench":             {usage: "-questions F [-model M] [-modes with,without] [-runs N]   memory-mcp 유무로 같은 질문을 claude 에 시켜 비교 (F 는 meta-repo 밖)", offline: true, run: runBench},
+		"bench":             {usage: "-questions F [-model M] [-modes with,without] [-runs N] [-max-turns N] [-mcp-script P]   memory-mcp 유무로 같은 질문을 claude 에 시켜 비교 (F 는 meta-repo 밖)", offline: true, run: runBench},
 	}
 }
 

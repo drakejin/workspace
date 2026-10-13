@@ -28,6 +28,7 @@
 | `main/{repo}/docs/` | 관리 대상 repository 자신의 문서 (그 repo 에 커밋) | knowledge |
 
 episodic 은 60일이 지나면 cold 로 간다. knowledge 는 노화하지 않고, 개정판의 `supersedes:` 선언으로만 밀린다.
+설계 배경·안내처럼 낡지 않는 문서는 어디에 두든 frontmatter 를 `doc_type: guide` 로 둔다 — knowledge 처럼 노화하지 않아, README 가 링크하는 문서가 cold 로 가며 링크가 깨지지 않는다.
 문서를 추가하면 같은 디렉토리의 `INDEX.md` 에 한 줄 요약을 추가한다.
 
 ## frontmatter
@@ -56,9 +57,9 @@ knowledge 문서는 근거(`derived_from` 또는 `## 출처` 절)를 반드시 �
 
 작성자·작성일을 본문에 쓰지 않는다 — git 이 정본이다.
 
-## 에피소드 기록 (머지 전 세 줄)
+## 에피소드 기록 (다섯 줄)
 
-결정이 있었던 작업은 문서 끝에 다섯 줄을 남긴다. 배경은 에이전트가, 가운데 세 줄은 사람이 쓴다. 결과는 비워 둔다.
+결정이 있었던 작업은 문서 끝에 다섯 줄을 남긴다. 배경은 에이전트가 쓰고, 가운데 세 줄(선택지와 결정·이유·그때의 생각)은 사람이 머지 전에 쓴다. 결과는 비워 둔다.
 
 ```markdown
 ## 에피소드
@@ -71,7 +72,7 @@ knowledge 문서는 근거(`derived_from` 또는 `## 출처` 절)를 반드시 �
 
 ## 주간 compaction
 
-주 1회 `/compaction` (.claude/commands/compaction.md). 지우지 않고 다시 쓴다.
+주 1회 `/compaction` ([.claude/commands/compaction.md](./.claude/commands/compaction.md)). 지우지 않고 다시 쓴다.
 
 ## 이 규칙의 변경 내역
 
@@ -83,3 +84,4 @@ knowledge 문서는 근거(`derived_from` 또는 `## 출처` 절)를 반드시 �
 | 2026-10-13 | 메모리 층 도입. search_memory 선행, 추론 없이, 저장 위치·frontmatter, 에피소드 다섯 줄, 주간 compaction, worktree 는 `main/{repo}/.worktrees/` |
 | 2026-10-13 | knowledge graph. `related_docs` 로 근거 따라가기, frontmatter `derived_from`·`relates`, knowledge 는 근거 필수 |
 | 2026-10-13 | MCP 서버 이름 `drakejin-workspace-memory-mcp`. 검색 필터(날짜·범위·주제·프로젝트)와 `search_filters`, frontmatter `topic`·`project` |
+| 2026-10-13 | 낡지 않는 설계·안내 문서는 `doc_type: guide`. 에피소드 절 제목을 "다섯 줄" 로 (사람이 쓰는 가운데 세 줄은 그대로 머지 전) |
