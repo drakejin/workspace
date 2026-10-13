@@ -135,3 +135,34 @@ func TestDocsDoNotOverclaim(t *testing.T) {
 		t.Errorf("R4-ops-scripts-3 (2): make init 줄이 실패 시 exit 1 을 밝히지 않는다: %q", initRow)
 	}
 }
+
+// R5-final-query-1 · R5-final-query-2 · R5-me-1 · R5-final-daemon-1 · R5-final-daemon-2 · R5-final-docs-1 · R5-final-docs-2 ·
+// R5-final-docs-4: 마지막 검토에서 나온, 문서가 동작보다 많이 (또는 다르게) 약속하던 문장.
+func TestDocsMatchBehaviourAfterFinalReview(t *testing.T) {
+	checkFacts(t, []fact{
+		// 겹침에서 +00:00 쪽을 고르는 규칙은 적힌(시간대 없는) 벽시계에만 맞다 — date math 의 더하기·반올림은 계산하던 시각의 오프셋을 잇는다
+		{id: "R5-final-query-1", file: "GUIDE.md",
+			must:    []string{"계산하던 시각의 오프셋을 잇는다", "`2026-10-24T01:30||+1d`"},
+			mustNot: []string{"시간대 없는 시각과 date math 는 서머타임이 바뀌는 날도 OpenSearch(java.time)처럼 읽는다 — 없는 시각(틈)은"}},
+		// 시간대 규칙은 이 머신(Go)의 tzdata 로 읽는다 — OpenSearch 의 JDK 와 판이 다른 시간대는 바뀌는 날 근처에서 다를 수 있다
+		{id: "R5-final-query-2 · R5-me-1", file: "GUIDE.md", must: []string{"tzdata", "Europe/Chisinau", "Africa/Casablanca"}},
+		// 이 판 전에 복원해 둔 달은 데몬이 고치지 않는다 — restore 를 다시 해야 빈 text 가 지워진다
+		{id: "R5-final-daemon-2", file: "GUIDE.md", must: []string{"이 판 전에 복원해 둔 달"}},
+		// 예전 tier 잡의 checkout 이 없어졌으면 어느 install·uninstall 에서든 내린다
+		{id: "R5-final-docs-1", file: "README.md", must: []string{"checkout 이 없어졌으면"}},
+		// tier 는 git 이 다루는 meta-repo 에서만 git rm 한다 (커밋하지 않은 원본은 남기고, git 이 다루지 않으면 파일을 지운다)
+		{id: "R5-final-docs-4", file: ".claude/commands/compaction.md",
+			must:    []string{"커밋된 그대로인 원본만 `git rm`"},
+			mustNot: []string{"hot 원본 제거(`git rm`)."}},
+		{id: "R5-final-docs-4", file: "GUIDE.md", must: []string{"(파일 삭제 — git 이 다루지 않는 meta-repo)"}},
+	})
+	// §2.2 의 출력 출처: 이 레포에서 부르면 이름·경로만 바뀌는 것이 아니다 — 수(docs·chunks·memory indices)·pid·시각도 다르다
+	start := guideSection(t, guideStart)
+	if !strings.Contains(start, "수(docs·chunks·`memory indices`)·pid·시각은") || strings.Contains(start, "경로 자리에 이 레포의 경로가 나온다.") {
+		t.Errorf("R5-final-docs-2: §2.2 의 출력 출처가 이름·경로만 바뀐다고 한다:\n%s", start)
+	}
+	// status 의 마지막 사이클 줄은 cold_kept 도 보인다 (데몬 로그 줄과 같은 칸)
+	if line := lineWith(t, guideSection(t, guideStatus), "[status] last cycle:"); !strings.Contains(line, "cold_owned=0 cold_kept=0 ") {
+		t.Errorf("R5-final-daemon-1: §2.3 status 의 last cycle 줄에 cold_kept 가 없다: %q", line)
+	}
+}

@@ -65,7 +65,8 @@ Claude Code 가 파일 트리를 뒤지는 대신 `search_memory` 로 묻게 하
 frontmatter 오류처럼 고치면 되는 실패는 색인에 있던 판을 그대로 두고 `fail` 로 알린다.
 빈 파일·frontmatter 만 있는 `.md` 도 빈 청크 하나로 색인한다 — 한 번 쓰면 다음 사이클은 건너뛴다. 본문이 없으니 판정·증류 대상은 아니고,
 검색 결과(질의어 검색·필터로만 가져오기·세션 훅)에도 나오지 않는다 (`search_filters` 의 수에는 든다).
-예전 판은 빈 청크에 빈 text(`""`)를 써 목록에 빈 결과로 나왔다 — 데몬이 그 판의 문서를 한 번 다시 쓰고, `restore_cold` 는 복원한 달의 빈 text 를 지운 뒤 검색에 붙인다.
+예전 판은 빈 청크에 빈 text(`""`)를 써 목록에 빈 결과로 나왔다 — 데몬이 그 판의 문서를 한 번 다시 쓰고, `restore_cold` 는 복원한 달의 빈 text 를 지운 뒤 검색에 붙인다(합치다 멈춰도 이미 열린 복원본의 빈 text 는 지운다).
+이 판 전에 복원해 둔 달(`list-cold` 에 `[현재 복원됨]` 으로 나온다)은 데몬이 고치지 않으므로 `scripts/memory/run.sh restore <인덱스>` 를 한 번 다시 한다 — 이미 복원된 달은 빠진 스냅샷 문서만 더하고 빈 text 를 지운다.
 
 문서의 정체(`source_path`)는 디스크에 있는 철자를 유니코드 NFC 로 맞춘 경로다. macOS(APFS)는 대소문자와 NFC/NFD 를 구분하지 않아
 철자만 다른 경로가 같은 파일을 연다 — `ingest_path` 에 `docs/knowledge/LIMITS.md`(실제는 `limits.md`)나 Finder 가 NFD 로 만든 한글 이름을
@@ -109,7 +110,8 @@ make memory-daemon-start
 ```
 
 이 절과 §2.3 의 출력은 이 레포를 시나리오 사본(`scenarios/setup.sh guide-status` 가 만든 임시 meta-repo — workspace·팀 `scn-guide-status`)에 옮겨
-최초 색인(`scripts/memory-daemon/run.sh once`) 뒤 start → start → status → stop 을 한 번에 돌려 찍은 것이다. 이 레포에서 부르면 `scn-guide-status` 자리에 `workspace`, 경로 자리에 이 레포의 경로가 나온다.
+최초 색인(`scripts/memory-daemon/run.sh once`) 뒤 start → start → status → stop 을 한 번에 돌려 찍은 것이다. 이 레포에서 부르면 `scn-guide-status` 자리에 `workspace`, 경로 자리에 이 레포의 경로가 나오고,
+수(docs·chunks·`memory indices`)·pid·시각은 그 레포의 색인과 실행을 따라 다르다 (사본은 문서가 모두 knowledge 라 인덱스가 하나뿐이다 — §2.3).
 
 ```
 [memory-daemon] launchd: com.drakejin.memory.scn-guide-status.daemon (workspace=scn-guide-status, root=/var/folders/q8/vd3kytp54ns729xr6nb5ztkc0000gn/T/drakejin-memory-scenario-guide-status — 로그인 때 다시 켜고, 죽으면 다시 띄운다)
@@ -169,7 +171,7 @@ launchd 가 없는 머신은 nohup 백그라운드라(`[memory-daemon] backgroun
 [status] graph: 14 docs, 0 entities, 29 edges (bolt://localhost:7689)
 [status] daemon: running pid=84558 since 2026-10-13T08:30:18.01851Z, cycles=1
 [status] heartbeat: 10s ago (interval 60s)
-[status] last cycle: 2026-10-13T08:30:18.056057Z trigger=boot scanned=11 indexed=0 stat_updated=0 removed=0 skipped=0 failed=0 cold_owned=0 took=14ms
+[status] last cycle: 2026-10-13T08:30:18.056057Z trigger=boot scanned=11 indexed=0 stat_updated=0 removed=0 skipped=0 failed=0 cold_owned=0 cold_kept=0 took=14ms
 [status] last graph: docs=14 entities=0 edges=29
 [status] judge: on, 답을 기다리는 질문 0건
 [status] distill: off, cache 0건, 대기 0건
@@ -357,7 +359,10 @@ team=demo · project=order-api, time_range=2026-10-01~ · 문서 3건 (필터, �
 날짜(`2026-10-01`, `2026-10`, `2026`), 시각(`2026-10-01T09`, `2026-10-01T09:00:00.5+09:00`, 시간대 생략 가능), epoch 밀리초, date math(`now-30d`, `now-d`, `now-7d/d`, `2026-10-01||+1M`).
 OpenSearch 가 읽더라도 드문 꼴(쉼표 소수 `…:00,5`, 초까지 적은 오프셋 `+09:00:00`, 소수 epoch, 끝의 `T`, 다섯 자리 연도, 오프셋 뒤의 `Z`)과 없는 날(`2026-02-30` — OpenSearch 는 `-to` 에서 그달 끝으로 당긴다)은 거부한다.
 epoch 밀리초는 시간대를 입히지 않은 그 시각이다 — 네 자리 수(`2026`, `2026||+1M`)는 OpenSearch 처럼 epoch 가 아니라 연도로 읽는다 (OpenSearch 는 epoch 에도 `time_zone` 을 입혀 서울이면 9시간 이르게 읽으므로 같은 시각의 UTC 표기로 바꿔 보낸다 — 뒤의 date math 는 다른 경계처럼 `MEMORY_TIME_ZONE` 에서 계산한다).
-시간대 없는 시각과 date math 는 서머타임이 바뀌는 날도 OpenSearch(java.time)처럼 읽는다 — 없는 시각(틈)은 틈 길이만큼 늦게, 두 번 오는 시각(겹침)은 +00:00 이 그중 하나면 그쪽(런던·리스본의 10월 01:30 은 GMT), 아니면 앞의 것(베를린 02:30 은 CEST)으로.
+서머타임이 바뀌는 날도 OpenSearch(java.time)처럼 읽는다 — 시간대 없이 적은 시각이 없는 시각(틈)이면 틈 길이만큼 늦게, 두 번 오는 시각(겹침)이면 +00:00 이 그중 하나면 그쪽(런던·리스본의 10월 01:30 은 GMT), 아니면 앞의 것(베를린 02:30 은 CEST)으로.
+date math 의 더하기·반올림이 틈·겹침에 닿으면 이 규칙이 아니라 계산하던 시각의 오프셋을 잇는다 — 런던 `2026-10-24T01:30||+1d` 는 BST 의 01:30, `2026-10-26T01:30||-1d` 는 GMT 의 01:30 이다.
+다만 경계를 읽어 거르는 검증(뒤집힌 범위·알림에 보이는 시각)은 이 머신의 시간대 규칙(tzdata — Go 가 읽는 시스템 zoneinfo)으로 하므로, OpenSearch 의 JDK 와 tzdata 판이 다른 시간대(규칙이 최근에 바뀐 Africa/Casablanca·Africa/El_Aaiun, Europe/Chisinau 등)는
+바뀌는 날 근처에서 OpenSearch 와 다르게 읽을 수 있다 — 실제로 거르는 범위는 OpenSearch 가 정한다.
 시각만 적은 `-to`(`2026-10-04T02`)는 빠진 칸을 끝(`02:59:59.999`)으로 채운 벽시계를 같은 규칙으로 읽는다 — 30분에 바뀌는 시간대(로드하우)도 OpenSearch 와 같다.
 `yesterday` 같은 값이나 뒤집힌 범위(`-from` 이 `-to` 보다 늦다 — 날짜·시각·date math 가 섞여도 OpenSearch 처럼 계산한다)는 OpenSearch 에 묻기 전에
 무엇이 틀렸는지(뒤집혔으면 두 경계를 읽은 시각까지) 알리며 거부한다. 연·월만 적은 `-to 2026-10` 은 OpenSearch 규칙대로 10월 1일 끝까지다 — 달 전체는 `-to '2026-10||/M'`.
@@ -467,9 +472,10 @@ episodic 과 같이 cold 로 간다 — 리포트(episodic 만 보는 수명 확
 지우기 전에 cold store 에 같은 내용(sha)이 있는지 확인하므로 그 사이에 고친 문서는 지우지 않는다. git 이 meta-repo 아래 파일을 다루면(meta-repo 가 git 레포의
 꼭대기이거나, 바깥 레포가 그 아래 파일을 추적한다) `git rm` 으로 지워 커밋만 하면 된다 — 지운 원본은 git 히스토리에도 남는다.
 git 이 되살릴 수 없는 원본 — 커밋하지 않았거나 커밋 뒤 고친(add 만 한) 파일 — 은 지우지 않고 `- hot 에 남김: … (git 에 커밋된 내용이 아니다)` 로 알린다
-(그 달의 원본만 남았으면 결정이 `kept-uncommitted`). 커밋하면 다음 tier 가 뺀다 — 그때까지 데몬 로그에는 `cold_owned` 가 아니라 `cold_kept` 로 찍힌다.
+(그 달의 원본만 남았으면 결정이 `kept-uncommitted`). 커밋하면 다음 tier 가 뺀다 — 그때까지 데몬 로그와 status 의 `last cycle` 줄에는 `cold_owned` 가 아니라 `cold_kept` 로 찍히고, status 는 커밋하라는 `할 일` 을 보인다.
 git 이 다루지 않는 meta-repo(git 레포가 아니거나, 바깥 레포 — 홈 디렉토리의 dotfiles 레포 등 — 가 그 아래를 하나도 추적하지 않는다)는 되살릴 히스토리가
-처음부터 없으므로 cold store 확인만으로 지운다 — 그 원본은 cold store 와 스냅샷에만 남는다.
+처음부터 없으므로 cold store 확인만으로 지운다 — 그 원본은 cold store 와 스냅샷에만 남는다. 이때 tier 의 끝줄은 `git rm`·`git commit` 대신
+`hot 원본 N개를 cold 로 넘겼습니다 (파일 삭제 — git 이 다루지 않는 meta-repo). 원본은 이제 cold store raw 와 스냅샷에만 있습니다.` 다.
 git 이 레포를 거부하거나(소유자가 다른 디렉토리 — `detected dubious ownership`) 돌지 않으면 커밋됐는지 알 수 없어 원본을 지우지 않고 멈춘다:
 `[tier] 중간에 실패했습니다 — 그 전에 한 일:` 아래에 이미 cold 로 보낸 인덱스가, 에러에 `git 으로 … 를 확인하지 못해 hot 원본을 지우지 않았습니다` 와 git 의 안내
 (`git config --global --add safe.directory …`)가 나오고 exit 1 이다. 남은 원본은 데몬이 남긴 원본으로 센다(`cold_kept`), git 을 고친 뒤 tier 를 다시 돌리면 치운다(`pruned`).

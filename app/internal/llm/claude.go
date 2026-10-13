@@ -64,6 +64,11 @@ func (c *claude) Ask(ctx context.Context, in Input) (json.RawMessage, bool) {
 		"--no-session-persistence",
 		"--setting-sources", "",
 	}, in.User)
+	if err != nil && ctx.Err() != nil {
+		// 호출한 쪽이 끊었다(데몬 종료) — LLM 이 답하지 못한 것(폴백)이 아니다. 판정은 그 쌍을 질문으로 만들지 않고 대기분으로 남긴다
+		c.log("[%s] 로컬 claude 호출이 끊겼습니다 — 답 없이 돌아간다: %v", in.Tag, ctx.Err())
+		return nil, false
+	}
 	if err != nil {
 		c.log("[%s] 로컬 claude 호출 실패 — 폴백: %v", in.Tag, err)
 		return nil, false

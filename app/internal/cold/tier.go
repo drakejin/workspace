@@ -44,6 +44,8 @@ type TierDecision struct {
 	Snapshot     string
 	RemovedFiles []string // cold 로 넘어가 hot 에서 뺀 원본
 	KeptFiles    []string // cold 로 넘어갔지만 git 이 되살릴 수 없어 hot 에 남긴 원본 (커밋하면 다음 tier 가 뺀다)
+	// GitRemoved 면 RemovedFiles 를 git rm 으로 지웠다(커밋해야 한다). 아니면 git 이 다루지 않는 meta-repo 라 파일만 지웠다
+	GitRemoved bool
 }
 
 // TierOptions 는 tier 실행 옵션이다.
@@ -214,7 +216,7 @@ func moveToCold(ctx context.Context, c opensearch.Client, store Store, cfg confi
 	}
 	d.Action = TierMoved
 	if !opt.KeepFiles {
-		if d.RemovedFiles, d.KeptFiles, err = removeHotOriginals(ctx, store, cfg.MetaRepoRoot, docs); err != nil {
+		if d.RemovedFiles, d.KeptFiles, d.GitRemoved, err = removeHotOriginals(ctx, store, cfg.MetaRepoRoot, docs); err != nil {
 			return d, err
 		}
 	}
@@ -310,13 +312,13 @@ func pruneArchived(ctx context.Context, c opensearch.Client, store Store, cfg co
 		if err != nil {
 			return out, err
 		}
-		removed, kept, err := removeHotOriginals(ctx, store, cfg.MetaRepoRoot, docs)
+		removed, kept, byGit, err := removeHotOriginals(ctx, store, cfg.MetaRepoRoot, docs)
 		if err != nil {
 			return out, err
 		}
 		switch {
 		case len(removed) > 0:
-			out = append(out, TierDecision{Index: name, Action: TierPruned, RemovedFiles: removed, KeptFiles: kept})
+			out = append(out, TierDecision{Index: name, Action: TierPruned, RemovedFiles: removed, KeptFiles: kept, GitRemoved: byGit})
 		case len(kept) > 0:
 			out = append(out, TierDecision{Index: name, Action: TierKeptUncommitted, KeptFiles: kept})
 		}
@@ -411,19 +413,20 @@ func onDiskExists(root, rel string) bool {
 // git 레포면 git 이 되살릴 수 있는 원본(추적하고 HEAD 와 같다)만 git rm 으로 지워 다음 커밋에 들어가게 하고, 추적하지 않거나
 // 커밋 뒤 고친 원본은 남겨 kept 로 알린다 — 지우면 그 내용은 .gitignore 된 cold store 에만 남는다. git 레포가 아니면
 // 되살릴 히스토리가 처음부터 없으므로 cold store raw 확인만으로 지운다. 파일은 디스크의 철자로 열고 git 에 넘긴다 (NFD 이름).
-func removeHotOriginals(ctx context.Context, store Store, root string, docs []sourceDoc) (removed, kept []string, err error) {
+// byGit 은 git 으로 다루는 meta-repo 라 removed 를 git rm 으로 지웠다는 뜻이다 (커밋해야 한다).
+func removeHotOriginals(ctx context.Context, store Store, root string, docs []sourceDoc) (removed, kept []string, byGit bool, err error) {
 	if len(docs) == 0 {
-		return nil, nil, nil
+		return nil, nil, false, nil
 	}
 	inGit, err := gitWorkTree(ctx, root)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	for _, d := range docs {
 		disk := document.OnDiskRel(root, d.sourcePath)
 		ok, err := verifiedCopy(ctx, store, root, d, disk)
 		if err != nil {
-			return removed, kept, err
+			return removed, kept, inGit, err
 		}
 		if !ok {
 			continue
@@ -433,11 +436,11 @@ func removeHotOriginals(ctx context.Context, store Store, root string, docs []so
 			continue
 		}
 		if err := removeOriginal(ctx, root, disk, inGit); err != nil {
-			return removed, kept, err
+			return removed, kept, inGit, err
 		}
 		removed = append(removed, d.sourcePath)
 	}
-	return removed, kept, nil
+	return removed, kept, inGit, nil
 }
 
 // keptForGit 는 tier 가 cold 로 간 원본(디스크의 철자 disk)을 git 때문에 hot 에 남기는가다 — git 으로 다루는 meta-repo 인데
@@ -455,6 +458,32 @@ func KeptByGit(ctx context.Context, root, rel string) (bool, error) {
 		return true, err
 	}
 	return keptForGit(ctx, root, document.OnDiskRel(root, rel), inGit), nil
+}
+
+// gitStateNone 은 root 가 git 레포 안에 없다는 GitState 값이다.
+const gitStateNone = "no-git"
+
+// GitState 는 KeptByGit 의 답을 바꿀 수 있는 git 상태다 — HEAD 커밋과 index 파일(무엇을 추적하는가)의 크기·수정 시각. 원본의
+// 내용(stat)과 이 값이 그대로면 KeptByGit 의 답도 그대로라, 데몬은 사이클마다 원본마다 git 을 다시 부르지 않고 이 값만 견준다.
+// git 레포가 아니면 그렇다는 값이고, git 이 돌지 않거나 레포를 거부하면 KeptByGit 처럼 오류다.
+func GitState(ctx context.Context, root string) (string, error) {
+	out, err := gitOutput(ctx, root, "rev-parse", "--git-path", "index")
+	if err != nil && strings.Contains(out, notAGitRepository) {
+		return gitStateNone, nil
+	}
+	if err != nil {
+		return "", gitCheckError(root, err, out)
+	}
+	head, _ := gitOutput(ctx, root, "rev-parse", "-q", "--verify", "HEAD") // 커밋이 아직 없으면 빈 값
+	index := strings.TrimSpace(out)
+	if !filepath.IsAbs(index) {
+		index = filepath.Join(root, index) // --git-path 는 root 에서 본 상대 경로일 수 있다
+	}
+	stamp := "no-index" // 아직 아무것도 add 하지 않았다
+	if info, err := os.Stat(index); err == nil {
+		stamp = fmt.Sprintf("%d/%d", info.Size(), info.ModTime().UnixNano())
+	}
+	return strings.TrimSpace(head) + " " + stamp, nil
 }
 
 // verifiedCopy 는 d 가 tier 가 빼는 원본이고, 지금 파일(디스크의 철자 disk) 내용과 cold store raw 가 모두 색인에 있던 내용(sha)과

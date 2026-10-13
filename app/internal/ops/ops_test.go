@@ -79,6 +79,23 @@ func TestRenderStatusRunning(t *testing.T) {
 	}
 }
 
+// R5-final-daemon-1: status 의 마지막 사이클 줄은 cold_kept(cold 로 갔지만 git 에 커밋된 내용이 아니라 tier 가 hot 에 남긴 원본)도
+// 보이고, 있으면 커밋하라고 안내한다 — cold_owned 는 그런 원본을 세지 않으므로 status 만 보면 cold_owned=0 이 전부로 보였다.
+func TestRenderStatusShowsColdKept(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{MetaRepoRoot: root, Workspace: "ws"}
+	sum := state.CycleSummary{Scanned: 3, ColdKept: 3}
+	_ = state.WriteStatus(root, state.Status{LastCycle: &state.CycleRecord{Trigger: "timer", At: "a", Summary: &sum}})
+
+	out := RenderStatus(context.Background(), cfg, fakeProbe{}, time.Now())
+
+	for _, want := range []string{"cold_owned=0 cold_kept=3 ", "hot 에 남긴 cold 원본 3개", "커밋하면 다음 tier 가"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("%q 없음:\n%s", want, out)
+		}
+	}
+}
+
 func TestQuestionsAndAnswer(t *testing.T) {
 	root := t.TempDir()
 	if out, _ := RenderQuestions(root); !strings.Contains(out, "없습니다") {
@@ -156,16 +173,33 @@ func TestCLIUsage(t *testing.T) {
 
 func TestRenderTier(t *testing.T) {
 	out := renderTier([]cold.TierDecision{
-		{Index: "mem-a-2026.06", Action: cold.TierMoved, NewestEvent: "2026-06-15", RemovedFiles: []string{"docs/a.md"}},
+		{Index: "mem-a-2026.06", Action: cold.TierMoved, NewestEvent: "2026-06-15", RemovedFiles: []string{"docs/a.md"}, GitRemoved: true},
 		{Index: "mem-a-2026.10", Action: cold.TierKept},
 	})
-	for _, want := range []string{"tiered           mem-a-2026.06", "hot 에서 뺌: docs/a.md", "newest=-", "git commit"} {
+	for _, want := range []string{"tiered           mem-a-2026.06", "hot 에서 뺌: docs/a.md", "newest=-", "(git rm)", "git commit"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("%q 없음:\n%s", want, out)
 		}
 	}
 	if renderTier(nil) != "대상 인덱스 없음" {
 		t.Error("빈 결과")
+	}
+}
+
+// R5-final-docs-4: git 이 다루지 않는 meta-repo 에서는 tier 가 원본 파일을 그냥 지운다 — git rm·git commit 을 말하지 않고,
+// 원본이 cold store 와 스냅샷에만 남는다고 알린다.
+func TestRenderTierOutsideGitDoesNotAskForACommit(t *testing.T) {
+	out := renderTier([]cold.TierDecision{
+		{Index: "mem-a-2026.06", Action: cold.TierMoved, NewestEvent: "2026-06-15", RemovedFiles: []string{"docs/a.md"}},
+	})
+
+	if strings.Contains(out, "git rm") || strings.Contains(out, "git commit") {
+		t.Errorf("git 이 다루지 않는 meta-repo 에 git rm·commit 을 말한다:\n%s", out)
+	}
+	for _, want := range []string{"hot 원본 1개를 cold 로 넘겼습니다", "git 이 다루지 않는 meta-repo", "cold store raw 와 스냅샷에만"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("%q 없음:\n%s", want, out)
+		}
 	}
 }
 

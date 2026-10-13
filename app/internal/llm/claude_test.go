@@ -98,6 +98,28 @@ func TestAskGivesUpWhenCancelled(t *testing.T) {
 	}
 }
 
+// R5-final-daemon-3: 호출한 쪽이 끊은 호출(데몬 종료)은 폴백이 아니다 — 판정은 그 쌍을 질문(폴백)으로 만들지 않고 대기분으로 남긴다.
+// 로그도 '폴백' 이라 하지 않는다. 이 호출의 시간 상한(MEMORY_LLM_TIMEOUT_MS)에 걸린 것은 그대로 폴백이다.
+func TestAskDoesNotCallACancelledCallAFallback(t *testing.T) {
+	bin := fakeClaude(t, `echo '{"subtype":"success","structured_output":{"ok":true}}'`)
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	var logs []string
+
+	if _, ok := asker(bin, &logs).Ask(cancelled, input); ok || len(logs) != 1 {
+		t.Fatalf("끊긴 호출은 답 없이 한 줄을 남긴다: ok=%v logs=%v", ok, logs)
+	}
+	if strings.Contains(logs[0], "폴백") || !strings.Contains(logs[0], "끊") {
+		t.Errorf("호출한 쪽이 끊은 호출을 폴백이라 한다: %q", logs[0])
+	}
+
+	logs = nil
+	timedOut := New(config.LLM{ClaudeBin: bin, Model: "opus", Timeout: time.Nanosecond}, func(f string, a ...any) { logs = append(logs, f) })
+	if _, ok := timedOut.Ask(context.Background(), input); ok || len(logs) != 1 || !strings.Contains(logs[0], "폴백") {
+		t.Errorf("시간 상한에 걸린 호출은 폴백이다: ok=%v logs=%v", ok, logs)
+	}
+}
+
 func TestParseEnvelope(t *testing.T) {
 	env, ok := ParseEnvelope("{\"subtype\":\"a\"}\nnoise\n{\"subtype\":\"b\"}")
 	if !ok || env.Subtype != "b" {

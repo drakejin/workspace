@@ -139,17 +139,44 @@ func TestRestoreDropsEmptyTextBeforeSearch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dropped, searchable := -1, callIndex(fake, http.MethodPost, "/_aliases")
-	for i, c := range fake.calls {
+	dropped, searchable := dropEmptyTextCall(fake), callIndex(fake, http.MethodPost, "/_aliases")
+	if dropped < 0 || searchable < 0 || dropped > searchable {
+		t.Errorf("빈 text 지우기(%d)가 alias(%d)보다 먼저여야 한다 — 요청 = %+v", dropped, searchable, fake.calls)
+	}
+}
+
+// dropEmptyTextCall 은 restoreMonth 의 빈 text 를 지우는 요청의 순번이다 (없으면 -1).
+func dropEmptyTextCall(f *fakeOS) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, c := range f.calls {
 		if c.Method != http.MethodPost || c.Path != "/"+restoreMonth+"/_update_by_query" {
 			continue
 		}
 		if b, _ := json.Marshal(c.Body); strings.Contains(string(b), `remove('text')`) {
-			dropped = i
+			return i
 		}
 	}
-	if dropped < 0 || searchable < 0 || dropped > searchable {
-		t.Errorf("빈 text 지우기(%d)가 alias(%d)보다 먼저여야 한다 — 요청 = %+v", dropped, searchable, fake.calls)
+	return -1
+}
+
+// R5-final-daemon-2: 이미 alias 가 붙은 복원본(예전 판의 복원본)에 합치다 멈춰도, 합치며 더한 예전 판 문서의 빈 text 를 지운다 —
+// 그 복원본은 이미 검색에 붙어 있어, 지우지 않으면 restore 를 다시 할 때까지 그 문서가 목록에 빈 결과로 나온다.
+func TestRestoreDropsEmptyTextWhenMergeFails(t *testing.T) {
+	boom := &opensearch.Error{Status: http.StatusInternalServerError, Reason: "boom", Op: "POST"}
+	cl := &restoreCluster{mergeErr: boom}
+	cl.open.Store(true)
+
+	fake, err := runRestore(t, cl)
+
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v", err)
+	}
+	if dropEmptyTextCall(fake) < 0 {
+		t.Errorf("합치다 멈춘 복원본의 빈 text 를 지우지 않았다 — 요청 = %+v", fake.calls)
+	}
+	if !strings.Contains(err.Error(), "빈 text") {
+		t.Errorf("오류가 빈 text 를 지웠는지 말하지 않는다: %v", err)
 	}
 }
 

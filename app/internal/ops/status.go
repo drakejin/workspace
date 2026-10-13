@@ -246,13 +246,16 @@ func statusDaemon(s *screen, cfg config.Config, status *state.Status, now time.T
 		if c.Partial {
 			flags += " PARTIAL-SCAN"
 		}
-		s.add("last cycle: %s trigger=%s scanned=%d indexed=%d stat_updated=%d removed=%d skipped=%d failed=%d cold_owned=%d took=%dms%s",
-			last.At, last.Trigger, c.Scanned, c.Indexed, c.StatUpdated, c.Removed, c.Skipped, c.Failed, c.ColdOwned, c.TookMs, flags)
+		s.add("last cycle: %s trigger=%s scanned=%d indexed=%d stat_updated=%d removed=%d skipped=%d failed=%d cold_owned=%d cold_kept=%d took=%dms%s",
+			last.At, last.Trigger, c.Scanned, c.Indexed, c.StatUpdated, c.Removed, c.Skipped, c.Failed, c.ColdOwned, c.ColdKept, c.TookMs, flags)
 		if c.Failed > 0 {
 			s.hint(fmt.Sprintf("색인에 실패한 파일 %d개 — 데몬 로그의 '[reconcile] fail' 줄을 보세요 (다음 사이클이 다시 시도한다)", c.Failed))
 		}
 		if c.ColdOwned > 0 {
 			s.hint(fmt.Sprintf("cold 로 넘어간 hot 원본 %d개 — 'scripts/memory/run.sh tier' 가 정리한다", c.ColdOwned))
+		}
+		if c.ColdKept > 0 {
+			s.hint(fmt.Sprintf("git 에 커밋된 내용이 아니라 tier 가 hot 에 남긴 cold 원본 %d개 — 커밋하면 다음 tier 가 정리한다", c.ColdKept))
 		}
 	}
 	if last.Graph != "" {

@@ -62,6 +62,8 @@ type Reconciler struct {
 	mu sync.Mutex
 	// coldOwned 는 cold 가 소유한 hot 파일이다. stat 이 그대로면 다음 사이클에 다시 읽지 않는다.
 	coldOwned map[string]coldOwnedFile
+	// gitWarned 는 마지막으로 알린, 남긴 원본을 git 으로 확인하지 못한 까닭이다 (같은 까닭은 되풀이하지 않는다)
+	gitWarned string
 
 	flagsMu    sync.RWMutex
 	desired    map[string]string // 마지막으로 계산한 superseded_by (재색인 때 숨김 표시와 위치 유지)
@@ -76,10 +78,12 @@ type statKey struct {
 func statOf(f ingest.ScannedFile) statKey { return statKey{f.MtimeMs, f.Size} }
 
 // coldOwnedFile 은 cold 소유로 본 hot 파일이다. kept 면 git 이 되살릴 수 없어(커밋하지 않았거나 커밋 뒤 고쳤다) tier 가 hot 에 남기는
-// 원본이다 — 다음 tier 가 정리할 원본(cold_owned)과 따로 센다(cold_kept).
+// 원본이다 — 다음 tier 가 정리할 원본(cold_owned)과 따로 센다(cold_kept). gitState 는 kept 를 git 으로 정한 때의 git 상태다
+// (cold.GitState — 비면 아직 git 으로 정하지 못했다).
 type coldOwnedFile struct {
-	stat statKey
-	kept bool
+	stat     statKey
+	kept     bool
+	gitState string
 }
 
 // SupersededBy 는 마지막으로 계산한 숨김 표시(superseded_by, deprecated)다. Indexer 의 Deps.SupersededBy 로 꽂는다 — 사이클이 파일을
@@ -135,6 +139,8 @@ type cycleState struct {
 	restored map[string]ingest.IndexedDoc
 	// partial 이면 스캔이 일부만 됐다 — 보지 못한 파일을 지워진 것으로 보면 안 된다.
 	partial bool
+	// git 은 tier 가 hot 에 남긴 cold 원본을 다시 볼 때 이 사이클에 한 번만 읽는 git 상태다
+	git *gitProbe
 }
 
 // Once 는 hot(git working tree)과 인덱스를 맞춘다. 매 사이클이 곧 풀 싱크라 첫 기동 분기가 없다.
@@ -209,7 +215,7 @@ func (r *Reconciler) loadState(ctx context.Context) (cycleState, error) {
 		r.Log("[reconcile] 숨김 표시의 정본(원장)을 읽지 못했습니다 — 지난 표시를 이어 다시 쓴다: %v", err)
 		r.keepFlags(existing)
 	}
-	return cycleState{indices: indices, existing: existing, owner: cold.NewOwnership(archived, r.Cold), restored: restored}, nil
+	return cycleState{indices: indices, existing: existing, owner: cold.NewOwnership(archived, r.Cold), restored: restored, git: &gitProbe{}}, nil
 }
 
 // managedIndices 는 이 workspace 팀의 인덱스 가운데 데몬이 맞추는 것이다 (restore_cold 로 복원한 인덱스는 뺀다). 그래프·증류 백필·
@@ -270,7 +276,7 @@ func (r *Reconciler) syncFile(ctx context.Context, f ingest.ScannedFile, st cycl
 		return fileResult{}, nil
 	}
 	if c, ok := r.coldOwned[f.Rel]; !known && ok && c.stat == statOf(f) {
-		r.countColdOwned(ctx, f, c, sum) // 지난 사이클에 cold 소유로 본 stat 그대로다
+		r.countColdOwned(ctx, f, c, st.git, sum) // 지난 사이클에 cold 소유로 본 stat 그대로다
 		return fileResult{}, nil
 	}
 	// Prepare 가 게이트(바이너리·크기 — ingest_path 와 같은 규칙)를 거친다
@@ -288,7 +294,7 @@ func (r *Reconciler) syncFile(ctx context.Context, f ingest.ScannedFile, st cycl
 		return fileResult{entry: entry}, err
 	}
 	if !known {
-		owned, err := r.claimColdOwned(ctx, f, prepared.Built, st.owner, sum)
+		owned, err := r.claimColdOwned(ctx, f, prepared.Built, st, sum)
 		if err != nil || owned {
 			return fileResult{}, err
 		}
@@ -314,25 +320,20 @@ func isCurrent(ex ingest.IndexedDoc) bool {
 }
 
 // claimColdOwned 는 처음 보는 파일이 cold 소유인지 보고, 그렇다면 그 stat 을 기억해 다음 사이클에 다시 읽지 않는다.
-func (r *Reconciler) claimColdOwned(ctx context.Context, f ingest.ScannedFile, b document.Built, owner *cold.Ownership, sum *state.CycleSummary) (bool, error) {
-	owned, err := r.isColdOwned(ctx, b, owner)
+func (r *Reconciler) claimColdOwned(ctx context.Context, f ingest.ScannedFile, b document.Built, st cycleState, sum *state.CycleSummary) (bool, error) {
+	owned, err := r.isColdOwned(ctx, b, st.owner)
 	if err != nil || !owned {
 		return false, err
 	}
-	r.countColdOwned(ctx, f, coldOwnedFile{stat: statOf(f), kept: true}, sum)
+	r.countColdOwned(ctx, f, coldOwnedFile{stat: statOf(f), kept: true}, st.git, sum)
 	return true, nil
 }
 
 // countColdOwned 는 cold 소유 파일 하나를 센다: 다음 tier 가 정리할 원본은 cold_owned, git 이 되살릴 수 없어 tier 가 hot 에 남기는
-// 원본은 cold_kept. 남기는 원본(처음 보는 파일 포함 — kept 로 넘긴다)은 git 으로 다시 본다 — 커밋해도 stat 이 그대로라 기억한
-// 값으로는 알 수 없다.
-func (r *Reconciler) countColdOwned(ctx context.Context, f ingest.ScannedFile, c coldOwnedFile, sum *state.CycleSummary) {
+// 원본은 cold_kept. 남기는 원본(처음 보는 파일 포함 — kept 로 넘긴다)은 git 상태가 바뀌었으면 git 으로 다시 본다 (recheckKept).
+func (r *Reconciler) countColdOwned(ctx context.Context, f ingest.ScannedFile, c coldOwnedFile, git *gitProbe, sum *state.CycleSummary) {
 	if c.kept {
-		kept, err := cold.KeptByGit(ctx, r.Config.MetaRepoRoot, f.Rel)
-		if err != nil {
-			r.Log("[reconcile] cold 소유 원본 %s 의 커밋 여부를 git 으로 확인하지 못했습니다 — tier 도 지우지 않는다: %v", f.Rel, err)
-		}
-		c.kept = kept
+		c = r.recheckKept(ctx, f.Rel, c, git)
 	}
 	r.coldOwned[f.Rel] = c
 	if c.kept {

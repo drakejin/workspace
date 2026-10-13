@@ -62,3 +62,38 @@ func TestRestoreClearsTheEmptyTextOfOldBlankDocs(t *testing.T) {
 		t.Errorf("복원본에 빈 text 가 남았다: %d %v", n, err)
 	}
 }
+
+// R5-final-daemon-2: 이 판 전에 복원해 둔 달은 빈 text 가 남아 있고 데몬은 복원본을 고치지 않는다 — GUIDE 가 안내하는 대로 restore 를
+// 한 번 다시 하면(이미 복원된 달은 빠진 문서만 더한다) 그 빈 text 를 지워 목록에서 빈 문서가 빠진다.
+func TestRestoreAgainClearsAMonthRestoredBeforeTheUpgrade(t *testing.T) {
+	ctx := context.Background()
+	cfg := newConfig(t, nil)
+	m := newMCP(t, cfg)
+	old := daysAgo(hotDays + 60)
+	ingestOne(t, m, "docs/knowledge/keep.md", daysAgo(0), "KeepToken") // 팀이 이 workspace 의 것으로 남게
+	index := ingestOne(t, m, "docs/specs/full.md", old, "FullToken")
+	if _, err := ingestFile(ctx, m.indexer, write(t, cfg.MetaRepoRoot, "docs/specs/blank.md", "---\ndate: "+old+"\n---\n")); err != nil {
+		t.Fatal(err)
+	}
+	if d := decisionOf(tierTeam(t, m), index); d.Action != cold.TierMoved {
+		t.Fatalf("tier = %+v", d)
+	}
+	if _, err := cold.Restore(ctx, m.os, cfg, index); err != nil {
+		t.Fatal(err)
+	}
+	// 예전 판의 복원 — 검색에 붙은 복원본에 빈 text 가 남아 있다
+	if err := opensearch.UpdateDocWhere(ctx, m.os, []string{index}, cfg.Workspace, "docs/specs/blank.md", nil, map[string]any{"text": ""}); err != nil {
+		t.Fatal(err)
+	}
+	if got := listingPaths(t, m, old); !contains(got, "docs/specs/blank.md") {
+		t.Fatalf("픽스처: 빈 text 문서가 목록에 나와야 재현이다: %v", got)
+	}
+
+	if _, err := cold.Restore(ctx, m.os, cfg, index); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := listingPaths(t, m, old); contains(got, "docs/specs/blank.md") || !contains(got, "docs/specs/full.md") {
+		t.Errorf("다시 복원한 달의 목록 = %v (빈 문서는 빠지고 본문이 있는 문서는 나온다)", got)
+	}
+}

@@ -19,12 +19,12 @@ argument-hint: "[team]"
      원문은 곧 cold 로 가지만 감사는 cold 에 있는 근거를 깨진 링크로 보지 않는다 (그래프에서는 `unindexed` 노드로 남는다)
    - 충돌하면 최신이 이긴다. 최신이 거짓 같아 보이면 고르지 말고 `## 검수 필요` 에 두 정의를 나란히 적고 사용자에게 알린다
    - `docs/knowledge/INDEX.md` 에 한 줄씩 추가한다. 데몬이 떠 있으면 저장만 하면 색인된다 (아니면 `scripts/memory-daemon/run.sh once`)
-5. **티어 이동** — 미리보기 후 실행한다. 쓰기 막기 → 스냅샷 → 인덱스 삭제 → hot 원본 제거(`git rm`).
+5. **티어 이동** — 미리보기 후 실행한다. 쓰기 막기 → 스냅샷 → 인덱스 삭제 → hot 원본 제거(cold store 에 같은 내용이 있는 원본만 — git 이 다루는 meta-repo 면 커밋된 그대로인 원본만 `git rm` 하고 커밋하지 않았거나 커밋 뒤 고친 원본은 `hot 에 남김` 으로 남긴다. git 이 다루지 않는 meta-repo 는 파일을 지운다).
    ```bash
    scripts/memory/run.sh tier -team T -dry-run
    scripts/memory/run.sh tier -team T
    ```
-   지워진 원본은 cold store raw 와 스냅샷에 있다. 사용자에게 커밋을 제안한다.
+   지워진 원본은 cold store raw 와 스냅샷에 있다. `git rm` 했으면(끝줄이 `(git rm)`) 사용자에게 커밋을 제안하고, `hot 에 남김` 원본이 있으면 커밋한 뒤 tier 를 다시 돌려야 빠진다고 알린다.
 6. **감사** — `scripts/memory/run.sh audit` 로 깨진 링크(`broken-link`)·근거 없는 knowledge(`unsourced-fact`)가 없는지 본다.
    이미 cold 에 있는 문서가 틀렸다면 고치지 말고 사용자에게 `scripts/memory/run.sh archive deprecate -team T -by <누가> -reason <왜> <path>` 를 제안한다.
 

@@ -228,14 +228,23 @@ func graphURIProblem(raw string) string {
 	case !known:
 		return graphURIForms
 	case !routing && u.RawQuery != "":
-		return fmt.Sprintf("%s:// 주소에는 query(?%s)를 붙일 수 없습니다 — routing context 는 neo4j:// 계열 주소만 받는다 (query 를 빼거나 neo4j:// 로)",
-			u.Scheme, u.RawQuery)
+		return graphQueryProblem(u)
 	case u.Scheme == unixGraphScheme && (u.Host != "" || u.Path == ""):
 		return graphURIForms
 	case u.Scheme != unixGraphScheme && u.Host == "":
 		return graphURIForms
 	}
 	return ""
+}
+
+// graphQueryProblem 은 routing 이 없는 주소에 붙은 query 의 까닭이다. TCP 주소(bolt 계열)는 neo4j:// 로 바꿔도 되지만, unix 소켓
+// 주소는 neo4j:// 로 바꿀 수 없으므로(소켓은 routing 주소가 아니다) query 를 빼라고만 알린다.
+func graphQueryProblem(u *url.URL) string {
+	why := "routing context 는 neo4j:// 계열 주소만 받는다 (query 를 빼거나 neo4j:// 로)"
+	if u.Scheme == unixGraphScheme {
+		why = "unix 소켓 주소는 routing context 를 받지 않는다 (query 를 빼세요)"
+	}
+	return fmt.Sprintf("%s:// 주소에는 query(?%s)를 붙일 수 없습니다 — %s", u.Scheme, u.RawQuery, why)
 }
 
 var nonName = regexp.MustCompile(`[^a-z0-9-]+`)
