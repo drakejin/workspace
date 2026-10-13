@@ -370,7 +370,7 @@ cat .cache/daemon/status.json | jq .lastCycle         # 마지막 사이클
 | `scripts/memory-daemon/run.sh once` | 1회 색인 (데몬이 켜져 있으면 건너뜀) |
 | `scripts/memory-down/run.sh` | 스택 종료 (hot 볼륨은 남는다). 데몬은 멈추지 않으니 상주 데몬이 있으면 먼저 `make memory-daemon-stop` |
 | `scripts/schedule/run.sh install` / `uninstall` / `status` | tier 정기 실행 launchd 등록 / 해제 / 확인 (tier 만 맡는다 — 데몬 상주는 `make memory-daemon-start`) |
-| `scripts/run-issues/run.sh <issue> <repo>` / `scripts/done-issue/run.sh [--force] <issue> <repo>` | 이슈 worktree 생성(`main/{repo}/.worktrees/{issue}`) / 제거. 커밋하지 않은 변경·untracked 파일이 있으면 잃게 될 파일을 보여 주고 남긴다(exit 1) — `--force` 면 버리고 지운다. lock 건 worktree 와 worktree 가 아닌 디렉토리는 `--force` 여도 지우지 않는다 |
+| `scripts/run-issues/run.sh <issue> <repo>` / `scripts/done-issue/run.sh [--force] <issue> <repo>` | 이슈 worktree 생성(`main/{repo}/.worktrees/{issue}`) / 제거. 커밋하지 않은 변경·untracked 파일이 있으면 잃게 될 파일을 보여 주고 남긴다(exit 1) — `--force` 면 버리고 지운 뒤 버린 파일을 보여 준다(git 이 지우기를 거부하면 변경이 그대로 남았다고 알린다). lock 건 worktree 와 worktree 가 아닌 디렉토리는 `--force` 여도 지우지 않는다 |
 | `scripts/docs-cleaner/run.sh` | `docs/issues`, `docs/specs` 문서 전체 삭제 (파괴적 — 확인을 묻는다. `CONFIRM=yes` 면 묻지 않는다) |
 | `scripts/mcp/run.sh` | MCP 서버 (stdio) 수동 실행 (`.mcp.json` 이 부르는 진입점) |
 | `scripts/memory/run.sh search [-project P] [-topic T] [-date YYYY-MM-DD] [-from D] [-to D] [-type K] [-team T \| -org O] [-size N] [-superseded] [query]` | 검색 — 질의어 없이 필터만 주면 최신순으로 가져온다 (플래그는 질의어 앞에) |

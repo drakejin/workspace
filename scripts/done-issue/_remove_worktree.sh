@@ -38,16 +38,21 @@ remove_one() {
         echo "[done-issue] ${REPO_NAME}: 커밋·stash 하거나, 버려도 되면 --force 를 붙여 다시 실행하세요" >&2
         return 1
     fi
-    if [[ -n "$changes" ]]; then
-        echo "[done-issue] ${REPO_NAME}: --force — worktree '${wt_name}' 의 다음 변경을 버립니다:"
-        printf '%s\n' "$changes" | sed 's/^/    /'
-    fi
     if ! err=$(git -C "$REPO_DIR" worktree remove ${FORCE:+--force} "$wt_dir" 2>&1); then
         echo "[done-issue] ${REPO_NAME}: worktree '${wt_name}' 를 지우지 못해 남겨 둡니다 — ${err}" >&2
+        if [[ -n "$changes" ]]; then
+            echo "[done-issue] ${REPO_NAME}: 커밋하지 않은 변경은 그대로 있습니다:" >&2
+            printf '%s\n' "$changes" | sed 's/^/    /' >&2
+        fi
         echo "[done-issue] ${REPO_NAME}: lock 이면 'git worktree unlock', 이미 없는 worktree 기록이면 'git -C ${REPO_DIR} worktree prune' 후 확인하세요" >&2
         return 1
     fi
     echo "[done-issue] ${REPO_NAME}: worktree '${wt_name}' removed"
+    # 버렸다는 안내는 git 이 실제로 지운 뒤에만 한다 — 거부하면(lock) 아무것도 잃지 않았다
+    if [[ -n "$changes" ]]; then
+        echo "[done-issue] ${REPO_NAME}: --force — worktree '${wt_name}' 의 다음 변경을 버렸습니다:"
+        printf '%s\n' "$changes" | sed 's/^/    /'
+    fi
 }
 
 # worktree 는 main/{repo}/.worktrees/{issue}[-N] 에 있다 (run-issues/_create_worktree.sh).

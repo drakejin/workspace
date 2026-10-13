@@ -128,22 +128,70 @@ func TestJudgeState(t *testing.T) {
 	if q, _ := s.PendingQuestions("t"); len(q) != 0 {
 		t.Error("답이 붙으면 질문이 사라진다")
 	}
-	if m, _ := s.SupersededMap("t", map[string]string{"a.md": "sha-a", "b.md": "sha-b"}); m["a.md"] != "b.md" {
+	if m, _ := s.SupersededMap("t", oneScope(map[string]string{"a.md": "sha-a", "b.md": "sha-b"})); m["a.md"] != "b.md" {
 		t.Errorf("map = %v", m)
 	}
-	if m, _ := s.SupersededMap("t", map[string]string{"a.md": "edited", "b.md": "sha-b"}); len(m) != 0 {
+	if m, _ := s.SupersededMap("t", oneScope(map[string]string{"a.md": "edited", "b.md": "sha-b"})); len(m) != 0 {
 		t.Error("구판 본문이 바뀌면 결론 무효")
 	}
-	if m, _ := s.SupersededMap("t", map[string]string{"a.md": "sha-a"}); len(m) != 0 {
+	if m, _ := s.SupersededMap("t", oneScope(map[string]string{"a.md": "sha-a"})); len(m) != 0 {
 		t.Error("신판이 없으면 결론 무효")
 	}
-	if m, _ := s.SupersededMap("t", map[string]string{"a2.md": "sha-a", "b2.md": "sha-b"}); !reflect.DeepEqual(m, map[string]string{"a2.md": "b2.md"}) {
+	if m, _ := s.SupersededMap("t", oneScope(map[string]string{"a2.md": "sha-a", "b2.md": "sha-b"})); !reflect.DeepEqual(m, map[string]string{"a2.md": "b2.md"}) {
 		t.Errorf("이름을 바꿔도 결론은 본문을 따라간다: %v", m)
 	}
 	blank := NewJudgeState(t.TempDir())
 	_ = blank.Ledger.Append("t", JudgeRecord{PairKey: "k", Decision: DecisionSuperseded, Old: Side{Path: "x.md"}, New: Side{Path: "y.md"}})
-	if m, _ := blank.SupersededMap("t", map[string]string{"y.md": "", "z.md": ""}); len(m) != 0 {
+	if m, _ := blank.SupersededMap("t", oneScope(map[string]string{"y.md": "", "z.md": ""})); len(m) != 0 {
 		t.Errorf("본문 sha 를 모르는 문서끼리는 내용으로 잇지 않는다: %v", m)
+	}
+}
+
+// oneScope 는 경로 → 본문 sha 를 한 판정 범위의 문서들로 만든다.
+func oneScope(bodies map[string]string) map[string]JudgedDoc {
+	out := make(map[string]JudgedDoc, len(bodies))
+	for p, sha := range bodies {
+		out[p] = JudgedDoc{BodySHA: sha, Scope: "alpha/spec"}
+	}
+	return out
+}
+
+// R1-judge-4: 같은 문서를 두 결론이 가리키면 원장에 나중에 붙은 결론이 이긴다 — 질문에 나중에 붙은 답은 그 사이의 다른
+// 결론보다 나중이다. map 순회 순서에 기대면 사이클마다 superseded_by 가 오간다.
+func TestSupersededMapLatestRecordWins(t *testing.T) {
+	s := NewJudgeState(t.TempDir())
+	lv := JudgeRecord{PairKey: "l:v", Old: Side{Path: "l.md", BodySHA: "l"}, New: Side{Path: "v.md", BodySHA: "v"}}
+	lw := JudgeRecord{PairKey: "l:w", Decision: DecisionSuperseded, Old: Side{Path: "l.md", BodySHA: "l"}, New: Side{Path: "w.md", BodySHA: "w"}}
+	question, answer := lv, lv
+	question.Decision, answer.Decision = DecisionQuestion, DecisionSuperseded
+	for _, r := range []JudgeRecord{question, lw, answer} {
+		if err := s.Ledger.Append("t", r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	docs := oneScope(map[string]string{"l.md": "l", "v.md": "v", "w.md": "w"})
+
+	for range 50 {
+		if m, err := s.SupersededMap("t", docs); err != nil || !reflect.DeepEqual(m, map[string]string{"l.md": "v.md"}) {
+			t.Fatalf("map = %v %v — 나중에 붙은 답(l→v)이 이긴다", m, err)
+		}
+	}
+}
+
+// R1-judge-2: 결론은 같은 판정 범위 안에서만 내용을 따라간다.
+func TestSupersededMapStaysInScope(t *testing.T) {
+	s := NewJudgeState(t.TempDir())
+	_ = s.Ledger.Append("t", JudgeRecord{PairKey: "l:w", Decision: DecisionSuperseded, Old: Side{Path: "l.md", BodySHA: "l"}, New: Side{Path: "w.md", BodySHA: "w"}})
+	docs := map[string]JudgedDoc{
+		"l.md":      {BodySHA: "l", Scope: "alpha"},
+		"w.md":      {BodySHA: "w", Scope: "alpha"},
+		"beta/l.md": {BodySHA: "l", Scope: "beta"},
+	}
+
+	m, err := s.SupersededMap("t", docs)
+
+	if err != nil || !reflect.DeepEqual(m, map[string]string{"l.md": "w.md"}) {
+		t.Errorf("map = %v %v — 다른 범위의 사본은 숨기지 않는다", m, err)
 	}
 }
 

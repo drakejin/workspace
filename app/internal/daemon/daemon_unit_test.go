@@ -12,6 +12,7 @@ import (
 	"github.com/drakejin/workspace/app/internal/config"
 	"github.com/drakejin/workspace/app/internal/ingest"
 	"github.com/drakejin/workspace/app/internal/llm"
+	"github.com/drakejin/workspace/app/internal/model"
 	"github.com/drakejin/workspace/app/internal/state"
 )
 
@@ -19,8 +20,8 @@ func TestDesiredSupersededByAndChains(t *testing.T) {
 	s := state.NewJudgeState(t.TempDir())
 	_ = s.Ledger.Append("t", state.JudgeRecord{PairKey: "k", Decision: state.DecisionSuperseded, Old: state.Side{Path: "x.md", BodySHA: "x"}, New: state.Side{Path: "y.md", BodySHA: "y"}})
 	docs := map[string]ingest.IndexedDoc{
-		"x.md":  {SourcePath: "x.md", Team: "t", BodySHA: "x"},
-		"y.md":  {SourcePath: "y.md", Team: "t", BodySHA: "y"},
+		"x.md":  {SourcePath: "x.md", Team: "t", Kind: model.KindEpisodic, BodySHA: "x"},
+		"y.md":  {SourcePath: "y.md", Team: "t", Kind: model.KindEpisodic, BodySHA: "y"},
 		"k1.md": {SourcePath: "k1.md", Team: "t"},
 		"k2.md": {SourcePath: "k2.md", Team: "t", Supersedes: "k1.md"},
 		"k3.md": {SourcePath: "k3.md", Team: "t", Supersedes: "k2.md"},
@@ -65,7 +66,7 @@ func TestDesiredSupersededByFollowsContent(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			docs := map[string]ingest.IndexedDoc{}
 			for p, sha := range tc.docs {
-				docs[p] = ingest.IndexedDoc{SourcePath: p, Team: "t", BodySHA: sha}
+				docs[p] = ingest.IndexedDoc{SourcePath: p, Team: "t", Kind: model.KindEpisodic, BodySHA: sha}
 			}
 			got, err := DesiredSupersededBy(docs, s)
 			if err != nil || !reflect.DeepEqual(got, tc.want) {
@@ -76,8 +77,8 @@ func TestDesiredSupersededByFollowsContent(t *testing.T) {
 
 	t.Run("다른 팀의 같은 본문은 따라가지 않는다", func(t *testing.T) {
 		docs := map[string]ingest.IndexedDoc{
-			"l.md":  {SourcePath: "l.md", Team: "t", BodySHA: "sha-l"},
-			"w2.md": {SourcePath: "w2.md", Team: "u", BodySHA: "sha-w"},
+			"l.md":  {SourcePath: "l.md", Team: "t", Kind: model.KindEpisodic, BodySHA: "sha-l"},
+			"w2.md": {SourcePath: "w2.md", Team: "u", Kind: model.KindEpisodic, BodySHA: "sha-w"},
 		}
 		if got, err := DesiredSupersededBy(docs, s); err != nil || len(got) != 0 {
 			t.Errorf("desired = %v %v", got, err)

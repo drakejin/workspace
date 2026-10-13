@@ -49,8 +49,8 @@ func OpenState(ctx context.Context, c opensearch.Client, index string) (restored
 // RestoreAll 은 index 를 담은 스냅샷 전부(snapshots, 오래된 것부터)를 index 하나로 합친다 — 한 달을 tier 한 뒤 그 달
 // 날짜의 문서가 늦게 들어오면 같은 인덱스의 스냅샷이 여럿이 된다. 같은 문서(source_path)는 더 최근 것을 쓴다.
 // index 가 복원본으로 열려 있으면 그 내용이 가장 최근이라 없는 문서만 더하고, 닫혀 있으면 가장 최근 스냅샷을 index 로 되살린다.
-// 같은 이름의 hot 인덱스가 다시 생겼으면 ErrReopened.
-func RestoreAll(ctx context.Context, c opensearch.Client, cfg config.Config, index string, snapshots []string, withAliases bool) error {
+// 검색 alias 없이 되살린다 (붙이는 것은 호출자 몫). 같은 이름의 hot 인덱스가 다시 생겼으면 ErrReopened.
+func RestoreAll(ctx context.Context, c opensearch.Client, cfg config.Config, index string, snapshots []string) error {
 	restored, hot, err := OpenState(ctx, c, index)
 	if err != nil {
 		return err
@@ -63,7 +63,7 @@ func RestoreAll(ctx context.Context, c opensearch.Client, cfg config.Config, ind
 		if len(rest) == 0 {
 			return fmt.Errorf("%s 를 담은 스냅샷이 없습니다", index)
 		}
-		if err := RestoreIndex(ctx, c, cfg, index, rest[len(rest)-1], withAliases); err != nil {
+		if err := RestoreIndex(ctx, c, cfg, index, rest[len(rest)-1]); err != nil {
 			return err
 		}
 		rest = rest[:len(rest)-1]
@@ -79,7 +79,7 @@ func RestoreAll(ctx context.Context, c opensearch.Client, cfg config.Config, ind
 // mergeSnapshot 은 snapshot 의 index 를 임시 이름으로 되살려, index 에 없는 문서만 옮기고 임시 인덱스를 지운다.
 func mergeSnapshot(ctx context.Context, c opensearch.Client, cfg config.Config, index, snapshot string) (err error) {
 	tmp := fmt.Sprintf("%s%s-%09d", mergePrefix, index, time.Now().Nanosecond())
-	body := restoreBody(index, false)
+	body := restoreBody(index)
 	body["rename_pattern"] = "(.+)"
 	body["rename_replacement"] = tmp
 	if err := restoreSnapshot(ctx, c, cfg, snapshot, body); err != nil {

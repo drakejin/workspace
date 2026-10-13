@@ -137,3 +137,41 @@ func TestDoneIssueNeverDeletesStrayDirectory(t *testing.T) {
 		t.Fatalf("worktree 가 아닌 디렉토리를 지웠다:\n%s", r.output())
 	}
 }
+
+// R1-shell-1: --force 의 "버렸다" 안내는 git 이 worktree 를 실제로 지운 뒤에만 한다. git 이 거부하면(lock) 변경은
+// 그대로 남았다고 말한다 — 먼저 "버립니다" 를 찍고 "남겨 둡니다" 를 찍으면 무엇이 사라졌는지 헷갈린다.
+func TestDoneIssueForceReportsDiscardOnlyAfterRemoval(t *testing.T) {
+	t.Run("lock 이라 못 지우면 버렸다고 말하지 않는다", func(t *testing.T) {
+		ir := newIssueRepo(t)
+		ir.dirty()
+		ir.git("worktree", "lock", ir.worktree)
+
+		r := ir.doneIssue("--force", "ISSUE-1", "repo")
+
+		if r.err == nil {
+			t.Fatalf("lock 건 worktree 인데 성공(exit 0)했다:\n%s", r.output())
+		}
+		for _, claim := range []string{"버립니다", "버렸습니다"} {
+			if strings.Contains(r.output(), claim) {
+				t.Errorf("지우지 못했는데 %q 라고 안내했다:\n%s", claim, r.output())
+			}
+		}
+		if !strings.Contains(r.stderr, "변경은 그대로") || !strings.Contains(r.stderr, "wip.txt") {
+			t.Errorf("남은 변경을 알려야 한다:\n%s", r.output())
+		}
+	})
+	t.Run("지운 뒤에 버린 변경을 보여 준다", func(t *testing.T) {
+		ir := newIssueRepo(t)
+		ir.dirty()
+
+		r := ir.doneIssue("--force", "ISSUE-1", "repo")
+
+		if r.err != nil {
+			t.Fatalf("--force 제거 실패: %v\n%s", r.err, r.output())
+		}
+		discarded := strings.Index(r.stdout, "버렸습니다")
+		if discarded < 0 || !strings.Contains(r.stdout[discarded:], "wip.txt") {
+			t.Errorf("지운 뒤 버린 변경을 보여 주지 않았다:\n%s", r.output())
+		}
+	})
+}

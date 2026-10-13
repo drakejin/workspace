@@ -409,8 +409,8 @@ func (r *Reconciler) applySuperseded(ctx context.Context, indices []string, d in
 // A→B→C 처럼 이어지면 마지막 판(C)을 가리키게 압축한다.
 func DesiredSupersededBy(docs map[string]ingest.IndexedDoc, judge *state.JudgeState) (map[string]string, error) {
 	direct := map[string]string{}
-	for team, bodies := range bodiesByTeam(docs) {
-		m, err := judge.SupersededMap(team, bodies)
+	for team, judged := range judgedDocsByTeam(docs) {
+		m, err := judge.SupersededMap(team, judged)
 		if err != nil {
 			return nil, err
 		}
@@ -428,14 +428,18 @@ func DesiredSupersededBy(docs map[string]ingest.IndexedDoc, judge *state.JudgeSt
 	return compressChains(direct), nil
 }
 
-// bodiesByTeam 은 팀 → (경로 → 본문 sha) 다. 판정 원장이 팀별이라 결론을 옮길 문서도 같은 팀 안에서만 찾는다.
-func bodiesByTeam(docs map[string]ingest.IndexedDoc) map[string]map[string]string {
-	out := map[string]map[string]string{}
+// judgedDocsByTeam 은 팀 → (경로 → 본문 sha·판정 범위) 다. 판정 원장이 팀별이고 판정은 episodic 끼리만 하므로
+// (knowledge 는 유사도로 판정하지 않는다), 결론을 옮길 문서도 같은 팀의 episodic 에서, BestNeighbor 가 견주는 범위 안에서만 찾는다.
+func judgedDocsByTeam(docs map[string]ingest.IndexedDoc) map[string]map[string]state.JudgedDoc {
+	out := map[string]map[string]state.JudgedDoc{}
 	for _, d := range docs {
-		if out[d.Team] == nil {
-			out[d.Team] = map[string]string{}
+		if d.Kind != model.KindEpisodic {
+			continue
 		}
-		out[d.Team][d.SourcePath] = d.BodySHA
+		if out[d.Team] == nil {
+			out[d.Team] = map[string]state.JudgedDoc{}
+		}
+		out[d.Team][d.SourcePath] = state.JudgedDoc{BodySHA: d.BodySHA, Scope: neighborScope(d.Repo, d.DocType)}
 	}
 	return out
 }
