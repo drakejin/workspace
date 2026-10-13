@@ -606,7 +606,7 @@ ISM 이 먼저 옮긴 경우다. "갖고 있다" 의 판단:
 ## 8. 설정 레퍼런스
 
 `.env`(복사: `cp .env.example .env`) 또는 환경변수. 명령줄에서 준 값이 `.env` 보다 우선한다.
-`make memory-daemon-start` 로 띄운 데몬(launchd)은 start 때의 설정(`.env` 와 명령줄 값, AWS 키·그래프 비밀번호는 빼고)을 잡에 담아 돈다 — 바꾸면 `make memory-daemon-stop && make memory-daemon-start`.
+`make memory-daemon-start` 로 띄운 데몬(launchd)은 start 때의 설정(`.env` 와 명령줄 값 중 아래 표의 메모리 설정과 `OS_PORT`·`NEO4J_BOLT_PORT`·`NEO4J_HTTP_PORT`·`AWS_PROFILE` — 이름에 `PASSWORD`·`SECRET`·`TOKEN` 이 든 것은 빼고)을 잡에 담아 돈다 — 바꾸면 `make memory-daemon-stop && make memory-daemon-start`.
 
 | 변수 | 기본 | 뜻 |
 | --- | --- | --- |

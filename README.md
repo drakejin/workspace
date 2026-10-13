@@ -103,13 +103,14 @@ OpenSearch `localhost:9202`, Neo4j bolt `7689` · 브라우저 `7476`, (선택) 
 
 | 명령 | 하는 일 |
 | --- | --- |
-| `make memory-daemon-start` | 데몬을 로그인 때 띄우고 죽으면 다시 띄운다 (launchd `com.drakejin.memory.<workspace>.daemon`, RunAtLoad + KeepAlive — meta-repo 마다 따로라 `META_REPO_ROOT=… make memory-daemon-start` 로 다른 meta-repo 의 데몬도 따로 띄운다. start 때의 메모리 설정을 잡에 담는다(비밀은 빼고)). launchd 가 없으면 nohup 백그라운드 — 머신을 다시 켜면 다시 start 한다. 이미 돌고 있으면 그대로 둔다 |
+| `make memory-daemon-start` | 데몬을 로그인 때 띄우고 죽으면 다시 띄운다 (launchd `com.drakejin.memory.<workspace>.daemon`, RunAtLoad + KeepAlive — meta-repo 마다 따로라 `META_REPO_ROOT=… make memory-daemon-start` 로 다른 meta-repo 의 데몬도 따로 띄운다. start 때의 메모리 설정을 잡에 담는다(비밀은 빼고 — 표 아래 참고)). launchd 가 없으면 nohup 백그라운드 — 머신을 다시 켜면 다시 start 한다. 이미 돌고 있으면 그대로 둔다 |
 | `make memory-daemon-stop` | launchd 에서 내리고(plist 삭제) 떠 있는 데몬에 SIGTERM — 끝날 때까지 최대 60초 기다린다 |
 | `scripts/memory-daemon/run.sh run` | 데몬을 포그라운드로 (로그를 터미널에서 볼 때. launchd 가 부르는 진입점이기도 하다) |
 | `scripts/schedule/run.sh install` / `uninstall` | 6시간마다 깨워 하루 한 번 tier(60일 지난 episodic → cold) + 감사 보고 (`com.drakejin.workspace.tier`) |
 
 로그는 데몬 `.cache/daemon/daemon.log`, tier `.cache/schedule/tier.log`. 데몬은 하나만 돈다 — start 는 떠 있으면 그대로 두고, 두 번째 `run` 은 `데몬이 이미 돌고 있습니다 (pid …)` 로 거부되며, `once`(와 `make memory-init` 의 최초 색인)는 `[reconcile] 데몬(pid …)이 돌고 있어 1회 색인을 건너뜁니다` 를 찍고 넘어간다.
-데몬은 start 때의 메모리 설정(`.env` 와 명령줄의 `META_REPO_ROOT`·`MEMORY_*` 등, 비밀 제외)을 launchd 잡에 담아 돈다 — 설정을 바꾸면 `make memory-daemon-stop && make memory-daemon-start`.
+데몬은 start 때의 메모리 설정(`.env` 와 명령줄의 `META_REPO_ROOT`·`OPENSEARCH_URL`·`OS_PORT`·`MEMORY_*`·`COLD_*`·`AWS_REGION`·`AWS_PROFILE`·`AWS_ENDPOINT_URL_S3`, `NEO4J_*` 는 포트만)을 launchd 잡에 담아 돈다.
+이름에 `PASSWORD`·`SECRET`·`TOKEN` 이 든 값은 plist 에 쓰지 않는다 — 잡이 `.env`·AWS 기본 체인에서 다시 읽는다. 설정을 바꾸면 `make memory-daemon-stop && make memory-daemon-start`.
 
 ---
 
@@ -180,7 +181,7 @@ frontmatter(`team`, `repo`, `doc_type`, `date`, `supersedes`, `derived_from`, `r
 | --- | --- | --- |
 | 아무 때나 | 검색해 보기 | `scripts/memory/run.sh search "PaymentRetryPolicy 재시도"` (`-team` / `-org` 는 질의어 앞에) |
 | repo 최신화 | main/master 인 repo 만 pull + INDEX.md 에 새 repo 행 | `make sync` |
-| 이슈 작업 | worktree 만들기 / 정리 | `scripts/run-issues/run.sh ISSUE-1 books-guitar` → `main/books-guitar/.worktrees/ISSUE-1` / `scripts/done-issue/run.sh ISSUE-1 books-guitar` |
+| 이슈 작업 | worktree 만들기 / 정리 | `scripts/run-issues/run.sh ISSUE-1 books-guitar` → `main/books-guitar/.worktrees/ISSUE-1` / `scripts/done-issue/run.sh ISSUE-1 books-guitar` (커밋하지 않은 변경이 있으면 남긴다 — 버리려면 `--force`) |
 | 질문이 쌓이면 | 판정이 사람에게 넘긴 질문 | `scripts/memory/run.sh questions` → `scripts/memory/run.sh answer <pairKey> latest\|old\|keep` |
 | 주 1회 | compaction — 60일 지난 사실을 knowledge 로 다시 쓰고 원문은 cold 로 | Claude 에서 `/compaction [team]` (리포트 `scripts/memory/run.sh compaction-report -team T`, 이동 `scripts/memory/run.sh tier -team T` — 먼저 `-dry-run`) |
 | 주 1회 (데몬이 자동) | 정합성 감사 — 색인·파일·cold store·원장·링크 | `scripts/memory/run.sh audit` (고치려면 `-apply`) |
@@ -366,9 +367,9 @@ cat .cache/daemon/status.json | jq .lastCycle         # 마지막 사이클
 | **`scripts/memory-daemon/run.sh status`** | 컨테이너·색인·그래프·데몬·판정 질문·할 일 (macOS 면 첫 줄에 launchd 적재 여부) |
 | `scripts/memory-daemon/run.sh run` | 데몬 포그라운드 실행 (launchd 가 부르는 진입점) |
 | `scripts/memory-daemon/run.sh once` | 1회 색인 (데몬이 켜져 있으면 건너뜀) |
-| `scripts/memory-down/run.sh` | 스택 종료 (hot 볼륨은 남는다) |
+| `scripts/memory-down/run.sh` | 스택 종료 (hot 볼륨은 남는다). 데몬은 멈추지 않으니 상주 데몬이 있으면 먼저 `make memory-daemon-stop` |
 | `scripts/schedule/run.sh install` / `uninstall` / `status` | tier 정기 실행 launchd 등록 / 해제 / 확인 (tier 만 맡는다 — 데몬 상주는 `make memory-daemon-start`) |
-| `scripts/run-issues/run.sh <issue> <repo>` / `scripts/done-issue/run.sh <issue> <repo>` | 이슈 worktree 생성(`main/{repo}/.worktrees/{issue}`) / 제거 |
+| `scripts/run-issues/run.sh <issue> <repo>` / `scripts/done-issue/run.sh [--force] <issue> <repo>` | 이슈 worktree 생성(`main/{repo}/.worktrees/{issue}`) / 제거. 커밋하지 않은 변경·untracked 파일이 있으면 잃게 될 파일을 보여 주고 남긴다(exit 1) — `--force` 면 버리고 지운다. lock 건 worktree 와 worktree 가 아닌 디렉토리는 `--force` 여도 지우지 않는다 |
 | `scripts/docs-cleaner/run.sh` | `docs/issues`, `docs/specs` 문서 전체 삭제 (파괴적 — 확인을 묻는다. `CONFIRM=yes` 면 묻지 않는다) |
 | `scripts/mcp/run.sh` | MCP 서버 (stdio) 수동 실행 (`.mcp.json` 이 부르는 진입점) |
 | `scripts/memory/run.sh search [-project P] [-topic T] [-date YYYY-MM-DD] [-from D] [-to D] [-type K] [-team T \| -org O] [-size N] [-superseded] [query]` | 검색 — 질의어 없이 필터만 주면 최신순으로 가져온다 (플래그는 질의어 앞에) |
