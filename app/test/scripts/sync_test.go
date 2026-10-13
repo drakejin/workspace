@@ -189,3 +189,28 @@ func TestSyncRunReportsPullFailure(t *testing.T) {
 		}
 	}
 }
+
+// R4-ops-scripts-3: make init 은 끝에 sync 를 부르므로 pull 에 실패한 repo 가 있으면 init 도 끝까지 돈 뒤 0 이 아닌 값으로 끝난다 (README §5.1).
+func TestInitReportsPullFailureOfSync(t *testing.T) {
+	w := newSyncWorkspace(t, "main")
+	w.sb.extra = append(w.sb.extra, toolDirs(t, []string{"jq"})...)
+	w.sb.copyTo(w.root, "scripts/init", "scripts/hooks")
+	w.git(w.sb.dir, "init", "-q", w.root)
+	writeFile(t, filepath.Join(w.root, "workspace.seed.json"),
+		`{"githubHost": "github.invalid", "org": "o", "workspaces": [{"name": "app"}]}`)
+	w.clone("app")
+	if err := os.RemoveAll(w.origin); err != nil { // 원격이 사라져 pull 이 실패한다
+		t.Fatal(err)
+	}
+
+	r := w.sb.bash(gitEnv, filepath.Join(w.root, "scripts", "init", "run.sh"))
+
+	if r.err == nil {
+		t.Errorf("pull 이 실패했는데 init 이 성공(exit 0)했다:\n%s", r.output())
+	}
+	for _, want := range []string{"[skip] app", "[fail] app", "[index] INDEX.md"} {
+		if !strings.Contains(r.output(), want) {
+			t.Errorf("출력에 %q 가 없다:\n%s", want, r.output())
+		}
+	}
+}

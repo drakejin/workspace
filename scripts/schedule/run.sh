@@ -9,7 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 source "${SCRIPT_DIR}/../memory-common.sh"
 
-# 예전 판의 고정 잡 이름 — 머신에 하나뿐이었고, 명령줄 환경 없이 이 레포의 .env 가 가리키는 meta-repo 만 돌았다.
+# 예전 판의 고정 잡 이름 — 머신에 하나뿐이었고, 명령줄 환경 없이 그 잡을 깐 checkout 의 .env 가 가리키는 meta-repo 만 돌았다.
 # 그 meta-repo 에 install·uninstall 하면 내리고 지운다 (새 이름으로 옮긴다)
 LEGACY_LABEL="com.drakejin.workspace.tier"
 AGENTS_DIR="${HOME}/Library/LaunchAgents"
@@ -58,22 +58,39 @@ unload_job() {
     rm -f "$job_plist"
 }
 
-# 예전 고정 잡이 돌던 meta-repo — 그 잡은 명령줄 환경 없이 이 레포의 .env 만 읽었다
-legacy_meta_root() {
-    (unset META_REPO_ROOT MEMORY_WORKSPACE; memory_load_env "$ROOT_DIR"; echo "$META_REPO_ROOT")
+# 예전 고정 잡이 부르는 checkout — plist 의 ProgramArguments 스크립트(<checkout>/scripts/memory/run.sh), 없으면 WorkingDirectory.
+# install 한 checkout(worktree·사본일 수 있다)이 아니라 그 잡이 실제로 부르는 checkout 이다. 읽지 못하면 빈 문자열
+legacy_checkout() {
+    local legacy_plist="$1" script
+    script="$(plutil -extract ProgramArguments.1 raw -o - "$legacy_plist" 2>/dev/null || true)"
+    if [[ "$script" == */scripts/memory/run.sh ]]; then
+        echo "${script%/scripts/memory/run.sh}"
+        return 0
+    fi
+    plutil -extract WorkingDirectory raw -o - "$legacy_plist" 2>/dev/null || true
 }
 
-# 예전 고정 잡을 옮긴다 — 지금 대상 meta-repo 의 것이면 내리고 지운다. 다른 meta-repo 의 것이면 그대로 두고 알린다
+# 예전 고정 잡이 돌던 meta-repo — 그 잡은 명령줄 환경 없이(PATH 만) 그 checkout 의 .env 를 읽었다 (META_REPO_ROOT 가 없으면 checkout 자신)
+legacy_meta_root() {
+    (unset META_REPO_ROOT MEMORY_WORKSPACE; memory_load_env "$1"; echo "$META_REPO_ROOT")
+}
+
+# 예전 고정 잡을 옮긴다 — 지금 대상 meta-repo 의 것이면 내리고 지운다. 다른 meta-repo 의 것이거나 어느 것인지 모르면 그대로 두고 알린다
 migrate_legacy_job() {
-    [[ -f "${AGENTS_DIR}/${LEGACY_LABEL}.plist" ]] || return 0
-    local legacy_root
-    legacy_root="$(legacy_meta_root)"
+    local legacy_plist="${AGENTS_DIR}/${LEGACY_LABEL}.plist" checkout legacy_root
+    [[ -f "$legacy_plist" ]] || return 0
+    checkout="$(legacy_checkout "$legacy_plist")"
+    if [[ -z "$checkout" ]]; then
+        echo "[schedule] tier: 예전 잡 ${LEGACY_LABEL} 이 어느 checkout 을 부르는지 ${legacy_plist} 에서 읽지 못해 그대로 둡니다 — 확인한 뒤 직접 'launchctl unload' 하고 지우세요"
+        return 0
+    fi
+    legacy_root="$(legacy_meta_root "$checkout")"
     if [[ "$legacy_root" != "$META_REPO_ROOT" ]]; then
-        echo "[schedule] tier: 예전 잡 ${LEGACY_LABEL} 은 다른 meta-repo(${legacy_root})의 것이라 그대로 둡니다 — 그 meta-repo 로 install 하면 옮긴다"
+        echo "[schedule] tier: 예전 잡 ${LEGACY_LABEL} 은 다른 meta-repo(${legacy_root}, checkout ${checkout})의 tier 를 돌아 그대로 둡니다 — 옮기려면 META_REPO_ROOT=${legacy_root} 로 install"
         return 0
     fi
     unload_job "$LEGACY_LABEL" || true
-    echo "[schedule] tier: 예전 잡 ${LEGACY_LABEL} 을 내렸습니다"
+    echo "[schedule] tier: 예전 잡 ${LEGACY_LABEL}(meta-repo ${legacy_root}, checkout ${checkout})을 내렸습니다"
 }
 
 # plist 를 임시 파일에 그려 lint 한 뒤(memory_render_plist — 경로는 글자 그대로, XML escape) 보여 주거나 제자리로 옮긴다.
@@ -122,7 +139,7 @@ uninstall_job() {
 }
 
 status_job() {
-    local current
+    local current checkout owner=""
     current="$(installed_label)"
     if launchctl list "$current" >/dev/null 2>&1; then
         echo "[schedule] tier: loaded ${current} — 로그 ${log}"
@@ -130,7 +147,9 @@ status_job() {
         echo "[schedule] tier: not loaded (${current})"
     fi
     if [[ -f "${AGENTS_DIR}/${LEGACY_LABEL}.plist" ]]; then
-        echo "[schedule] tier: 예전 잡 ${LEGACY_LABEL} 도 있습니다 — 그 meta-repo 로 install 하면 옮긴다"
+        checkout="$(legacy_checkout "${AGENTS_DIR}/${LEGACY_LABEL}.plist")"
+        [[ -n "$checkout" ]] && owner="(meta-repo $(legacy_meta_root "$checkout"), checkout ${checkout})"
+        echo "[schedule] tier: 예전 잡 ${LEGACY_LABEL}${owner} 도 있습니다 — 그 meta-repo 로 install 하면 옮긴다"
     fi
 }
 

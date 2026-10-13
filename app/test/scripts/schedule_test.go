@@ -75,13 +75,50 @@ func TestScheduleInstallsOneJobPerMetaRepo(t *testing.T) {
 	}
 }
 
-// FILE-9: 예전 고정 이름(com.drakejin.workspace.tier)의 잡은 그 잡이 돌던 meta-repo 에 install·uninstall 할 때 내리고 지운다.
+// legacyTierPlist 는 예전 판 install 이 깐 고정 이름 잡의 plist 다 — checkout 의 scripts/memory/run.sh tier-tick 을
+// 그 checkout 에서(WorkingDirectory) PATH 만 담아 돌렸다. 그래서 그 잡의 meta-repo 는 그 checkout 의 .env 가 정했다.
+func legacyTierPlist(checkout string) string {
+	return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>` + legacyTierLabel + `</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>` + checkout + `/scripts/memory/run.sh</string>
+        <string>tier-tick</string>
+    </array>
+    <key>WorkingDirectory</key><string>` + checkout + `</string>
+    <key>EnvironmentVariables</key>
+    <dict><key>PATH</key><string>/usr/bin:/bin</string></dict>
+    <key>StartInterval</key><integer>21600</integer>
+</dict>
+</plist>
+`
+}
+
+// assertLegacyKept 는 예전 잡을 지우지도, launchctl 로 건드리지도 않았는가다.
+func assertLegacyKept(t *testing.T, sb *sandbox, launchctlLog string, r result) {
+	t.Helper()
+	if !exists(sb.agentPlist(legacyTierLabel)) {
+		t.Errorf("다른 meta-repo 의 예전 잡을 지웠다:\n%s", r.output())
+	}
+	for _, c := range calls(t, launchctlLog) {
+		if strings.Contains(c, legacyTierLabel) {
+			t.Errorf("예전 잡을 launchctl 로 건드렸다: %s", c)
+		}
+	}
+}
+
+// FILE-9 · R4-ops-scripts-1: 예전 고정 이름(com.drakejin.workspace.tier)의 잡은 그 잡이 돌던 meta-repo 에 install·uninstall 할 때
+// 내리고 지운다. 무엇을 내렸는지(그 잡이 돌던 meta-repo) 알린다.
 func TestScheduleMigratesLegacyJob(t *testing.T) {
 	for _, action := range []string{"install", "uninstall"} {
 		t.Run(action, func(t *testing.T) {
 			sb, root, launchctlLog := tierSandbox(t, "meta")
 			legacy := sb.agentPlist(legacyTierLabel)
-			writeFile(t, legacy, "<plist/>")
+			writeFile(t, legacy, legacyTierPlist(root))
 
 			r := sb.mustBash(nil, scheduleScript(root), action)
 
@@ -91,28 +128,83 @@ func TestScheduleMigratesLegacyJob(t *testing.T) {
 			if !containsCall(calls(t, launchctlLog), "unload "+legacy) {
 				t.Errorf("예전 잡을 launchd 에서 내리지 않았다: %v", calls(t, launchctlLog))
 			}
-			if !strings.Contains(r.stdout, legacyTierLabel) {
-				t.Errorf("예전 잡을 옮겼다고 알려야 한다:\n%s", r.output())
+			if !strings.Contains(r.stdout, legacyTierLabel) || !strings.Contains(r.stdout, root) {
+				t.Errorf("예전 잡과 그 잡이 돌던 meta-repo(%s)를 알려야 한다:\n%s", root, r.output())
 			}
 		})
 	}
 }
 
-// FILE-9: 예전 잡은 이 레포의 .env 가 가리키는 meta-repo 의 tier 를 돈다 — 다른 meta-repo 에 install 할 때는 그대로 둔다.
+// FILE-9: 예전 잡은 그 checkout 의 .env 가 가리키는 meta-repo 의 tier 를 돈다 — 다른 meta-repo 에 install 할 때는 그대로 둔다.
 func TestScheduleKeepsLegacyJobOfAnotherMetaRepo(t *testing.T) {
 	sb, root, launchctlLog := tierSandbox(t, "meta")
-	legacy := sb.agentPlist(legacyTierLabel)
-	writeFile(t, legacy, "<plist/>")
+	writeFile(t, sb.agentPlist(legacyTierLabel), legacyTierPlist(root))
 
-	sb.mustBash(map[string]string{"META_REPO_ROOT": filepath.Join(sb.dir, "other-meta")}, scheduleScript(root), "install")
+	r := sb.mustBash(map[string]string{"META_REPO_ROOT": filepath.Join(sb.dir, "other-meta")}, scheduleScript(root), "install")
 
-	if !exists(legacy) {
-		t.Errorf("다른 meta-repo 의 install 이 예전 잡(이 레포 .env 의 meta-repo 를 돈다)을 지웠다")
+	assertLegacyKept(t, sb, launchctlLog, r)
+}
+
+// R4-ops-scripts-1: 예전 잡이 어느 meta-repo 를 돌았는지는 그 plist 가 부르는 checkout 으로 정한다 — install 하는 checkout(worktree·사본)의
+// .env 가 아니다. 다른 checkout 에서 install 해도 그 checkout 의 meta-repo 를 돌던 예전 잡은 그대로 두고, 그 잡의 meta-repo 를 알린다.
+func TestScheduleKeepsLegacyJobOfAnotherCheckout(t *testing.T) {
+	for _, action := range []string{"install", "uninstall"} {
+		t.Run(action, func(t *testing.T) {
+			sb, root, launchctlLog := tierSandbox(t, "copy")
+			realws := filepath.Join(sb.dir, "realws")
+			writeFile(t, filepath.Join(realws, "scripts", "memory", "run.sh"), "#!/usr/bin/env bash\n")
+			writeFile(t, sb.agentPlist(legacyTierLabel), legacyTierPlist(realws))
+
+			r := sb.mustBash(nil, scheduleScript(root), action)
+
+			assertLegacyKept(t, sb, launchctlLog, r)
+			if !strings.Contains(r.stdout, realws) {
+				t.Errorf("예전 잡이 도는 meta-repo(%s)를 알려야 한다:\n%s", realws, r.output())
+			}
+		})
 	}
-	for _, c := range calls(t, launchctlLog) {
-		if strings.Contains(c, legacyTierLabel) {
-			t.Errorf("예전 잡을 launchctl 로 건드렸다: %s", c)
-		}
+}
+
+// R4-ops-scripts-1: 예전 잡의 checkout 이 .env 로 다른 meta-repo 를 가리켰으면 그 meta-repo 가 예전 잡의 것이다 —
+// 그 meta-repo 로 install 하면 어느 checkout 에서든 옮긴다.
+func TestScheduleMigratesLegacyJobByItsCheckoutEnv(t *testing.T) {
+	sb, root, launchctlLog := tierSandbox(t, "copy")
+	shared := filepath.Join(sb.dir, "shared-meta")
+	checkout := filepath.Join(sb.dir, "realws")
+	writeFile(t, filepath.Join(checkout, ".env"), "META_REPO_ROOT="+shared+"\n")
+	legacy := sb.agentPlist(legacyTierLabel)
+	writeFile(t, legacy, legacyTierPlist(checkout))
+
+	r := sb.mustBash(map[string]string{"META_REPO_ROOT": shared}, scheduleScript(root), "install")
+
+	if exists(legacy) || !containsCall(calls(t, launchctlLog), "unload "+legacy) {
+		t.Errorf("같은 meta-repo(%s)를 돌던 예전 잡을 옮기지 않았다:\n%s", shared, r.output())
+	}
+}
+
+// R4-ops-scripts-1: status 도 남아 있는 예전 잡이 어느 meta-repo 를 도는지 알린다.
+func TestScheduleStatusNamesLegacyJobsMetaRepo(t *testing.T) {
+	sb, root, _ := tierSandbox(t, "copy")
+	realws := filepath.Join(sb.dir, "realws")
+	writeFile(t, sb.agentPlist(legacyTierLabel), legacyTierPlist(realws))
+
+	r := sb.mustBash(nil, scheduleScript(root), "status")
+
+	if !strings.Contains(r.stdout, legacyTierLabel) || !strings.Contains(r.stdout, "meta-repo "+realws) {
+		t.Errorf("status 가 예전 잡과 그 meta-repo(%s)를 알려야 한다:\n%s", realws, r.output())
+	}
+}
+
+// R4-ops-scripts-1: plist 에서 예전 잡이 부르는 checkout 을 읽지 못하면 어느 meta-repo 의 것인지 모르므로 지우지 않고 알린다.
+func TestScheduleKeepsUnreadableLegacyJob(t *testing.T) {
+	sb, root, launchctlLog := tierSandbox(t, "meta")
+	writeFile(t, sb.agentPlist(legacyTierLabel), "<plist/>")
+
+	r := sb.mustBash(nil, scheduleScript(root), "install")
+
+	assertLegacyKept(t, sb, launchctlLog, r)
+	if !strings.Contains(r.stdout, legacyTierLabel) {
+		t.Errorf("읽지 못한 예전 잡을 남겼다고 알려야 한다:\n%s", r.output())
 	}
 }
 
