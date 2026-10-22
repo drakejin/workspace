@@ -4,6 +4,9 @@
   "workspaces": [
     {
       "name": "books-guitar"
+    },
+    {
+      "name": "gp-editor"
     }
   ]
 }

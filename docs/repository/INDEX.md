@@ -4,3 +4,4 @@ repository별 디렉토리(`{repo}/`)를 둔다. 그 repository에만 해당하�
 
 | repo | 한 줄 요약 |
 | --- | --- |
+| [gp-editor](./gp-editor/INDEX.md) | Guitar Pro 편집기 (TS/React Native macOS). 스택·리더 결정 ADR |
