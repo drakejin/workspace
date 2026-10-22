@@ -15,6 +15,7 @@ date: 2026-10-22
 - 파일 읽기: 순수 TypeScript 패키지 `main/gp-editor/packages/gp-core`. GP1·GP2(.gtp), GP3, GP4, GP5 는 TuxGuitar
   `common/TuxGuitar-gtp`, GP6(.gpx)·GP7/8(.gp) 는 `common/TuxGuitar-gpx` 를 포팅했다 (`main/tuxguitar`).
   그래서 gp-core 라이선스는 LGPL-2.1-or-later (`packages/gp-core/package.json`).
+- 라이선스: 레포 전체 LGPL-2.1-or-later (2026-10-22 사용자 결정 "LGPL"). 루트 `LICENSE`, 모든 `package.json`, gp-editor 커밋 ab44c6a.
 - 테스트 픽스처: alphaTab test-data(MPL-2.0) GP3–GP8 222개는 커밋, 실제 GP1/GP2 .gtp 6개는 재배포 라이선스가 없어
   커밋하지 않고 `test/fixtures/fetch-gtp.sh` 로 받는다 (`packages/gp-core/test/fixtures/README.md`).
 
@@ -33,7 +34,6 @@ date: 2026-10-22
 
 - 저장(쓰기) 미구현. 오선보(표준 악보) 렌더링 없음 — 탭만.
 - `main/tuxguitar` 는 helge17/tuxguitar 라 `workspace.seed.json`(단일 org) 에 넣을 수 없다. 새 머신에서는 직접 clone 해야 한다.
-- 앱 전체(packages/gp-core 밖)의 라이선스는 정하지 않았다.
 
 ## 에피소드
 - 배경: (에이전트) 2026-10-21 요청 — tuxguitar 를 workspace 에 받고 REA 설치, TS/React/React Native 로 모든 GP 파일을 읽는 데스크톱 편집기를 빌드까지. 이어서 직접 사용해 보며 사용감 리뷰와 명명·패턴 일관성 점검 요청. 결과는 위 커밋 3개.
